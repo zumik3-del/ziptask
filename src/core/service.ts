@@ -37,9 +37,11 @@ export type SvcResult<T> = { ok: true; data: T } | { ok: false; error: string }
 
 export class TaskService {
   private readonly leaseTtlMin: number
+  private readonly maxAttempts: number
 
-  constructor(private store: TaskStore, opts?: { leaseTtlMin?: number }) {
+  constructor(private store: TaskStore, opts?: { leaseTtlMin?: number; maxAttempts?: number }) {
     this.leaseTtlMin = opts?.leaseTtlMin ?? 15
+    this.maxAttempts = opts?.maxAttempts ?? 3
   }
 
   createTask(a: {

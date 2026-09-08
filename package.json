@@ -9,8 +9,11 @@
     "start:stdio": "bun run src/index.ts --stdio",
     "dev": "bun --watch run src/index.ts",
     "build": "bun run tsc --noEmit",
+    "build:bin": "bun run scripts/build.ts",
     "test": "bun test",
-    "lint": "bunx biome check src/"
+    "lint": "bunx biome check src/",
+    "release": "bash bin/release.sh",
+    "changelog": "node bin/changelog.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0"

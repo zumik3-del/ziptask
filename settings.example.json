@@ -1,0 +1,18 @@
+{
+  "dbPath": "./data/ziptask.db",
+  "host": "127.0.0.1",
+  "port": 0,
+  "leaseTtlMin": 15,
+  "maxAttempts": 3,
+  "http": {
+    "maxSessions": 100,
+    "sessionTtlMs": 3600000
+  },
+  "defaults": {
+    "priority": "p2",
+    "reporter": "system",
+    "listLimit": 50,
+    "timelineLimit": 50,
+    "queueLimit": 100
+  }
+}
