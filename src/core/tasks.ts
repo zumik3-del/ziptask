@@ -17,6 +17,8 @@ export interface Task {
   created_at: string
   updated_at: string
   completed_at: string | null
+  epic_id: number | null
+  is_epic: number
 }
 
 export const STATUS_CODES: Record<TaskStatus | 'not_found', number> = {

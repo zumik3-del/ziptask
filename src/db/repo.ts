@@ -11,11 +11,16 @@ export class TaskRepo {
   insertTask(t: {
     title: string; description: string | null; priority: string
     assignee: string | null; reporter: string; depends_on: string; now: string
+    maxAttempts?: number
+    epicId?: number; isEpic?: number
   }): number {
+    const maxAttempts = t.maxAttempts ?? 3
+    const epicId = t.epicId ?? null
+    const isEpic = t.isEpic ?? 0
     const result = this.db.run(
-      `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, created_at, updated_at)
-       VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
-      [t.title, t.description, t.priority, t.assignee, t.reporter, t.depends_on, t.now, t.now]
+      `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic)
+       VALUES (?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+      [t.title, t.description, t.priority, t.assignee, t.reporter, t.depends_on, maxAttempts, t.now, t.now, epicId, isEpic]
     )
     return Number(result.lastInsertRowid)
   }
@@ -25,7 +30,7 @@ export class TaskRepo {
   }
 
   listTasks(f: {
-    assignee?: string; status?: string; updatedSinceIso?: string; limit: number
+    assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number
   }): { rows: Task[]; total: number } {
     const conditions: string[] = []
     const params: (string | number | null)[] = []
@@ -34,6 +39,10 @@ export class TaskRepo {
     if (f.updatedSinceIso !== undefined) {
       conditions.push('updated_at >= ?')
       params.push(f.updatedSinceIso)
+    }
+    if (f.epicId !== undefined) {
+      conditions.push('epic_id = ?')
+      params.push(f.epicId)
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
     const limit = Math.floor(f.limit)
@@ -48,7 +57,7 @@ export class TaskRepo {
     const n = Math.floor(limit ?? 10)
     const o = Math.floor(offset ?? 0)
     return this.db.query(
-      `SELECT * FROM tasks WHERE status = 'queued'
+      `SELECT * FROM tasks WHERE status = 'queued' AND is_epic = 0
        ORDER BY CASE priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 WHEN 'p3' THEN 3 END, created_at ASC
        LIMIT ${n} OFFSET ${o}`
     ).all() as Task[]
@@ -144,13 +153,43 @@ export class TaskRepo {
     return row.cnt
   }
 
-  taskSummaries(): Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at'>> {
-    return this.db.query('SELECT id, status, created_at, updated_at, completed_at FROM tasks').all() as Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at'>>
+  taskSummaries(): Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at' | 'is_epic'>> {
+    return this.db.query('SELECT id, status, created_at, updated_at, completed_at, is_epic FROM tasks').all() as Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at' | 'is_epic'>>
   }
 
   auditTransitionsForTasks(): Array<{ task_id: number; new_value: string; created_at: string }> {
     return this.db.query(
       "SELECT task_id, new_value, created_at FROM audit_log WHERE action IN ('claim', 'update_status') ORDER BY task_id ASC, created_at ASC"
     ).all() as Array<{ task_id: number; new_value: string; created_at: string }>
+  }
+
+  nonTerminalChildCount(epicId: number): number {
+    const row = this.db.query(
+      "SELECT COUNT(*) as cnt FROM tasks WHERE epic_id = ? AND status NOT IN ('done', 'failed')"
+    ).get(epicId) as { cnt: number }
+    return row.cnt
+  }
+
+  childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number } {
+    const rows = this.db.query(
+      `SELECT
+         COUNT(*) as total,
+         SUM(CASE WHEN status NOT IN ('done', 'failed') THEN 1 ELSE 0 END) as open,
+         SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done,
+         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+       FROM tasks WHERE epic_id = ?`
+    ).get(epicId) as { total: number; open: number; done: number; failed: number } | null
+    return rows ?? { total: 0, open: 0, done: 0, failed: 0 }
+  }
+
+  promoteEpic(id: number, now: string): void {
+    this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
+  }
+
+  appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string, now: string): void {
+    this.db.run(
+      'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, NULL, ?, ?)',
+      [taskId, agent, action, newValue, now]
+    )
   }
 }

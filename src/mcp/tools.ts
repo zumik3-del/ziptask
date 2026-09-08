@@ -66,7 +66,9 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
     priority: z.enum(TASK_PRIORITIES).optional(),
     assignee: z.string().optional(),
     depends_on: z.array(z.number()).optional(),
-    reporter: z.string().optional()
+    reporter: z.string().optional(),
+    epic: z.boolean().optional().describe('Create as an epic (not claimable)'),
+    epic_id: z.number().optional().describe('Attach as sub-task to an existing task')
   }, async (args) => handleCreateTask(svc, args))
 
   server.tool('get_task', 'Brief default: id,title,status,priority,blocked_by. description only via explicit fields; null fields omitted. version via fields:["version"]', {
@@ -74,12 +76,13 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
     fields: z.array(z.string()).optional()
   }, async (args) => handleGetTask(svc, args))
 
-  server.tool('list_tasks', 'Filters: assignee,status,updated_since(unix ms). description only via explicit fields', {
+  server.tool('list_tasks', 'Filters: assignee,status,updated_since(unix ms),epic_id(children of epic). description only via explicit fields', {
     assignee: z.string().optional(),
     status: z.string().optional(),
     fields: z.array(z.string()).optional(),
     limit: z.number().optional(),
-    updated_since: z.number().optional()
+    updated_since: z.number().optional(),
+    epic_id: z.number().optional()
   }, async (args) => handleListTasks(svc, args))
 
   server.tool('claim_task', 'Claim queued task (auto-picks best, or task_id). include: extra fields in response', {
@@ -132,6 +135,8 @@ export function handleCreateTask(svc: TaskService, args: {
   assignee?: string
   depends_on?: number[]
   reporter?: string
+  epic?: boolean
+  epic_id?: number
 }): ToolResult {
   const r = svc.createTask(args)
   return r.ok ? jsonResult(r.data) : errorResult(r.error)
@@ -146,6 +151,10 @@ export function handleGetTask(svc: TaskService, args: { id: number; fields?: str
   if (fields.includes('blocked_by')) {
     result.blocked_by = r.data.blockedBy
   }
+  // D3: derived subtasks roll-up for epics
+  if (fields.includes('subtasks') && r.data.subtasks) {
+    result.subtasks = r.data.subtasks
+  }
   return jsonResult(result)
 }
 
@@ -155,6 +164,7 @@ export function handleListTasks(svc: TaskService, args: {
   fields?: string[]
   limit?: number
   updated_since?: number
+  epic_id?: number
 }): ToolResult {
   const result = svc.listTasks(args)
   const fields = args.fields ?? ['id', 'title', 'status', 'priority', 'assignee']
