@@ -7,7 +7,7 @@ MCP task tracker for AI agents. A pure state layer — statuses, dependencies, l
 One-liner — downloads a compiled binary, writes default config, prints client setup:
 
 ```bash
-curl -LsS https://github.com/zumik3-del/ziptask/releases/latest/download/install.sh | sh
+curl -LsS https://raw.githubusercontent.com/zumik3-del/ziptask/main/scripts/install.sh | sh
 ```
 
 Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path`. Pin a version with `ZIPTASK_VERSION=0.1.0`. On systemd systems the installer provisions a background service on port 3005 (override with `--port`); skip it with `--no-service`.
@@ -23,7 +23,7 @@ sudo systemctl enable ziptask     # auto-start on boot
 journalctl -u ziptask -f         # live logs
 ```
 
-Upgrade via `bash ~/.ziptask/scripts/update.sh` — it restarts the service automatically when systemd is active. Remove with `bash ~/.ziptask/scripts/uninstall.sh` (use `--keep-data` to preserve the DB and settings).
+Remove with `bash ~/.ziptask/scripts/uninstall.sh` (use `--keep-data` to preserve the DB and settings).
 
 ### MCP client config (stdio)
 
@@ -39,13 +39,16 @@ Upgrade via `bash ~/.ziptask/scripts/update.sh` — it restarts the service auto
 }
 ```
 
-### Upgrade
+Upgrade path is via `bash ~/.ziptask/scripts/update.sh` — it fetches the latest release, downloads the matching binary, and restarts the systemd service when active. To pin a version, pass `--version <tag>` (the script accepts tags with or without a `v` prefix):
 
 ```bash
-curl -LsS https://github.com/zumik3-del/ziptask/releases/latest/download/install.sh | sh
-# or pin a specific version
-ZIPTASK_VERSION=0.2.0 sh install.sh
+bash ~/.ziptask/scripts/update.sh
+bash ~/.ziptask/scripts/update.sh --version v0.2.0
 ```
+
+The script prompts y/N before overwriting. **Before swapping the binary it creates an online SQLite backup** of `ZIPTASK_DB` (resolved from env → `settings.json` dbPath → `~/.ziptask/data/ziptask.db`) into `~/.ziptask/backups/ziptask-<timestamp>.db` via `sqlite3 .backup`; missing sqlite3 or a missing DB are handled as warnings and the update continues. The backup path is printed so a failed upgrade is reversible. On non-systemd systems the binary is replaced but you must restart manually.
+
+**Schema guard on startup:** a fresh DB auto-initialises; an older DB (V < L) auto-migrates forward; a DB newer than the binary (V > L, i.e. you downgraded) refuses to start with `SCHEMA: database schema version <V> is newer than this binary supports (<L>); upgrade ziptask or restore the database from backup`, exit 1. Fix by re-upgrading to the newer binary or restoring the backup that `update.sh` wrote. `--version` does not touch the DB.
 
 ## Quick start (from source)
 

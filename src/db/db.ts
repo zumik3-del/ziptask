@@ -25,13 +25,21 @@ function applyMigrations(db: Database) {
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)')
   const row = db.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | null
   const current = row?.version ?? 0
-  if (current >= MIGRATIONS.length) return
+  const last = MIGRATIONS.length
+  if (current === last) return
+  if (current > last) {
+    throw new Error(`SCHEMA: database schema version ${current} is newer than this binary supports (${last}); upgrade ziptask or restore the database from backup`)
+  }
   const migrate = db.transaction(() => {
-    for (let i = current; i < MIGRATIONS.length; i++) {
+    for (let i = current; i < last; i++) {
       db!.exec(MIGRATIONS[i])
     }
     db!.run('DELETE FROM schema_version')
-    db!.run('INSERT INTO schema_version (version) VALUES (?)', [MIGRATIONS.length])
+    db!.run('INSERT INTO schema_version (version) VALUES (?)', [last])
   })
-  migrate()
+  try {
+    migrate()
+  } catch (err) {
+    throw new Error(`SCHEMA: migration failed; database does not match this binary's migration history (created by an older or dev build?) — restore from backup or recreate the database; original: ${err}`)
+  }
 }

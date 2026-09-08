@@ -11,37 +11,45 @@ const VERSION = (globalThis as any).__ZIPTASK_VERSION__ ?? '0.0.0'
 
 const settings = loadSettings()
 
-const db = openDatabase(settings.dbPath)
-const svc = new TaskService(new TaskRepo(db), {
-  leaseTtlMin: settings.leaseTtlMin
-})
-
-function startStdio() {
-  const server = createMcpServer(svc)
-  const transport = new StdioServerTransport()
-  server.connect(transport).catch(err => {
-    console.error('[ziptask] stdio error:', err)
-    process.exit(1)
-  })
-  console.error('[ziptask] MCP stdio server started')
-}
-
 const isVersion = process.argv.includes('--version')
 if (isVersion) {
   console.log(`ziptask ${VERSION}`)
   process.exit(0)
 }
 
-const isStdio = process.argv.includes('--stdio')
-if (isStdio) {
-  startStdio()
-} else {
-  startHttp({
-    svc,
-    port: settings.port,
-    host: settings.host,
-    maxSessions: settings.http.maxSessions,
-    sessionTtlMs: settings.http.sessionTtlMs,
-    onShutdown: () => closeDatabase(db as Database)
+try {
+  const db = openDatabase(settings.dbPath)
+  const svc = new TaskService(new TaskRepo(db), {
+    leaseTtlMin: settings.leaseTtlMin
   })
+
+  function startStdio() {
+    const server = createMcpServer(svc)
+    const transport = new StdioServerTransport()
+    server.connect(transport).catch(err => {
+      console.error('[ziptask] stdio error:', err)
+      process.exit(1)
+    })
+    console.error('[ziptask] MCP stdio server started')
+  }
+
+  const isStdio = process.argv.includes('--stdio')
+  if (isStdio) {
+    startStdio()
+  } else {
+    startHttp({
+      svc,
+      port: settings.port,
+      host: settings.host,
+      maxSessions: settings.http.maxSessions,
+      sessionTtlMs: settings.http.sessionTtlMs,
+      onShutdown: () => closeDatabase(db as Database)
+    })
+  }
+} catch (err) {
+  if (err instanceof Error && err.message.startsWith('SCHEMA:')) {
+    console.error(`[ziptask] ${err.message}`)
+    process.exit(1)
+  }
+  throw err
 }
