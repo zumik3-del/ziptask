@@ -10,7 +10,20 @@ One-liner — downloads a compiled binary, writes default config, prints client 
 curl -LsS https://github.com/zumik3-del/ziptask/releases/latest/download/install.sh | sh
 ```
 
-Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path`. Pin a version with `ZIPTASK_VERSION=0.1.0`.
+Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path`. Pin a version with `ZIPTASK_VERSION=0.1.0`. On systemd systems the installer provisions a background service on port 3005 (override with `--port`); skip it with `--no-service`.
+
+### Service mode
+
+When systemd is detected and running, `install.sh` creates `/etc/systemd/system/ziptask.service` (Type=simple, `Restart=on-failure`, port 3005). Manage it with:
+
+```bash
+sudo systemctl start ziptask
+sudo systemctl stop ziptask
+sudo systemctl enable ziptask     # auto-start on boot
+journalctl -u ziptask -f         # live logs
+```
+
+Upgrade via `bash ~/.ziptask/scripts/update.sh` — it restarts the service automatically when systemd is active. Remove with `bash ~/.ziptask/scripts/uninstall.sh` (use `--keep-data` to preserve the DB and settings).
 
 ### MCP client config (stdio)
 
