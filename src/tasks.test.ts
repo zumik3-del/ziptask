@@ -158,6 +158,42 @@ describe('claim_task', () => {
     expect('description' in res).toBe(false)
     expect(res.lease_ttl_min).toBe(15)
   })
+
+  test('claims a blocked task and transitions to in_progress with lease', () => {
+    const id = createTaskRow({ title: 'BlockClaim', reporter: 'dev' })
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: 1 })
+    const taskBefore = getTaskRow(db, id)
+    expect(taskBefore.status).toBe('blocked')
+    const res = handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const result = json(res)
+    expect(result.id).toBe(id)
+    const taskAfter = getTaskRow(db, id)
+    expect(taskAfter.status).toBe('in_progress')
+    expect(taskAfter.assignee).toBe('agent-1')
+    expect(taskAfter.lease_expires_at).not.toBeNull()
+    const logs = db.query('SELECT * FROM audit_log WHERE task_id = ?').all(id) as any[]
+    expect(logs.map((l: any) => l.action)).toContain('claim')
+  })
+
+  test('blocked task: claim-first path to review', () => {
+    const id = createTaskRow({ title: 'BlockReview', reporter: 'dev' })
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: 1 })
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const task = getTaskRow(db, id)
+    const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version })
+    expect(json(res).status).toBe('review')
+    const after = getTaskRow(db, id)
+    expect(after.status).toBe('review')
+    expect(after.assignee).toBe('agent-1')
+  })
+
+  test('blocked→review without claim is valid transition (no assignee guard)', () => {
+    const id = createTaskRow({ title: 'BlockNoClaim', reporter: 'dev' })
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: 1 })
+    const task = getTaskRow(db, id)
+    const res = handleUpdateStatus(svc, { id, agent: 'other-agent', status: 'review', version: task.version })
+    expect(json(res).status).toBe('review')
+  })
 })
 
 describe('update_status', () => {

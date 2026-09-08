@@ -153,7 +153,7 @@ export class TaskService {
     if (a.task_id) {
       task = this.store.getTaskRow(a.task_id)
       if (!task) return { ok: false, error: 'NOT_FOUND' }
-      if (task.status !== 'queued') return { ok: false, error: `CONFLICT: status=${task.status}` }
+      if (task.status !== 'queued' && task.status !== 'blocked') return { ok: false, error: `CONFLICT: status=${task.status}` }
       if (task.is_epic === 1) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }
       const deps = parseDeps(task.depends_on)
       if (!depsSatisfied((id) => this.store.statusOf(id), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
