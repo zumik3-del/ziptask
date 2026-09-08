@@ -8,7 +8,7 @@ import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES } 
 import type { TaskService } from '../core/service'
 
 const TEMPLATE_DIR = resolve(fileURLToPath(import.meta.url), '..', '..', '..', 'templates')
-const TEMPLATE_NAMES = ['task', 'comment-success', 'comment-failure'] as const
+const TEMPLATE_NAMES = ['task', 'epic', 'comment-success', 'comment-failure'] as const
 type TemplateName = typeof TEMPLATE_NAMES[number]
 
 // Keep API names stable; map to on-disk filenames where they differ.
@@ -60,14 +60,14 @@ function pickFields(src: Task, fields: string[]): Record<string, unknown> {
 }
 
 export function registerAllTools(server: McpServer, svc: TaskService) {
-  server.tool('create_task', 'Create task. Always queued; blocked is a manual flag only', {
+  server.tool('create_task', 'Create task. Always queued; blocked is a manual flag only. Build description from get_template("task"); for epics use get_template("epic")', {
     title: z.string().describe('English, <=200 chars'),
-    description: z.string().optional().describe('English'),
+    description: z.string().optional().describe('English; fill get_template("task") or "epic" first'),
     priority: z.enum(TASK_PRIORITIES).optional(),
     assignee: z.string().optional(),
     depends_on: z.array(z.number()).optional(),
     reporter: z.string().optional(),
-    epic: z.boolean().optional().describe('Create as an epic (not claimable)'),
+    epic: z.boolean().optional().describe('Create as an epic (not claimable); description follows get_template("epic") with required Source'),
     epic_id: z.number().optional().describe('Attach as sub-task to an existing task')
   }, async (args) => handleCreateTask(svc, args))
 
@@ -108,10 +108,10 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
     limit: z.number().optional()
   }, async (args) => handleListQueue(svc, args))
 
-  server.tool('add_comment', 'Add comment to task. Requires non-empty agent and content', {
+  server.tool('add_comment', 'Add comment to task. Requires non-empty agent and content; one-liner from get_template("comment-success") or "comment-failure"', {
     id: z.number(),
     agent: z.string(),
-    content: z.string()
+    content: z.string().describe('English; fill get_template("comment-success") or "comment-failure"')
   }, async (args) => handleAddComment(svc, args))
 
   server.tool('get_timeline', 'Merged audit_log + comments feed for a task, pipe seq|type|agent|at|text', {
