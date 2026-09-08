@@ -23,7 +23,7 @@ sudo systemctl enable ziptask     # auto-start on boot
 journalctl -u ziptask -f         # live logs
 ```
 
-Upgrade via `bash ~/.ziptask/scripts/update.sh` — it restarts the service automatically when systemd is active. Remove with `bash ~/.ziptask/scripts/uninstall.sh` (use `--keep-data` to preserve the DB and settings).
+Remove with `bash ~/.ziptask/scripts/uninstall.sh` (use `--keep-data` to preserve the DB and settings).
 
 ### MCP client config (stdio)
 
@@ -39,13 +39,14 @@ Upgrade via `bash ~/.ziptask/scripts/update.sh` — it restarts the service auto
 }
 ```
 
-### Upgrade
+Upgrade path is via `bash ~/.ziptask/scripts/update.sh` — it fetches the latest release, downloads the matching binary, and restarts the systemd service when active. To pin a version, pass `--version <tag>` (the script accepts tags with or without a `v` prefix):
 
 ```bash
-curl -LsS https://raw.githubusercontent.com/zumik3-del/ziptask/main/scripts/install.sh | sh
-# or pin a specific version
-ZIPTASK_VERSION=0.2.0 sh install.sh
+bash ~/.ziptask/scripts/update.sh
+bash ~/.ziptask/scripts/update.sh --version v0.2.0
 ```
+
+The script prompts y/N before overwriting. On non-systemd systems the binary is replaced but you must restart manually.
 
 ## Quick start (from source)
 
