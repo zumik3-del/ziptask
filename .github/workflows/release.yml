@@ -1,8 +1,9 @@
+# Merge-driven release: pushed to main → CI builds + publishes GitHub Release.
+# No one pushes main or tags manually; the tag is created by `gh release create`.
 name: release
 on:
   push:
-    tags:
-      - 'v[0-9]*'
+    branches: [main]
 permissions:
   contents: write
 jobs:
@@ -19,35 +20,46 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - name: Guard package.json version against tag
+      - name: Extract version
+        id: ver
         shell: bash
         run: |
-          TAG="${{ github.ref_name }}"
-          TAG_VERSION="${TAG#v}"
-          PKG_VERSION=$(bun run -e "console.log(require('./package.json').version)")
-          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
-            echo "::error::Version mismatch: tag is v${TAG_VERSION}, package.json says ${PKG_VERSION}"
-            exit 1
+          VERSION=$(bun run -e "console.log(require('./package.json').version)")
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version: v${VERSION}"
+
+      - name: Check tag
+        id: tag
+        shell: bash
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          if [ -n "$(git tag -l "$TAG")" ]; then
+            echo "tag $TAG exists, nothing to release"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "Version OK: ${PKG_VERSION}"
 
       - run: bun run build:bin
+        if: steps.tag.outputs.exists != 'true'
 
       - run: cp dist/ziptask dist/ziptask-linux-x86_64
+        if: steps.tag.outputs.exists != 'true'
 
       - name: Build Release Notes
+        if: steps.tag.outputs.exists != 'true'
         shell: bash
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="v${{ steps.ver.outputs.version }}"
           PREV_TAG=$(git tag --sort=-v:refname | grep -Fxv "$TAG" | head -n 1 || true)
           REPO="${{ github.repository }}"
           COMMIT_FMT="- [\`%h\`](https://github.com/${REPO}/commit/%H): %s"
 
           TMP=$(mktemp)
           if [ -n "$PREV_TAG" ]; then
-            git log "${PREV_TAG}..${TAG}" --no-merges --pretty="$COMMIT_FMT" | grep -v CHANGELOG > "$TMP"
+            git log "${PREV_TAG}..${{ github.sha }}" --no-merges --pretty="$COMMIT_FMT" | grep -v CHANGELOG > "$TMP"
           else
-            git log "$TAG" --no-merges --pretty="$COMMIT_FMT" | grep -v CHANGELOG > "$TMP"
+            git log "${{ github.sha }}" --no-merges --pretty="$COMMIT_FMT" | grep -v CHANGELOG > "$TMP"
           fi
 
           FEATURES=$(grep -i '^-.*: *feat[:(]' "$TMP" || true)
@@ -80,9 +92,11 @@ jobs:
           cat RELEASE_NOTES.md
 
       - name: Create GitHub Release
+        if: steps.tag.outputs.exists != 'true'
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
+          gh release create "v${{ steps.ver.outputs.version }}" \
+            --target "${{ github.sha }}" \
+            --title "v${{ steps.ver.outputs.version }}" \
             --notes-file RELEASE_NOTES.md \
             dist/ziptask-linux-x86_64
         env:
