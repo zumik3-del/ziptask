@@ -35,23 +35,71 @@ bun run start:stdio    # run over stdio
 
 | Tool | What it does |
 |---|---|
-| `create_task` | Enqueue a task; always `queued` — `blocked` is a manual flag only |
-| `get_task` | Read a task; `description` only via explicit `fields` |
-| `list_tasks` | Filter by `assignee`/`status`/`updated_since`; JSON result |
-| `claim_task` | Claim a queued task (auto-pick or by id); returns `{id, lease_ttl_min, version}` |
-| `update_status` | Transition status with optimistic version lock |
+| `create_task` | Enqueue a task; always `queued` — `blocked` is a manual flag only. Fields: `epic?` (declare as epic, not claimable), `epic_id?` (attach as sub-task to an existing epic) |
+| `get_task` | Read a task; `description` only via explicit `fields`. Epics: `subtasks` roll-up (`{total,open,done,failed}`) via `fields:["subtasks"]`; `epic_id` via `fields` when reading a sub-task |
+| `list_tasks` | Filter by `assignee`/`status`/`updated_since`/`epic_id` (children of an epic). JSON result |
+| `claim_task` | Claim a queued task (auto-pick or by id); returns `{id, lease_ttl_min, version}`. Epics are excluded from auto-pick and explicit claim returns `INVALID: #N is an epic, not claimable` |
+| `update_status` | Transition status with optimistic version lock. Epic close-guard: `done`/`failed` rejected while non-terminal children exist → `CHILDREN: N sub-tasks not terminal` |
 | `batch_statuses` | Pipe lines `id\|code` (+ `\|assignee` via `include`) |
-| `list_queue` | Pipe lines of dep-satisfied queued tasks |
+| `list_queue` | Pipe lines of dep-satisfied queued tasks (epics excluded) |
 | `add_comment` | Append a comment to a task |
-| `get_timeline` | Merged audit log + comments feed |
+| `get_timeline` | Merged audit log + comments feed. Epics show `subtask_add`/`subtask_done`/`subtask_failed` mirror rows — history reads as `create → subtask_add… → subtask_done… → resolution` |
 | `get_template` | Fetch a markdown template (task description, comments) |
-| `metrics` | Aggregated stats: `done_count`, `status_time`, `bottleneck` |
+| `metrics` | Aggregated stats: `done_count`, `status_time`, `bottleneck`. Epics excluded from all metrics |
 
 ## Statuses
 
 Codes (`STATUS_CODES`): `0` not_found, `1` queued, `2` in_progress, `3` review, `4` done, `5` failed, `6` blocked.
 
 Flow: `queued → in_progress → review → done` (or `failed` / `blocked`). `done` and `failed` are terminal; lease expiry returns to `queued` and increments `attempts`. Tasks with unsatisfied `depends_on` stay `queued` but are hidden from `list_queue` and auto-claim.
+
+## Epic → sub-task workflow
+
+Epics are structural containers, not work. They cannot be claimed and their status is manual.
+
+### Declaring an epic
+
+```
+create_task {title: 'Release v2', reporter: 'orchestrator', epic: true}
+```
+or attach the first sub-task to promote it automatically:
+```
+create_task {title: 'Sub-work', reporter: 'orchestrator', epic_id: <epic-id>}
+```
+The target is auto-promoted to `is_epic=1` (audit row `promote_epic`).
+
+### Attaching sub-tasks
+
+Sub-tasks are ordinary tasks with `epic_id` pointing at the epic. Use `depends_on` for ordering:
+```
+create_task {title: 'Implement auth', reporter: 'orchestrator', epic_id: <epic-id>}
+create_task {title: 'Write docs', reporter: 'orchestrator', epic_id: <epic-id>, depends_on: [<auth-id>]}
+```
+Nested membership is rejected (epic cannot be a sub-task; sub-task cannot be an epic).
+
+### Roll-up and closure
+
+- `get_task fields:["subtasks"]` on the epic returns `{total, open, done, failed}` (open = queued+in_progress+review+blocked).
+- `list_tasks epic_id:<epic-id>` returns only children.
+- The epic timeline (`get_timeline`) mirrors terminal sub-task events: `subtask_add`, `subtask_done`, `subtask_failed`.
+- `update_status(epic→done)` is guarded: rejected with `CHILDREN: N sub-tasks not terminal` while any child is non-terminal.
+
+### Constraints
+
+| Rule | Error |
+|---|---|
+| `epic: true` + `epic_id` | `INVALID: epic cannot have a parent epic` |
+| `epic: true` + `depends_on` | `INVALID: epic cannot have depends_on` |
+| `depends_on` pointing at an epic | `INVALID: dependencies on epic tasks not allowed (#N)` |
+| `epic_id` pointing at a terminal task | `INVALID: cannot attach to a terminal task` |
+| `epic_id` pointing at a sub-task (nesting) | `INVALID: cannot attach to a sub-task (no nesting)` |
+| Explicit `claim_task` on an epic | `INVALID: #N is an epic, not claimable` |
+
+### Notes
+
+- `epic_id` is immutable after creation (no re-parent/detach). Manual SQL is the escape hatch.
+- `blocked`/`failed` on an epic are manual flags only; no cascade to children.
+- Metrics (`metrics` tool) exclude epics — an epic sitting in one status for days would distort `bottleneck`.
 
 ## Architecture
 
