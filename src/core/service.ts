@@ -224,7 +224,7 @@ export class TaskService {
       if (epicTask) {
         this.store.appendEpicAuditMirror(task.epic_id, a.agent,
           a.status === 'done' ? 'subtask_done' : 'subtask_failed',
-          `#${task.id} ${sanitizePipe(epicTask.title)}`, now)
+          `#${task.id} ${sanitizePipe(task.title)}`, now)
       }
     }
 

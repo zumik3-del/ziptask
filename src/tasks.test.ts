@@ -1007,7 +1007,7 @@ describe('subtask_done / subtask_failed mirrors', () => {
     expect(mirrors.length).toBe(1)
   })
 
-  test('mirror includes task id and epic title', () => {
+  test('mirror includes task id and subtask title', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Big Epic', reporter: 'dev' })).id
     const subId = json(handleCreateTask(svc, { title: 'Small Sub', reporter: 'dev', epic_id: epicId })).id
     driveToDone(svc, subId, 'dev')
@@ -1015,7 +1015,8 @@ describe('subtask_done / subtask_failed mirrors', () => {
       "SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_done'"
     ).all(epicId) as any[]
     expect(mirrors[0].new_value).toContain(`#${subId}`)
-    expect(mirrors[0].new_value).toContain('Big Epic')
+    expect(mirrors[0].new_value).toContain('Small Sub')
+    expect(mirrors[0].new_value).not.toContain('Big Epic')
   })
 })
 
