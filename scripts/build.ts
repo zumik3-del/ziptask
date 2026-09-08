@@ -5,7 +5,7 @@ const pkg = JSON.parse(readFileSync(resolve(import.meta.dir, '../package.json'),
 const version = pkg.version
 
 const { status } = await Bun.spawn(
-  [process.execPath.replace('bun', 'bun').replace(/bun$/, 'bun'), 'build', 'src/index.ts', '--compile', '--minify', '--sourcemap', '--outfile', 'dist/ziptask', '--define', `__ZIPTASK_VERSION__="${version}"`],
+  [process.execPath.replace('bun', 'bun').replace(/bun$/, 'bun'), 'build', 'src/index.ts', '--compile', '--minify', '--sourcemap', '--outfile', 'dist/ziptask', '--define', `globalThis.__ZIPTASK_VERSION__="${version}"`],
   { cwd: resolve(import.meta.dir, '..') }
 )
 
