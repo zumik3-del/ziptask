@@ -11,11 +11,13 @@ export class TaskRepo {
   insertTask(t: {
     title: string; description: string | null; priority: string
     assignee: string | null; reporter: string; depends_on: string; now: string
+    maxAttempts?: number
   }): number {
+    const maxAttempts = t.maxAttempts ?? 3
     const result = this.db.run(
-      `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, created_at, updated_at)
-       VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
-      [t.title, t.description, t.priority, t.assignee, t.reporter, t.depends_on, t.now, t.now]
+      `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at)
+       VALUES (?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?)`,
+      [t.title, t.description, t.priority, t.assignee, t.reporter, t.depends_on, maxAttempts, t.now, t.now]
     )
     return Number(result.lastInsertRowid)
   }

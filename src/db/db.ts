@@ -4,7 +4,7 @@ import { MIGRATIONS } from './migrations'
 let dbRef: Database | null = null
 
 export function openDatabase(path?: string): Database {
-  const dbPath = path ?? process.env.ZIPTASK_DB ?? './data/ziptask.db'
+  const dbPath = path ?? './data/ziptask.db'
   const { mkdirSync } = require('node:fs')
   const { dirname } = require('node:path')
   mkdirSync(dirname(dbPath), { recursive: true })
