@@ -41,6 +41,68 @@ export type Settings = z.infer<typeof SettingsSchema> & {
   defaults: { priority: string; reporter: string; listLimit: number; timelineLimit: number; queueLimit: number }
 }
 
+export type EnvType = 'string' | 'int' | 'float' | 'bool'
+
+export interface EnvMapping {
+  env: string
+  path: string
+  type: EnvType
+}
+
+export const ENV_MAPPINGS: EnvMapping[] = [
+  { env: 'ZIPTASK_DB', path: 'dbPath', type: 'string' },
+  { env: 'ZIPTASK_HOST', path: 'host', type: 'string' },
+  { env: 'ZIPTASK_PORT', path: 'port', type: 'int' },
+  { env: 'ZIPTASK_LEASE_TTL_MIN', path: 'leaseTtlMin', type: 'int' },
+  { env: 'ZIPTASK_MAX_ATTEMPTS', path: 'maxAttempts', type: 'int' },
+  { env: 'ZIPTASK_HTTP_MAX_SESSIONS', path: 'http.maxSessions', type: 'int' },
+  { env: 'ZIPTASK_HTTP_SESSION_TTL_MS', path: 'http.sessionTtlMs', type: 'int' },
+  { env: 'ZIPTASK_DEFAULTS_PRIORITY', path: 'defaults.priority', type: 'string' },
+  { env: 'ZIPTASK_DEFAULTS_REPORTER', path: 'defaults.reporter', type: 'string' },
+  { env: 'ZIPTASK_DEFAULTS_LIST_LIMIT', path: 'defaults.listLimit', type: 'int' },
+  { env: 'ZIPTASK_DEFAULTS_TIMELINE_LIMIT', path: 'defaults.timelineLimit', type: 'int' },
+  { env: 'ZIPTASK_DEFAULTS_QUEUE_LIMIT', path: 'defaults.queueLimit', type: 'int' },
+]
+
+function parseValue(raw: string, type: EnvType): string | number | boolean {
+  switch (type) {
+    case 'string': return raw
+    case 'int': {
+      const n = parseInt(raw, 10)
+      return Number.isFinite(n) ? n : NaN
+    }
+    case 'float': {
+      const n = parseFloat(raw)
+      return Number.isFinite(n) ? n : NaN
+    }
+    case 'bool': return raw === 'true'
+  }
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+function setNested(obj: Record<string, unknown>, path: string, value: unknown): void {
+  const keys = path.split('.')
+  let current = obj
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (!isPlainObject(current[keys[i]])) current[keys[i]] = {}
+    current = current[keys[i]] as Record<string, unknown>
+  }
+  current[keys[keys.length - 1]] = value
+}
+
+function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...target }
+  for (const key of Object.keys(source)) {
+    const s = source[key]
+    const t = target[key]
+    result[key] = isPlainObject(s) && isPlainObject(t) ? deepMerge(t, s) : s
+  }
+  return result
+}
+
 export function loadSettings(opts?: { path?: string; env?: NodeJS.ProcessEnv; argv?: string[] }): Settings {
   const env = opts?.env ?? process.env
   const argv = opts?.argv ?? process.argv
@@ -75,40 +137,20 @@ export function loadSettings(opts?: { path?: string; env?: NodeJS.ProcessEnv; ar
     }
   }
 
-  const merged: Settings = {
-    dbPath: DEFAULTS.dbPath,
-    host: DEFAULTS.host,
-    port: DEFAULTS.port,
-    leaseTtlMin: DEFAULTS.leaseTtlMin,
-    maxAttempts: DEFAULTS.maxAttempts,
-    http: { ...DEFAULTS.http },
-    defaults: { ...DEFAULTS.defaults }
+  const merged = deepMerge(
+    DEFAULTS as unknown as Record<string, unknown>,
+    fileOverrides ? (fileOverrides as unknown as Record<string, unknown>) : {}
+  )
+
+  for (const { env: envName, path, type } of ENV_MAPPINGS) {
+    const raw = env[envName]
+    if (raw === undefined) continue
+    const value = parseValue(raw, type)
+    if (typeof value === 'number' && Number.isNaN(value)) {
+      continue
+    }
+    setNested(merged, path, value)
   }
 
-  if (fileOverrides) {
-    if (fileOverrides.dbPath !== undefined) merged.dbPath = fileOverrides.dbPath
-    if (fileOverrides.host !== undefined) merged.host = fileOverrides.host
-    if (fileOverrides.port !== undefined) merged.port = fileOverrides.port
-    if (fileOverrides.leaseTtlMin !== undefined) merged.leaseTtlMin = fileOverrides.leaseTtlMin
-    if (fileOverrides.maxAttempts !== undefined) merged.maxAttempts = fileOverrides.maxAttempts
-    if (fileOverrides.http) {
-      if (fileOverrides.http.maxSessions !== undefined) merged.http.maxSessions = fileOverrides.http.maxSessions
-      if (fileOverrides.http.sessionTtlMs !== undefined) merged.http.sessionTtlMs = fileOverrides.http.sessionTtlMs
-    }
-    if (fileOverrides.defaults) {
-      if (fileOverrides.defaults.priority !== undefined) merged.defaults.priority = fileOverrides.defaults.priority
-      if (fileOverrides.defaults.reporter !== undefined) merged.defaults.reporter = fileOverrides.defaults.reporter
-      if (fileOverrides.defaults.listLimit !== undefined) merged.defaults.listLimit = fileOverrides.defaults.listLimit
-      if (fileOverrides.defaults.timelineLimit !== undefined) merged.defaults.timelineLimit = fileOverrides.defaults.timelineLimit
-      if (fileOverrides.defaults.queueLimit !== undefined) merged.defaults.queueLimit = fileOverrides.defaults.queueLimit
-    }
-  }
-
-  if (env.ZIPTASK_DB) merged.dbPath = env.ZIPTASK_DB
-  if (env.ZIPTASK_HOST) merged.host = env.ZIPTASK_HOST
-  if (env.ZIPTASK_PORT) merged.port = Number(env.ZIPTASK_PORT)
-  if (env.ZIPTASK_LEASE_TTL_MIN) merged.leaseTtlMin = Number(env.ZIPTASK_LEASE_TTL_MIN)
-  if (env.ZIPTASK_MAX_ATTEMPTS) merged.maxAttempts = Number(env.ZIPTASK_MAX_ATTEMPTS)
-
-  return merged
+  return merged as unknown as Settings
 }
