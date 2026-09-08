@@ -1,0 +1,7 @@
+task-tracker-plan.md
+node_modules/
+dist/
+data/
+*.db
+.test-data/
+AGENTS.md
