@@ -7,6 +7,8 @@ import { createMcpServer } from './mcp/server'
 import { startHttp } from './server'
 import { loadSettings } from './config'
 
+const VERSION = (globalThis as any).__ZIPTASK_VERSION__ ?? '0.0.0'
+
 const settings = loadSettings()
 
 const db = openDatabase(settings.dbPath)
@@ -22,6 +24,12 @@ function startStdio() {
     process.exit(1)
   })
   console.error('[ziptask] MCP stdio server started')
+}
+
+const isVersion = process.argv.includes('--version')
+if (isVersion) {
+  console.log(`ziptask ${VERSION}`)
+  process.exit(0)
 }
 
 const isStdio = process.argv.includes('--stdio')

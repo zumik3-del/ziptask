@@ -2,17 +2,39 @@
 
 MCP task tracker for AI agents. A pure state layer — statuses, dependencies, leases, versioning — over SQLite, served to agents over MCP.
 
-## Features
+## Install
 
-- **Pure state layer** — task content lives in `description`/comments; the DB stores no file paths
-- **Token-minimal wire format** — pipe-delimited bulk responses, numeric status codes, omit-null
-- **Dependency blocking** — `list_queue` and auto-claim surface only dep-satisfied tasks
-- **Optimistic concurrency** — `version` bumps on every status mutation; stale writes → `CONFLICT`
-- **Leases with auto-reap** — expired claims return to `queued`, attempts counted
-- **MCP transport** — Streamable HTTP (`POST /mcp`) + stdio; `GET /health` probe
-- **Docker image** with scheduled online SQLite backup
+One-liner — downloads a compiled binary, writes default config, prints client setup:
 
-## Quick start
+```bash
+curl -LsS https://github.com/zumik3-del/ziptask/releases/latest/download/install.sh | sh
+```
+
+Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path`. Pin a version with `ZIPTASK_VERSION=0.1.0`.
+
+### MCP client config (stdio)
+
+```jsonc
+// Claude / Cursor / opencode — ~/.config/claude/settings.json or equivalent
+{
+  "mcpServers": {
+    "ziptask": {
+      "command": "~/.ziptask/bin/ziptask",
+      "args": ["--stdio"]
+    }
+  }
+}
+```
+
+### Upgrade
+
+```bash
+curl -LsS https://github.com/zumik3-del/ziptask/releases/latest/download/install.sh | sh
+# or pin a specific version
+ZIPTASK_VERSION=0.2.0 sh install.sh
+```
+
+## Quick start (from source)
 
 Requires [Bun](https://bun.sh) ≥ 1.4.
 
@@ -20,6 +42,14 @@ Requires [Bun](https://bun.sh) ≥ 1.4.
 bun install
 bun run start          # HTTP server on an ephemeral port (MCP endpoint + /health)
 bun run start:stdio    # run over stdio
+```
+
+## Build a binary
+
+```bash
+bun run build:bin        # produces dist/ziptask
+dist/ziptask --version   # prints ziptask 0.1.0
+dist/ziptask --stdio     # runs as stdio MCP server
 ```
 
 ## Configuration
