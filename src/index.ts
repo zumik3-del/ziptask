@@ -5,10 +5,13 @@ import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { createMcpServer } from './mcp/server'
 import { startHttp } from './server'
+import { loadSettings } from './config'
 
-const db = openDatabase()
+const settings = loadSettings()
+
+const db = openDatabase(settings.dbPath)
 const svc = new TaskService(new TaskRepo(db), {
-  leaseTtlMin: Number(process.env.ZIPTASK_LEASE_TTL_MIN) || 15
+  leaseTtlMin: settings.leaseTtlMin
 })
 
 function startStdio() {
@@ -25,12 +28,12 @@ const isStdio = process.argv.includes('--stdio')
 if (isStdio) {
   startStdio()
 } else {
-  const port = Number(process.env.ZIPTASK_PORT) || 0
-  const host = process.env.ZIPTASK_HOST || '127.0.0.1'
   startHttp({
     svc,
-    port,
-    host,
+    port: settings.port,
+    host: settings.host,
+    maxSessions: settings.http.maxSessions,
+    sessionTtlMs: settings.http.sessionTtlMs,
     onShutdown: () => closeDatabase(db as Database)
   })
 }

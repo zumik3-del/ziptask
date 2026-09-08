@@ -4,7 +4,7 @@ import { isValidTransition, TERMINAL_STATUSES, nowIso } from './tasks'
 export interface TaskStore {
   getTaskRow(id: number): Task | null
   insertTask(t: { title: string; description: string | null; priority: string;
-    assignee: string | null; reporter: string; depends_on: string; now: string }): number
+    assignee: string | null; reporter: string; depends_on: string; now: string; maxAttempts?: number }): number
   deleteTask(id: number): void
   listTasks(f: { assignee?: string; status?: string; updatedSinceIso?: string; limit: number })
     : { rows: Task[]; total: number }
@@ -32,9 +32,11 @@ export type SvcResult<T> = { ok: true; data: T } | { ok: false; error: string }
 
 export class TaskService {
   private readonly leaseTtlMin: number
+  private readonly maxAttempts: number
 
-  constructor(private store: TaskStore, opts?: { leaseTtlMin?: number }) {
+  constructor(private store: TaskStore, opts?: { leaseTtlMin?: number; maxAttempts?: number }) {
     this.leaseTtlMin = opts?.leaseTtlMin ?? 15
+    this.maxAttempts = opts?.maxAttempts ?? 3
   }
 
   createTask(a: {
@@ -51,7 +53,8 @@ export class TaskService {
       assignee: a.assignee ?? null,
       reporter,
       depends_on: JSON.stringify(deps),
-      now
+      now,
+      maxAttempts: this.maxAttempts
     })
     if (checkCycles((id) => this.store.depsOf(id), id, deps)) {
       this.store.deleteTask(id)
