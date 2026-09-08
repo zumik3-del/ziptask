@@ -119,6 +119,52 @@ describe('loadSettings env overrides', () => {
     const s = loadSettings({ env: { ZIPTASK_MAX_ATTEMPTS: '7' }, argv: [] })
     expect(s.maxAttempts).toBe(7)
   })
+
+  test('all nested ENV_MAPPINGS entries override via env', () => {
+    const s = loadSettings({
+      env: {
+        ZIPTASK_HTTP_MAX_SESSIONS: '200',
+        ZIPTASK_HTTP_SESSION_TTL_MS: '1800000',
+        ZIPTASK_DEFAULTS_PRIORITY: 'p0',
+        ZIPTASK_DEFAULTS_REPORTER: 'human',
+        ZIPTASK_DEFAULTS_LIST_LIMIT: '10',
+        ZIPTASK_DEFAULTS_TIMELINE_LIMIT: '20',
+        ZIPTASK_DEFAULTS_QUEUE_LIMIT: '5'
+      },
+      argv: []
+    })
+    expect(s.http.maxSessions).toBe(200)
+    expect(s.http.sessionTtlMs).toBe(1_800_000)
+    expect(s.defaults.priority).toBe('p0')
+    expect(s.defaults.reporter).toBe('human')
+    expect(s.defaults.listLimit).toBe(10)
+    expect(s.defaults.timelineLimit).toBe(20)
+    expect(s.defaults.queueLimit).toBe(5)
+  })
+
+  test('invalid int env value is skipped (NaN)', () => {
+    const s = loadSettings({ env: { ZIPTASK_PORT: 'not-a-number' }, argv: [] })
+    expect(s.port).toBe(DEFAULTS.port)
+  })
+
+  test('env overrides settings.json for nested keys', () => {
+    const settingsPath = writeSettingsJson(testDir, {
+      http: { maxSessions: 50, sessionTtlMs: 600_000 },
+      defaults: { priority: 'p3', reporter: 'system', listLimit: 99, timelineLimit: 99, queueLimit: 99 }
+    })
+    const s = loadSettings({
+      path: settingsPath,
+      env: {
+        ZIPTASK_HTTP_MAX_SESSIONS: '1',
+        ZIPTASK_DEFAULTS_PRIORITY: 'p1'
+      },
+      argv: []
+    })
+    expect(s.http.maxSessions).toBe(1)
+    expect(s.http.sessionTtlMs).toBe(600_000) // not overridden
+    expect(s.defaults.priority).toBe('p1')
+    expect(s.defaults.reporter).toBe('system') // not overridden
+  })
 })
 
 describe('loadSettings CLI flag', () => {
