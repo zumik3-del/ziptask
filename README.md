@@ -7,7 +7,7 @@ MCP task tracker for AI agents. A pure state layer — statuses, dependencies, l
 One-liner — downloads a compiled binary, writes default config, prints client setup:
 
 ```bash
-curl -LsS https://github.com/zumik3-del/ziptask/releases/latest/download/install.sh | sh
+curl -LsS https://raw.githubusercontent.com/zumik3-del/ziptask/main/scripts/install.sh | sh
 ```
 
 Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path`. Pin a version with `ZIPTASK_VERSION=0.1.0`. On systemd systems the installer provisions a background service on port 3005 (override with `--port`); skip it with `--no-service`.
@@ -42,7 +42,7 @@ Upgrade via `bash ~/.ziptask/scripts/update.sh` — it restarts the service auto
 ### Upgrade
 
 ```bash
-curl -LsS https://github.com/zumik3-del/ziptask/releases/latest/download/install.sh | sh
+curl -LsS https://raw.githubusercontent.com/zumik3-del/ziptask/main/scripts/install.sh | sh
 # or pin a specific version
 ZIPTASK_VERSION=0.2.0 sh install.sh
 ```
