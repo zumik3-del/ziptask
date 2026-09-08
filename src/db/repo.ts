@@ -1,6 +1,14 @@
 import type { Database } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
 
+let lastTsMs = 0
+function monotonicIso(): string {
+  const now = Date.now()
+  const t = now > lastTsMs ? now : lastTsMs + 1
+  lastTsMs = t
+  return new Date(t).toISOString()
+}
+
 export class TaskRepo {
   constructor(private db: Database) {}
 
@@ -123,7 +131,7 @@ export class TaskRepo {
   insertComment(taskId: number, agent: string, content: string, type: CommentType = 'comment'): number {
     const result = this.db.run(
       'INSERT INTO comments (task_id, agent, content, type, created_at) VALUES (?, ?, ?, ?, ?)',
-      [taskId, agent, content, type, new Date().toISOString()]
+      [taskId, agent, content, type, monotonicIso()]
     )
     return Number(result.lastInsertRowid)
   }
@@ -131,7 +139,7 @@ export class TaskRepo {
   auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void {
     this.db.run(
       'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [taskId, agent, action, oldValue ?? null, newValue ?? null, new Date().toISOString()]
+      [taskId, agent, action, oldValue ?? null, newValue ?? null, monotonicIso()]
     )
   }
 
