@@ -1,0 +1,89 @@
+name: release
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - run: bun install --frozen-lockfile
+
+      - name: Guard package.json version against tag
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          TAG_VERSION="${TAG#v}"
+          PKG_VERSION=$(bun run -e "console.log(require('./package.json').version)")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Version mismatch: tag is v${TAG_VERSION}, package.json says ${PKG_VERSION}"
+            exit 1
+          fi
+          echo "Version OK: ${PKG_VERSION}"
+
+      - run: bun run build:bin
+
+      - run: cp dist/ziptask dist/ziptask-linux-x86_64
+
+      - name: Build Release Notes
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep -Fxv "$TAG" | head -n 1 || true)
+          REPO="${{ github.repository }}"
+          COMMIT_FMT="- [\`%h\`](https://github.com/${REPO}/commit/%H): %s"
+
+          TMP=$(mktemp)
+          if [ -n "$PREV_TAG" ]; then
+            git log "${PREV_TAG}..${TAG}" --no-merges --pretty="$COMMIT_FMT" | grep -v CHANGELOG > "$TMP"
+          else
+            git log "$TAG" --no-merges --pretty="$COMMIT_FMT" | grep -v CHANGELOG > "$TMP"
+          fi
+
+          FEATURES=$(grep -i '^-.*: *feat[:(]' "$TMP" || true)
+          FIXES=$(grep -i '^-.*: *fix[:(]' "$TMP" || true)
+          OTHER=$(grep -iv '^-.*: *feat[:(]\|^-.*: *fix[:(]' "$TMP" || true)
+
+          {
+            if [ -n "$FEATURES" ]; then
+              echo "### Features"
+              echo "$FEATURES"
+              echo
+            fi
+            if [ -n "$FIXES" ]; then
+              echo "### Fixes"
+              echo "$FIXES"
+              echo
+            fi
+            if [ -n "$OTHER" ]; then
+              echo "### Other"
+              echo "$OTHER"
+              echo
+            fi
+            if [ -n "$PREV_TAG" ]; then
+              echo "**Full Diff**: https://github.com/${REPO}/compare/${PREV_TAG}...${TAG}"
+            fi
+          } > RELEASE_NOTES.md
+
+          rm -f "$TMP"
+          echo "Generated release notes:"
+          cat RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file RELEASE_NOTES.md \
+            dist/ziptask-linux-x86_64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
