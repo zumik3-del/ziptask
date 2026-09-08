@@ -24,7 +24,7 @@ jobs:
         id: ver
         shell: bash
         run: |
-          VERSION=$(bun run -e "console.log(require('./package.json').version)")
+          VERSION=$(bun -p "require('./package.json').version")
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Version: v${VERSION}"
 
