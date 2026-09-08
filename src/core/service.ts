@@ -1,12 +1,13 @@
 import type { Task, TaskStatus } from './tasks'
-import { isValidTransition, TERMINAL_STATUSES, nowIso } from './tasks'
+import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe } from './tasks'
 
 export interface TaskStore {
   getTaskRow(id: number): Task | null
-  insertTask(t: { title: string; description: string | null; priority: string;
-    assignee: string | null; reporter: string; depends_on: string; now: string; maxAttempts?: number }): number
+   insertTask(t: { title: string; description: string | null; priority: string;
+     assignee: string | null; reporter: string; depends_on: string; now: string; maxAttempts?: number
+     epicId?: number; isEpic?: number }): number
   deleteTask(id: number): void
-  listTasks(f: { assignee?: string; status?: string; updatedSinceIso?: string; limit: number })
+  listTasks(f: { assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number })
     : { rows: Task[]; total: number }
   queuedCandidates(limit?: number, offset?: number): Task[]
   depsOf(id: number): string | null
@@ -22,8 +23,12 @@ export interface TaskStore {
   auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void
   timelineEntries(taskId: number, limit: number): TimelineRow[]
   doneCount(sinceIso: string): number
-  taskSummaries(): Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at'>>
+  taskSummaries(): Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at' | 'is_epic'>>
   auditTransitionsForTasks(): Array<{ task_id: number; new_value: string; created_at: string }>
+  nonTerminalChildCount(epicId: number): number
+  childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number }
+  promoteEpic(id: number, now: string): void
+  appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string, now: string): void
 }
 
 export type TimelineRow = { type: string; agent: string; text: string; created_at: string }
@@ -41,11 +46,42 @@ export class TaskService {
 
   createTask(a: {
     title: string; description?: string; priority?: string; assignee?: string
-    depends_on?: number[]; reporter?: string
+    depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
   }): SvcResult<{ id: number; status: 'queued' }> {
     const deps = a.depends_on ?? []
     const reporter = a.reporter ?? 'system'
     const now = nowIso()
+
+    // D5: epic cannot coexist with epic_id or depends_on
+    if (a.epic && a.epic_id !== undefined) {
+      return { ok: false, error: 'INVALID: epic cannot have a parent epic' }
+    }
+    if (a.epic && deps.length > 0) {
+      return { ok: false, error: 'INVALID: epic cannot have depends_on' }
+    }
+    // D5: rejects depends_on pointing at an epic
+    if (deps.length > 0) {
+      const epicIds = this.store.batchTasks(deps).values()
+      for (const t of epicIds) {
+        if (t && t.is_epic === 1) {
+          return { ok: false, error: `INVALID: dependencies on epic tasks not allowed (${deps.find(d => this.store.getTaskRow(d)?.is_epic === 1)})` }
+        }
+      }
+    }
+    // D5: epic_id target must exist, be non-terminal, and have epic_id IS NULL
+    if (a.epic_id !== undefined) {
+      const target = this.store.getTaskRow(a.epic_id)
+      if (!target) return { ok: false, error: 'NOT_FOUND' }
+      if (TERMINAL_STATUSES.includes(target.status)) {
+        return { ok: false, error: 'INVALID: cannot attach to a terminal task' }
+      }
+      if (target.epic_id !== null) {
+        return { ok: false, error: 'INVALID: cannot attach to a sub-task (no nesting)' }
+      }
+    }
+
+    const isEpic = a.epic ? 1 : 0
+    const epicId = a.epic_id ?? null
     const id = this.store.insertTask({
       title: a.title,
       description: a.description ?? null,
@@ -54,7 +90,9 @@ export class TaskService {
       reporter,
       depends_on: JSON.stringify(deps),
       now,
-      maxAttempts: this.maxAttempts
+      maxAttempts: this.maxAttempts,
+      epicId: epicId ?? undefined,
+      isEpic
     })
     if (checkCycles((id) => this.store.depsOf(id), id, deps)) {
       this.store.deleteTask(id)
@@ -62,10 +100,21 @@ export class TaskService {
     }
     this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
     if (a.description) this.store.insertComment(id, reporter, a.description)
+
+    // D2: auto-promote target epic and D6: mirror subtask_add
+    if (epicId !== null) {
+      this.store.promoteEpic(epicId, now)
+      const targetTask = this.store.getTaskRow(epicId)
+      if (targetTask) {
+        this.store.appendEpicAuditMirror(epicId, reporter, 'subtask_add',
+          `#${id} ${sanitizePipe(a.title)}`, now)
+      }
+    }
+
     return { ok: true, data: { id, status: 'queued' } }
   }
 
-  getTaskView(id: number): SvcResult<{ task: Task; blockedBy: number[] }> {
+  getTaskView(id: number): SvcResult<{ task: Task; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number } }> {
     this.reapExpiredLeases()
     const task = this.store.getTaskRow(id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
@@ -75,15 +124,23 @@ export class TaskService {
       const s = depStatuses.get(d)
       return s && !TERMINAL_STATUSES.includes(s)
     })
+    // D3: derived roll-up for epics
+    if (task.is_epic === 1) {
+      const counts = this.store.childStatusCounts(id)
+      if (counts.total > 0) {
+        return { ok: true, data: { task, blockedBy, subtasks: counts } }
+      }
+    }
     return { ok: true, data: { task, blockedBy } }
   }
 
-  listTasks(a: { assignee?: string; status?: string; updated_since?: number; limit?: number }): { tasks: Task[]; total: number } {
+  listTasks(a: { assignee?: string; status?: string; updated_since?: number; epic_id?: number; limit?: number }): { tasks: Task[]; total: number } {
     this.reapExpiredLeases()
     const { rows, total } = this.store.listTasks({
       assignee: a.assignee,
       status: a.status,
       updatedSinceIso: a.updated_since !== undefined ? new Date(a.updated_since).toISOString() : undefined,
+      epicId: a.epic_id,
       limit: a.limit ?? 50
     })
     return { tasks: rows, total }
@@ -97,6 +154,7 @@ export class TaskService {
       task = this.store.getTaskRow(a.task_id)
       if (!task) return { ok: false, error: 'NOT_FOUND' }
       if (task.status !== 'queued') return { ok: false, error: `CONFLICT: status=${task.status}` }
+      if (task.is_epic === 1) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }
       const deps = parseDeps(task.depends_on)
       if (!depsSatisfied((id) => this.store.statusOf(id), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
     } else {
@@ -141,6 +199,14 @@ export class TaskService {
     if (task.version !== a.version) return { ok: false, error: `CONFLICT: expected version ${task.version}, got ${a.version}` }
     if (!isValidTransition(task.status, a.status)) return { ok: false, error: `INVALID: ${task.status} → ${a.status}` }
 
+    // D3: epic terminal guard — reject done/failed while non-terminal children exist
+    if (task.is_epic === 1 && TERMINAL_STATUSES.includes(a.status)) {
+      const open = this.store.nonTerminalChildCount(a.id)
+      if (open > 0) {
+        return { ok: false, error: `CHILDREN: ${open} sub-tasks not terminal` }
+      }
+    }
+
     const now = nowIso()
     const completedAt = TERMINAL_STATUSES.includes(a.status) ? now : null
     this.store.transitionStatus(a.id, a.version, a.status, now, completedAt)
@@ -151,6 +217,17 @@ export class TaskService {
       const type: 'comment' | 'resolution' = TERMINAL_STATUSES.includes(a.status) ? 'resolution' : 'comment'
       this.store.insertComment(a.id, a.agent, a.comment, type)
     }
+
+    // D6: mirror subtask_done/subtask_failed onto the parent epic
+    if (task.epic_id !== null && TERMINAL_STATUSES.includes(a.status)) {
+      const epicTask = this.store.getTaskRow(task.epic_id)
+      if (epicTask) {
+        this.store.appendEpicAuditMirror(task.epic_id, a.agent,
+          a.status === 'done' ? 'subtask_done' : 'subtask_failed',
+          `#${task.id} ${sanitizePipe(task.title)}`, now)
+      }
+    }
+
     return { ok: true, data: { id: a.id, status: a.status, version: updated.version } }
   }
 
@@ -214,7 +291,9 @@ export class TaskService {
     const since = periodHours === 0 ? '0001-01-01T00:00:00.000Z' : new Date(Date.now() - periodHours * 3600_000).toISOString()
 
     const done_count = this.store.doneCount(since)
-    const tasks = this.store.taskSummaries()
+    const allTasks = this.store.taskSummaries()
+    // D7: exclude epics from metrics
+    const tasks = allTasks.filter(t => t.is_epic === 0)
     const allTransitions = this.store.auditTransitionsForTasks()
 
     const transitionsByTask = new Map<number, Array<{ new_value: string; created_at: string }>>()

@@ -146,6 +146,85 @@ try {
   const tplUnknown = await client.callTool({ name: 'get_template', arguments: { name: 'nonexistent' as any } })
   assert(tplUnknown.isError === true, 'get_template unknown name → error')
 
+  // ── epic → sub-task mechanism ──────────────────────────────────────────────
+  const epicCreate = parseToolResult(await client.callTool({
+    name: 'create_task',
+    arguments: { title: 'Epic root', reporter: 'smoke', epic: true }
+  }))
+  assert(epicCreate.status === 'queued' && epicCreate.id > 0, `create epic → {id, status:queued}, id=${epicCreate.id}`)
+  const epicId = epicCreate.id
+
+  const epicGet = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epicId, fields: ['id', 'is_epic'] } }))
+  assert(epicGet.is_epic === 1, `epic row has is_epic=1: ${JSON.stringify(epicGet)}`)
+
+  const epicClaim = await client.callTool({
+    name: 'claim_task',
+    arguments: { agent: 'smoke', task_id: epicId }
+  })
+  assert(epicClaim.isError === true, 'claim epic → error (not claimable)')
+  assert(textOf(epicClaim).toLowerCase().includes('epic'), `claim error mentions epic: ${textOf(epicClaim)}`)
+
+  const subCreate = parseToolResult(await client.callTool({
+    name: 'create_task',
+    arguments: { title: 'Epic sub', reporter: 'smoke', epic_id: epicId }
+  }))
+  assert(subCreate.status === 'queued', `sub-task created under epic: id=${subCreate.id}`)
+  const subId = subCreate.id
+
+  const epicPromoted = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epicId, fields: ['is_epic'] } }))
+  assert(epicPromoted.is_epic === 1, `auto-promote: epic is_epic=1 after sub attach`)
+
+  const subtasksRollup = parseToolResult(await client.callTool({
+    name: 'get_task', arguments: { id: epicId, fields: ['id', 'title', 'subtasks'] }
+  }))
+  assert(subtasksRollup.subtasks !== undefined, `get_task epic includes subtasks roll-up`)
+  assert(subtasksRollup.subtasks.total === 1, `subtasks.total=1`)
+  assert(subtasksRollup.subtasks.open === 1, `subtasks.open=1`)
+
+  const listByEpic = parseToolResult(await client.callTool({
+    name: 'list_tasks', arguments: { epic_id: epicId }
+  }))
+  assert(listByEpic.total === 1, `list_tasks epic_id filter returns 1 child`)
+  assert(listByEpic.tasks[0].id === subId, `list_tasks returns the sub, not the epic`)
+
+  const listQueue = textOf(await client.callTool({ name: 'list_queue', arguments: {} }))
+  assert(!listQueue.includes(`${epicId}|`), `list_queue excludes epic`)
+  assert(listQueue.includes(`${subId}|`), `list_queue includes sub`)
+
+  // Drive sub to done; verify subtask_done mirror on epic
+  parseToolResult(await client.callTool({ name: 'claim_task', arguments: { agent: 'smoke', task_id: subId } }))
+  const subV1 = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: subId, fields: ['version'] } }))
+  parseToolResult(await client.callTool({ name: 'update_status', arguments: { id: subId, agent: 'smoke', status: 'review', version: subV1.version } }))
+  const subV2 = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: subId, fields: ['version'] } }))
+  parseToolResult(await client.callTool({ name: 'update_status', arguments: { id: subId, agent: 'smoke', status: 'done', version: subV2.version } }))
+
+  const epicTl = textOf(await client.callTool({ name: 'get_timeline', arguments: { id: epicId } }))
+  assert(epicTl.includes('subtask_done'), `epic timeline has subtask_done mirror: ${epicTl}`)
+  assert(epicTl.includes(`#${subId}`), `epic timeline mirror references sub id: ${epicTl}`)
+
+  // Terminal guard: fresh epic+sub to keep a child open while testing the guard
+  const epic2 = parseToolResult(await client.callTool({
+    name: 'create_task',
+    arguments: { title: 'Epic guard', reporter: 'smoke' }
+  }))
+  const epic2Id = epic2.id
+  const _sub2 = parseToolResult(await client.callTool({
+    name: 'create_task',
+    arguments: { title: 'Guard sub', reporter: 'smoke', epic_id: epic2Id }
+  }))
+  // Drive epic2 to review (queued→in_progress→review)
+  const e2v1 = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epic2Id, fields: ['version'] } }))
+  parseToolResult(await client.callTool({ name: 'update_status', arguments: { id: epic2Id, agent: 'smoke', status: 'in_progress', version: e2v1.version } }))
+  const e2v2 = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epic2Id, fields: ['version'] } }))
+  const guardReview = parseToolResult(await client.callTool({ name: 'update_status', arguments: { id: epic2Id, agent: 'smoke', status: 'review', version: e2v2.version } }))
+  assert(guardReview.status === 'review', `epic can transition to review (non-terminal)`)
+  const guardDone = await client.callTool({
+    name: 'update_status',
+    arguments: { id: epic2Id, agent: 'smoke', status: 'done', version: guardReview.version }
+  })
+  assert(guardDone.isError === true, 'epic with open children → done rejected')
+  assert(textOf(guardDone).toLowerCase().includes('children'), `rejection mentions children: ${textOf(guardDone)}`)
+
   await client.close()
   console.log('[smoke] ALL CHECKS PASSED')
 } finally {

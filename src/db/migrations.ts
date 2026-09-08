@@ -43,5 +43,10 @@ export const MIGRATIONS = [
 
   `CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
-  )`
+  )`,
+
+  // 002: epic → sub-task mechanism (schema v3; additive over live DB)
+  `ALTER TABLE tasks ADD COLUMN is_epic INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE tasks ADD COLUMN epic_id INTEGER REFERENCES tasks(id)`,
+  `CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id)`
 ]

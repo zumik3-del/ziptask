@@ -242,13 +242,17 @@ describe('maxAttempts flow', () => {
       transitionStatus: () => {},
       expiredLeases: () => [],
       reapSettle: () => 0,
-      insertComment: () => 1,
-      auditAppend: () => {},
-      timelineEntries: () => [],
-      doneCount: () => 0,
-      taskSummaries: () => [],
-      auditTransitionsForTasks: () => []
-    }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts })
+       insertComment: () => 1,
+       auditAppend: () => {},
+       timelineEntries: () => [],
+       doneCount: () => 0,
+       taskSummaries: () => [],
+       auditTransitionsForTasks: () => [],
+       nonTerminalChildCount: () => 0,
+       childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0 }),
+       promoteEpic: () => {},
+       appendEpicAuditMirror: () => {}
+     }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts })
 
     const result = svc.createTask({ title: 'Flow test', reporter: 'tester' })
     expect(result.ok).toBe(true)
@@ -274,13 +278,17 @@ describe('maxAttempts flow', () => {
       transitionStatus: () => {},
       expiredLeases: () => [],
       reapSettle: () => 0,
-      insertComment: () => 1,
-      auditAppend: () => {},
-      timelineEntries: () => [],
-      doneCount: () => 0,
-      taskSummaries: () => [],
-      auditTransitionsForTasks: () => []
-    }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts })
+       insertComment: () => 1,
+       auditAppend: () => {},
+       timelineEntries: () => [],
+       doneCount: () => 0,
+       taskSummaries: () => [],
+       auditTransitionsForTasks: () => [],
+       nonTerminalChildCount: () => 0,
+       childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0 }),
+       promoteEpic: () => {},
+       appendEpicAuditMirror: () => {}
+     }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts })
 
     const result = svc.createTask({ title: 'Default flow', reporter: 'tester' })
     expect(result.ok).toBe(true)
