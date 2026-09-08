@@ -46,7 +46,9 @@ bash ~/.ziptask/scripts/update.sh
 bash ~/.ziptask/scripts/update.sh --version v0.2.0
 ```
 
-The script prompts y/N before overwriting. On non-systemd systems the binary is replaced but you must restart manually.
+The script prompts y/N before overwriting. **Before swapping the binary it creates an online SQLite backup** of `ZIPTASK_DB` (resolved from env → `settings.json` dbPath → `~/.ziptask/data/ziptask.db`) into `~/.ziptask/backups/ziptask-<timestamp>.db` via `sqlite3 .backup`; missing sqlite3 or a missing DB are handled as warnings and the update continues. The backup path is printed so a failed upgrade is reversible. On non-systemd systems the binary is replaced but you must restart manually.
+
+**Schema guard on startup:** a fresh DB auto-initialises; an older DB (V < L) auto-migrates forward; a DB newer than the binary (V > L, i.e. you downgraded) refuses to start with `SCHEMA: database schema version <V> is newer than this binary supports (<L>); upgrade ziptask or restore the database from backup`, exit 1. Fix by re-upgrading to the newer binary or restoring the backup that `update.sh` wrote. `--version` does not touch the DB.
 
 ## Quick start (from source)
 
