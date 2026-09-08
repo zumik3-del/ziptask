@@ -10,6 +10,15 @@ REPO_API="https://api.github.com/repos/zumik3-del/ziptask"
 REPO_URL="https://github.com/zumik3-del/ziptask/releases"
 VERSION=""
 
+info()  { echo "[ziptask] $*"; }
+warn()  { echo "[ziptask] WARNING: $*" >&2; }
+
+systemd_running() {
+  local state
+  state=$(systemctl is-system-running 2>&1) || true
+  [ "$state" = "running" ] || [ "$state" = "degraded" ]
+}
+
 parse_args() {
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -68,7 +77,7 @@ fi
 
 # Latest version
 if [ -z "$VERSION" ]; then
-  echo "[ziptask] Checking latest release..."
+  info "Checking latest release..."
   VERSION=$(curl -fsSL "$REPO_API/releases/latest" 2>/dev/null | grep '"tag_name"' | sed 's/.*"tag_name": *"//;s/".*//' || echo "")
   if [ -z "$VERSION" ]; then
     echo "[ziptask] Could not determine latest version. Check https://github.com/zumik3-del/ziptask/releases" >&2
@@ -118,6 +127,25 @@ else
 fi
 
 chmod +x "$BINARY"
+
+# Restart service if systemd is active
+if systemd_running; then
+  if systemctl is-active ziptask &>/dev/null; then
+    info "Restarting ziptask service..."
+    if [ "$(id -u)" -eq 0 ]; then
+      systemctl restart ziptask
+    else
+      sudo systemctl restart ziptask
+    fi
+    info "Service restarted."
+  else
+    info "Service not active — binary updated but you may want to start it:"
+    info "  sudo systemctl start ziptask"
+  fi
+else
+  warn "systemd not running — manual restart required:"
+  warn "  ${BINARY}"
+fi
 
 echo ""
 echo "[ziptask] Updated to ${LATEST}."
