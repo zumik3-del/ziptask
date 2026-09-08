@@ -9,6 +9,9 @@ BINARY="$BIN/ziptask"
 REPO_API="https://api.github.com/repos/zumik3-del/ziptask"
 REPO_URL="https://github.com/zumik3-del/ziptask/releases"
 VERSION=""
+DB_PATH=""
+DB_BACKUP=""
+DB_BACKUP_OK=false
 
 info()  { echo "[ziptask] $*"; }
 warn()  { echo "[ziptask] WARNING: $*" >&2; }
@@ -32,6 +35,13 @@ parse_args() {
         echo "Options:"
         echo "  --version TAG   Update to specific version (e.g. v0.2.0)"
         echo "  --help, -h      Show this help"
+        echo ""
+        echo "DB backup:"
+        echo "  Before swapping the binary, update.sh creates an online SQLite backup"
+        echo "  of ZIPTASK_DB into ${HOME_DIR}/backups/ (best-effort)."
+        echo "  The backup path is printed on success so a failed upgrade is reversible."
+        echo "  If sqlite3 is unavailable or the DB does not exist, a warning is printed"
+        echo "  and the update continues."
         exit 0
         ;;
       *)
@@ -56,6 +66,67 @@ detect_arch() {
     aarch64|arm64) echo arm64 ;;
     *) echo "";;
   esac
+}
+
+# Resolve DB path: ZIPTASK_DB env > dbPath from settings.json > default
+resolve_db_path() {
+  # 1. Explicit env var
+  if [ -n "${ZIPTASK_DB:-}" ]; then
+    echo "$ZIPTASK_DB"
+    return
+  fi
+
+  # 2. settings.json dbPath (relative paths resolve against HOME_DIR)
+  local settings="$HOME_DIR/settings.json"
+  if [ -f "$settings" ]; then
+    local dbPath
+    dbPath=$(sed -n 's/.*"dbPath"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$settings" 2>/dev/null || true)
+    if [ -n "$dbPath" ]; then
+      # Relative paths are resolved against HOME_DIR (where WorkingDirectory points)
+      case "$dbPath" in
+        /*) echo "$dbPath" ;;
+        *)  echo "$HOME_DIR/$dbPath" ;;
+      esac
+      return
+    fi
+  fi
+
+  # 3. Default
+  echo "$HOME_DIR/data/ziptask.db"
+}
+
+# Best-effort online backup via sqlite3 CLI .backup
+# Mirrors scripts/backup.ts approach (wal_checkpoint + .backup), keeps raw .db
+backup_db() {
+  DB_PATH="$(resolve_db_path)"
+
+  if [ ! -f "$DB_PATH" ]; then
+    info "No DB at ${DB_PATH} — skipping backup."
+    return
+  fi
+
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    warn "sqlite3 not found — cannot create DB backup. Update proceeds without one."
+    return
+  fi
+
+  local backup_dir="$HOME_DIR/backups"
+  local ts
+  ts=$(date -u +%Y-%m-%dT%H-%M-%S)
+  DB_BACKUP="$backup_dir/ziptask-${ts}.db"
+
+  mkdir -p "$backup_dir"
+
+  # Truncate WAL before backup for a clean checkpoint
+  sqlite3 "$DB_PATH" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null 2>&1 || true
+
+  if sqlite3 "$DB_PATH" ".backup '${DB_BACKUP}'" >/dev/null 2>&1; then
+    DB_BACKUP_OK=true
+    echo "[ziptask] DB backup: $DB_BACKUP"
+  else
+    warn "sqlite3 .backup failed for ${DB_PATH}; upgrade proceeds without a DB backup."
+    warn "Restore from a previous backup or recreate the database after downgrade."
+  fi
 }
 
 parse_args "$@"
@@ -110,6 +181,9 @@ if [ "$CURRENT" != "unknown" ]; then
     exit 0
   fi
 fi
+
+# Backup DB before swapping the binary (best-effort)
+backup_db
 
 ASSET="ziptask-${OS}-${ARCH}"
 URL="${REPO_URL}/download/${VERSION}/${ASSET}"
