@@ -763,8 +763,9 @@ describe('metrics', () => {
     expect(out24).toContain('done_count|1')
   })
 
-  test('status_time reflects queued time for fresh task', () => {
+  test('status_time reflects queued time for fresh task', async () => {
     json(handleCreateTask(svc, { title: 'Fresh', reporter: 'dev' }))
+    await Bun.sleep(2)
     const out = text(handleMetrics(svc, { period: 'all' }))
     expect(out).toContain('status_time|queued:')
   })
