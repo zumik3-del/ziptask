@@ -10,7 +10,7 @@ import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
   handleCreateTask, handleGetTask, handleListTasks, handleClaimTask,
-  handleUpdateStatus, handleBatchStatuses, handleListQueue,
+  handleUpdateStatus, handleListQueue,
   handleAddComment, handleGetTimeline, handleMetrics
 } from './mcp/tools'
 
@@ -485,19 +485,19 @@ describe('deps', () => {
 })
 
 describe('pipe formats (v2)', () => {
-  test('batch_statuses default id|code, unknown id → id|0', () => {
+  test('list_tasks ids pipe default id|code, unknown id → |0', () => {
     const a = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id
     driveToDone(svc, a, 'agent-1')
     const b = json(handleCreateTask(svc, { title: 'B', reporter: 'dev' })).id
-    const out = text(handleBatchStatuses(svc, { ids: [a, b, 999] }))
+    const out = text(handleListTasks(svc, { ids: [a, b, 999] }))
     expect(out).toBe(`${a}|4\n${b}|1\n999|0`)
   })
 
-  test('batch_statuses include assignee: null → -', () => {
+  test('list_tasks ids pipe with fields assignee: null → -', () => {
     const a = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'worker-1' })
     const b = json(handleCreateTask(svc, { title: 'B', reporter: 'dev' })).id
-    const out = text(handleBatchStatuses(svc, { ids: [a, b, 999], include: ['assignee'] }))
+    const out = text(handleListTasks(svc, { ids: [a, b, 999], fields: ['assignee'] }))
     expect(out).toBe(`${a}|2|worker-1\n${b}|1|-\n999|0|-`)
   })
 

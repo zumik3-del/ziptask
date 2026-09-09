@@ -1,5 +1,6 @@
 import type { Task, TaskStatus } from './tasks'
 import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe } from './tasks'
+import { computeMetrics } from './metrics'
 
 export interface TaskStore {
   getTaskRow(id: number): Task | null
@@ -134,8 +135,15 @@ export class TaskService {
     return { ok: true, data: { task, blockedBy } }
   }
 
-  listTasks(a: { assignee?: string; status?: string; updated_since?: number; epic_id?: number; limit?: number }): { tasks: Task[]; total: number } {
+  listTasks(a: { assignee?: string; status?: string; updated_since?: number; epic_id?: number; limit?: number; ids?: number[] }): { tasks: Task[]; total: number } | { items: Array<{ id: number; task: Task | null }>; total: number } {
     this.reapExpiredLeases()
+    if (a.ids !== undefined && a.ids.length > 0) {
+      const batch = this.store.batchTasks(a.ids)
+      return {
+        items: a.ids.map(id => ({ id, task: batch.get(id) ?? null })),
+        total: a.ids.length
+      }
+    }
     const { rows, total } = this.store.listTasks({
       assignee: a.assignee,
       status: a.status,
@@ -231,12 +239,6 @@ export class TaskService {
     return { ok: true, data: { id: a.id, status: a.status, version: updated.version } }
   }
 
-  batchStatuses(ids: number[]): Array<{ id: number; task: Task | null }> {
-    this.reapExpiredLeases()
-    const batch = this.store.batchTasks(ids)
-    return ids.map(id => ({ id, task: batch.get(id) ?? null }))
-  }
-
   listQueue(a: { limit?: number }): Task[] {
     this.reapExpiredLeases()
     const limit = Math.floor(a.limit ?? 100)
@@ -274,62 +276,11 @@ export class TaskService {
     return { ok: true, data: rows }
   }
 
-  private addMinutes(statusTime: Record<string, number>, status: string, segStart: string, segEnd: string, since: string, now: string): void {
-    const start = segStart > since ? segStart : since
-    const end = segEnd < now ? segEnd : now
-    if (end > start) {
-      statusTime[status] = (statusTime[status] ?? 0) + (new Date(end).getTime() - new Date(start).getTime()) / 60000
-    }
-  }
-
   metrics(period?: number | 'all'): SvcResult<{ doneCount: number; statusTime: Record<string, number>;
     bottleneck: { status: string; minutes: number } | null }> {
     this.reapExpiredLeases()
-    const now = nowIso()
     if (period === 0) return { ok: false, error: 'INVALID: period=0 is not valid; use a positive number of hours or "all"' }
-    const periodHours = period === 'all' ? 0 : (period ?? 24)
-    const since = periodHours === 0 ? '0001-01-01T00:00:00.000Z' : new Date(Date.now() - periodHours * 3600_000).toISOString()
-
-    const done_count = this.store.doneCount(since)
-    const allTasks = this.store.taskSummaries()
-    // D7: exclude epics from metrics
-    const tasks = allTasks.filter(t => t.is_epic === 0)
-    const allTransitions = this.store.auditTransitionsForTasks()
-
-    const transitionsByTask = new Map<number, Array<{ new_value: string; created_at: string }>>()
-    for (const t of allTransitions) {
-      let arr = transitionsByTask.get(t.task_id)
-      if (!arr) { arr = []; transitionsByTask.set(t.task_id, arr) }
-      arr.push({ new_value: t.new_value, created_at: t.created_at })
-    }
-
-    const statusTime: Record<string, number> = {}
-
-    for (const task of tasks) {
-      const transitions = transitionsByTask.get(task.id) ?? []
-
-      let currentStatus = 'queued'
-      let currentTime = task.created_at
-
-      for (const t of transitions) {
-        if (t.created_at < currentTime) continue
-        this.addMinutes(statusTime, currentStatus, currentTime, t.created_at, since, now)
-        currentStatus = t.new_value
-        currentTime = t.created_at
-      }
-
-      const endTime = task.completed_at || now
-      this.addMinutes(statusTime, currentStatus, currentTime, endTime, since, now)
-    }
-
-    let bottleneck: { status: string; minutes: number } | null = null
-    for (const [status, mins] of Object.entries(statusTime)) {
-      if (!bottleneck || mins > bottleneck.minutes) {
-        bottleneck = { status, minutes: mins }
-      }
-    }
-
-    return { ok: true, data: { doneCount: done_count, statusTime, bottleneck } }
+    return { ok: true, data: computeMetrics(this.store, period) }
   }
 
   reapExpiredLeases(): void {
