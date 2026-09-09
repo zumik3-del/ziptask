@@ -11,7 +11,7 @@ import { TaskService } from './core/service'
 import {
   handleCreateTask, handleGetTask, handleListTasks, handleClaimTask,
   handleUpdateStatus, handleListQueue,
-  handleAddComment, handleGetTimeline, handleMetrics
+  handleAddComment, handleGetTimeline
 } from './mcp/tools'
 
 function createTestDb(): Database {
@@ -769,77 +769,6 @@ describe('get_timeline', () => {
   })
 })
 
-describe('metrics', () => {
-  test('basic shape with empty DB', () => {
-    const out = text(handleMetrics(svc, {}))
-    expect(out).toContain('done_count|0')
-  })
-
-  test('done_count increases after done transition', () => {
-    const id = json(handleCreateTask(svc, { title: 'M', reporter: 'dev' })).id
-    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
-    const v1 = json(handleGetTask(svc, { id, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: v1 })
-    const v2 = json(handleGetTask(svc, { id, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'done', version: v2 })
-    const out = text(handleMetrics(svc, { period: 'all' }))
-    expect(out).toContain('done_count|1')
-    expect(out).toContain('status_time|')
-  })
-
-  test('period=all includes all data', () => {
-    const id = json(handleCreateTask(svc, { title: 'MA', reporter: 'dev' })).id
-    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
-    const v1 = json(handleGetTask(svc, { id, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: v1 })
-    const v2 = json(handleGetTask(svc, { id, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'done', version: v2 })
-    const outAll = text(handleMetrics(svc, { period: 'all' }))
-    const out24 = text(handleMetrics(svc, { period: 24 }))
-    expect(outAll).toContain('done_count|1')
-    expect(out24).toContain('done_count|1')
-  })
-
-  test('status_time reflects queued time for fresh task', async () => {
-    json(handleCreateTask(svc, { title: 'Fresh', reporter: 'dev' }))
-    await Bun.sleep(2)
-    const out = text(handleMetrics(svc, { period: 'all' }))
-    expect(out).toContain('status_time|queued:')
-  })
-
-  test('multi-task metrics aggregates status_time across tasks', () => {
-    const id1 = json(handleCreateTask(svc, { title: 'M1', reporter: 'dev' })).id
-    const id2 = json(handleCreateTask(svc, { title: 'M2', reporter: 'dev' })).id
-    handleClaimTask(svc, { agent: 'agent-1', task_id: id1 })
-    const v1 = json(handleGetTask(svc, { id: id1, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id: id1, agent: 'agent-1', status: 'review', version: v1 })
-    const v2 = json(handleGetTask(svc, { id: id1, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id: id1, agent: 'agent-1', status: 'done', version: v2 })
-    handleClaimTask(svc, { agent: 'agent-1', task_id: id2 })
-    const out = text(handleMetrics(svc, { period: 'all' }))
-    expect(out).toContain('done_count|1')
-    expect(out).toContain('status_time|')
-    expect(out).toContain('bottleneck|')
-    const lines = out.split('\n')
-    const statusTimeLine = lines.find(l => l.startsWith('status_time|'))
-    expect(statusTimeLine).toBeDefined()
-    const bottleneckLine = lines.find(l => l.startsWith('bottleneck|'))
-    expect(bottleneckLine).toBeDefined()
-  })
-
-  test('period=0 is rejected', () => {
-    const res = handleMetrics(svc, { period: 0 })
-    expect(res.isError).toBe(true)
-    expect(text(res)).toContain('INVALID')
-  })
-
-  test('svc.metrics(0) returns SvcResult error directly', () => {
-    const r = svc.metrics(0)
-    expect(r.ok).toBe(false)
-    expect((r as { ok: false; error: string }).error).toContain('INVALID')
-  })
-})
-
 describe('epic creation', () => {
   test('epic: true creates non-claimable task with is_epic=1', () => {
     const res = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true }))
@@ -1106,25 +1035,6 @@ describe('list_tasks epic_id filter', () => {
     json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId }))
     const result = json(handleListTasks(svc, { epic_id: epicId }))
     expect(result.tasks.some((t: any) => t.id === epicId)).toBe(false)
-  })
-})
-
-describe('metrics exclusion of epics', () => {
-  test('epic tasks are excluded from metrics', () => {
-    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
-    json(handleCreateTask(svc, { title: 'Regular', reporter: 'dev' }))
-    driveToDone(svc, epicId, 'dev')
-    const out = text(handleMetrics(svc, { period: 'all' }))
-    // Epic's done should not count; only the regular task would if it was driven done
-    expect(out).toContain('done_count|0')
-  })
-
-  test('regular task done counts, epic done does not', () => {
-    json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true }))
-    const regId = json(handleCreateTask(svc, { title: 'Regular', reporter: 'dev' })).id
-    driveToDone(svc, regId, 'dev')
-    const out = text(handleMetrics(svc, { period: 'all' }))
-    expect(out).toContain('done_count|1')
   })
 })
 

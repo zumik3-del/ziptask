@@ -118,10 +118,6 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
   server.tool('get_template', 'Return a markdown template by name', {
     name: z.enum(TEMPLATE_NAMES)
   }, async (args) => handleGetTemplate(svc, args))
-
-  server.tool('metrics', 'Aggregated stats: done_count, status_time per status, bottleneck. period=hours (default 24) or all', {
-    period: z.union([z.number().positive(), z.literal('all')]).optional()
-  }, async (args) => handleMetrics(svc, args))
 }
 
 export function handleCreateTask(svc: TaskService, args: {
@@ -221,16 +217,4 @@ export function handleGetTimeline(svc: TaskService, args: { id: number; limit?: 
   return textResult(lines.join('\n'))
 }
 
-export function handleMetrics(svc: TaskService, args: { period?: number | 'all' }): ToolResult {
-  const r = svc.metrics(args.period)
-  if (!r.ok) return errorResult(r.error)
-  const m = r.data
-  const lines: string[] = [`done_count|${m.doneCount}`]
-  for (const [status, mins] of Object.entries(m.statusTime).sort()) {
-    lines.push(`status_time|${status}:${Math.round(mins)}`)
-  }
-  if (m.bottleneck) {
-    lines.push(`bottleneck|${m.bottleneck.status}:${Math.round(m.bottleneck.minutes)}`)
-  }
-  return textResult(lines.join('\n'))
-}
+

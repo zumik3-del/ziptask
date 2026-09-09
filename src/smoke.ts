@@ -126,11 +126,6 @@ try {
   const tlBad = await client.callTool({ name: 'get_timeline', arguments: { id: 9999 } })
   assert(tlBad.isError === true, 'get_timeline unknown id → error')
 
-  const met = textOf(await client.callTool({ name: 'metrics', arguments: { period: 'all' } }))
-  assert(met.startsWith('done_count|'), `metrics shape: ${met}`)
-  assert(met.includes('status_time|'), `metrics includes status_time: ${met}`)
-  assert(met.includes('bottleneck|'), `metrics includes bottleneck: ${met}`)
-
   const tplTask = textOf(await client.callTool({ name: 'get_template', arguments: { name: 'task' } }))
   assert(tplTask.includes('## Goal'), `get_template task has Goal section`)
   assert(tplTask.includes('## Acceptance criteria'), `get_template task has Acceptance criteria`)

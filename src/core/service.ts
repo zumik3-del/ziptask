@@ -1,6 +1,6 @@
 import type { Task, TaskStatus } from './tasks'
 import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe } from './tasks'
-import { computeMetrics } from './metrics'
+
 
 export interface TaskStore {
   getTaskRow(id: number): Task | null
@@ -274,13 +274,6 @@ export class TaskService {
     const limitN = limit !== undefined ? Math.floor(limit) : 50
     const rows = this.store.timelineEntries(id, limitN)
     return { ok: true, data: rows }
-  }
-
-  metrics(period?: number | 'all'): SvcResult<{ doneCount: number; statusTime: Record<string, number>;
-    bottleneck: { status: string; minutes: number } | null }> {
-    this.reapExpiredLeases()
-    if (period === 0) return { ok: false, error: 'INVALID: period=0 is not valid; use a positive number of hours or "all"' }
-    return { ok: true, data: computeMetrics(this.store, period) }
   }
 
   reapExpiredLeases(): void {

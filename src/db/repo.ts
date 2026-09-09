@@ -161,6 +161,13 @@ export class TaskRepo {
     return row.cnt
   }
 
+  doneCountFromTasks(sinceIso: string): number {
+    const row = this.db.query(
+      "SELECT COUNT(*) as cnt FROM tasks WHERE status = 'done' AND completed_at >= ?"
+    ).get(sinceIso) as { cnt: number }
+    return row.cnt
+  }
+
   taskSummaries(): Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at' | 'is_epic'>> {
     return this.db.query('SELECT id, status, created_at, updated_at, completed_at, is_epic FROM tasks').all() as Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at' | 'is_epic'>>
   }
