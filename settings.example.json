@@ -14,5 +14,9 @@
     "listLimit": 50,
     "timelineLimit": 50,
     "queueLimit": 100
-  }
+  },
+  "logging": {
+    "level": "off"
+  },
+  "auditLog": true
 }

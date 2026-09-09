@@ -9,7 +9,9 @@ export const DEFAULTS = {
   leaseTtlMin: 15,
   maxAttempts: 3,
   http: { maxSessions: 100, sessionTtlMs: 3_600_000 },
-  defaults: { priority: 'p2', reporter: 'system', listLimit: 50, timelineLimit: 50, queueLimit: 100 }
+  defaults: { priority: 'p2', reporter: 'system', listLimit: 50, timelineLimit: 50, queueLimit: 100 },
+  logging: { level: 'off' as const },
+  auditLog: true
 } as const
 
 const SettingsSchema = z.object({
@@ -28,7 +30,11 @@ const SettingsSchema = z.object({
     listLimit: z.number().int().positive().optional(),
     timelineLimit: z.number().int().positive().optional(),
     queueLimit: z.number().int().positive().optional()
-  }).optional()
+  }).optional(),
+  logging: z.object({
+    level: z.enum(['off', 'error', 'info', 'debug']).optional()
+  }).optional(),
+  auditLog: z.boolean().optional()
 })
 
 export type Settings = z.infer<typeof SettingsSchema> & {
@@ -39,6 +45,8 @@ export type Settings = z.infer<typeof SettingsSchema> & {
   maxAttempts: number
   http: { maxSessions: number; sessionTtlMs: number }
   defaults: { priority: string; reporter: string; listLimit: number; timelineLimit: number; queueLimit: number }
+  logging: { level: string }
+  auditLog: boolean
 }
 
 export type EnvType = 'string' | 'int' | 'float' | 'bool'
@@ -62,6 +70,8 @@ export const ENV_MAPPINGS: EnvMapping[] = [
   { env: 'ZIPTASK_DEFAULTS_LIST_LIMIT', path: 'defaults.listLimit', type: 'int' },
   { env: 'ZIPTASK_DEFAULTS_TIMELINE_LIMIT', path: 'defaults.timelineLimit', type: 'int' },
   { env: 'ZIPTASK_DEFAULTS_QUEUE_LIMIT', path: 'defaults.queueLimit', type: 'int' },
+  { env: 'ZIPTASK_LOGGING_LEVEL', path: 'logging.level', type: 'string' },
+  { env: 'ZIPTASK_AUDIT_LOG', path: 'auditLog', type: 'bool' },
 ]
 
 function parseValue(raw: string, type: EnvType): string | number | boolean {

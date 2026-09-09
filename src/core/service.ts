@@ -39,10 +39,12 @@ export type SvcResult<T> = { ok: true; data: T } | { ok: false; error: string }
 export class TaskService {
   private readonly leaseTtlMin: number
   private readonly maxAttempts: number
+  private readonly auditLog: boolean
 
-  constructor(private store: TaskStore, opts?: { leaseTtlMin?: number; maxAttempts?: number }) {
+  constructor(private store: TaskStore, opts?: { leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean }) {
     this.leaseTtlMin = opts?.leaseTtlMin ?? 15
     this.maxAttempts = opts?.maxAttempts ?? 3
+    this.auditLog = opts?.auditLog ?? true
   }
 
   createTask(a: {
@@ -99,14 +101,14 @@ export class TaskService {
       this.store.deleteTask(id)
       return { ok: false, error: 'CYCLE: dependency graph contains a cycle' }
     }
-    this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
+    if (this.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
     if (a.description) this.store.insertComment(id, reporter, a.description)
 
     // D2: auto-promote target epic and D6: mirror subtask_add
     if (epicId !== null) {
       this.store.promoteEpic(epicId, now)
       const targetTask = this.store.getTaskRow(epicId)
-      if (targetTask) {
+      if (targetTask && this.auditLog) {
         this.store.appendEpicAuditMirror(epicId, reporter, 'subtask_add',
           `#${id} ${sanitizePipe(a.title)}`, now)
       }
@@ -196,7 +198,7 @@ export class TaskService {
     const changes = this.store.markClaimed(task.id, task.version, a.agent, leaseUntil, now)
     const updated = this.store.getTaskRow(task.id)
     if (changes !== 1 || updated?.status !== 'in_progress') return { ok: false, error: 'CONFLICT: version mismatch' }
-    this.store.auditAppend(task.id, a.agent, 'claim', task.status, 'in_progress')
+    if (this.auditLog) this.store.auditAppend(task.id, a.agent, 'claim', task.status, 'in_progress')
     return { ok: true, data: { id: task.id, leaseTtlMin: this.leaseTtlMin, task: updated } }
   }
 
@@ -220,14 +222,14 @@ export class TaskService {
     this.store.transitionStatus(a.id, a.version, a.status, now, completedAt)
     const updated = this.store.getTaskRow(a.id)
     if (!updated || updated.version !== task.version + 1) return { ok: false, error: 'CONFLICT: concurrent modification' }
-    this.store.auditAppend(a.id, a.agent, 'update_status', task.status, a.status)
+    if (this.auditLog) this.store.auditAppend(a.id, a.agent, 'update_status', task.status, a.status)
     if (a.comment) {
       const type: 'comment' | 'resolution' = TERMINAL_STATUSES.includes(a.status) ? 'resolution' : 'comment'
       this.store.insertComment(a.id, a.agent, a.comment, type)
     }
 
     // D6: mirror subtask_done/subtask_failed onto the parent epic
-    if (task.epic_id !== null && TERMINAL_STATUSES.includes(a.status)) {
+    if (task.epic_id !== null && TERMINAL_STATUSES.includes(a.status) && this.auditLog) {
       const epicTask = this.store.getTaskRow(task.epic_id)
       if (epicTask) {
         this.store.appendEpicAuditMirror(task.epic_id, a.agent,
@@ -283,7 +285,7 @@ export class TaskService {
       const newAttempts = task.attempts + 1
       const newStatus: TaskStatus = newAttempts > task.max_attempts ? 'failed' : 'queued'
       const changes = this.store.reapSettle(task.id, task.version, newStatus, newAttempts, now)
-      if (changes === 1) this.store.auditAppend(task.id, 'system', 'lease_expired', 'in_progress', newStatus)
+      if (changes === 1 && this.auditLog) this.store.auditAppend(task.id, 'system', 'lease_expired', 'in_progress', newStatus)
     }
   }
 }

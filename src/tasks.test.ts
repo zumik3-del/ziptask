@@ -1130,3 +1130,85 @@ describe('schema guard (v1.6)', () => {
     } finally { rmTempDb(path) }
   })
 })
+
+describe('audit_log toggle', () => {
+  function makeAuditSvc(auditLog: boolean): { db: Database; repo: TaskRepo; svc: TaskService } {
+    const d = createTestDb()
+    const r = new TaskRepo(d)
+    const s = new TaskService(r, { leaseTtlMin: 15, auditLog })
+    return { db: d, repo: r, svc: s }
+  }
+
+  test('auditLog=false: create does not write audit row', () => {
+    const { db, svc } = makeAuditSvc(false)
+    try {
+      const id = json(handleCreateTask(svc, { title: 'NoAudit', reporter: 'dev' })).id
+      const logs = db.query('SELECT * FROM audit_log WHERE task_id = ?').all(id) as any[]
+      expect(logs.length).toBe(0)
+    } finally { closeTestDb(db) }
+  })
+
+  test('auditLog=false: claim does not write audit row', () => {
+    const { db, svc } = makeAuditSvc(false)
+    try {
+      const id = json(handleCreateTask(svc, { title: 'NoClaim', reporter: 'dev' })).id
+      handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+      const logs = db.query('SELECT * FROM audit_log WHERE task_id = ?').all(id) as any[]
+      expect(logs.length).toBe(0)
+    } finally { closeTestDb(db) }
+  })
+
+  test('auditLog=false: update_status does not write audit row', () => {
+    const { db, svc } = makeAuditSvc(false)
+    try {
+      const id = json(handleCreateTask(svc, { title: 'NoUpdate', reporter: 'dev' })).id
+      handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+      const task = getTaskRow(db, id)
+      handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version })
+      const logs = db.query('SELECT * FROM audit_log WHERE task_id = ?').all(id) as any[]
+      expect(logs.length).toBe(0)
+    } finally { closeTestDb(db) }
+  })
+
+  test('auditLog=false: comments still insert', () => {
+    const { db, svc } = makeAuditSvc(false)
+    try {
+      const id = json(handleCreateTask(svc, { title: 'NoCommentAudit', reporter: 'dev' })).id
+      handleAddComment(svc, { id, agent: 'dev', content: 'hello' })
+      const comments = db.query('SELECT * FROM comments WHERE task_id = ?').all(id) as any[]
+      expect(comments.length).toBe(1)
+      expect(comments[0].content).toBe('hello')
+      const audit = db.query('SELECT * FROM audit_log WHERE task_id = ?').all(id) as any[]
+      expect(audit.length).toBe(0)
+    } finally { closeTestDb(db) }
+  })
+
+  test('auditLog=false: doneCountFromTasks returns correct count', () => {
+    const { db, svc, repo } = makeAuditSvc(false)
+    try {
+      const id1 = json(handleCreateTask(svc, { title: 'Done1', reporter: 'dev' })).id
+      const id2 = json(handleCreateTask(svc, { title: 'Done2', reporter: 'dev' })).id
+      driveToDone(svc, id1, 'dev')
+      driveToDone(svc, id2, 'dev')
+      const since = new Date(Date.now() - 60_000).toISOString()
+      const count = repo.doneCountFromTasks(since)
+      expect(count).toBe(2)
+    } finally { closeTestDb(db) }
+  })
+
+  test('auditLog=true (default): audit rows written on create/claim/update (v2)', () => {
+    const { db, svc } = makeAuditSvc(true)
+    try {
+      const id = json(handleCreateTask(svc, { title: 'AuditOn', reporter: 'dev' })).id
+      handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+      const task = getTaskRow(db, id)
+      handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version })
+      const logs = db.query('SELECT * FROM audit_log WHERE task_id = ?').all(id) as any[]
+      expect(logs.length).toBeGreaterThanOrEqual(3)
+      const actions = logs.map((l: any) => l.action)
+      expect(actions).toContain('create')
+      expect(actions).toContain('claim')
+      expect(actions).toContain('update_status')
+    } finally { closeTestDb(db) }
+  })
+})

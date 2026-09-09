@@ -34,7 +34,9 @@ describe('loadSettings defaults', () => {
       leaseTtlMin: DEFAULTS.leaseTtlMin,
       maxAttempts: DEFAULTS.maxAttempts,
       http: { ...DEFAULTS.http },
-      defaults: { ...DEFAULTS.defaults }
+      defaults: { ...DEFAULTS.defaults },
+      logging: { ...DEFAULTS.logging },
+      auditLog: DEFAULTS.auditLog
     })
   })
 
@@ -52,6 +54,8 @@ describe('loadSettings defaults', () => {
     expect(s.defaults.listLimit).toBe(50)
     expect(s.defaults.timelineLimit).toBe(50)
     expect(s.defaults.queueLimit).toBe(100)
+    expect(s.logging.level).toBe('off')
+    expect(s.auditLog).toBe(true)
   })
 })
 
