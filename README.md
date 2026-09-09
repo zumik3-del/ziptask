@@ -167,28 +167,6 @@ bunx biome check src/  # lint
 bun run src/smoke.ts   # MCP end-to-end over HTTP (ephemeral port + temp DB)
 ```
 
-## Docker
-
-```bash
-docker build -t ziptask .
-docker run -d --name ziptask \
-  -p 3000:3000 \
-  -e ZIPTASK_HOST=0.0.0.0 \
-  -e ZIPTASK_PORT=3000 \
-  -v /host/data:/var/lib/ziptask \
-  -v /host/backups:/backups \
-  ziptask
-```
-
-The container takes an online SQLite backup on a cron schedule; old archives are pruned.
-
-| Variable | Default | Description |
-|---|---|---|
-| `ZIPTASK_BACKUP_DIR` | `/backups` | Backup destination (mount a volume) |
-| `ZIPTASK_BACKUP_PREFIX` | `ziptask` | Backup file prefix |
-| `ZIPTASK_BACKUP_RETAIN` | `7` | Backups to keep (oldest pruned) |
-| `CRON_SCHEDULE` | `0 2 * * *` | Cron expression for the backup job |
-
 ## License
 
 MIT

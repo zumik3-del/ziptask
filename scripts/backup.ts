@@ -3,7 +3,7 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 const DB_PATH = process.env.ZIPTASK_DB ?? './data/ziptask.db'
-const BACKUP_DIR = process.env.ZIPTASK_BACKUP_DIR ?? '/backups'
+const BACKUP_DIR = process.env.ZIPTASK_BACKUP_DIR ?? './backups'
 const BACKUP_PREFIX = process.env.ZIPTASK_BACKUP_PREFIX ?? 'ziptask'
 const RETAIN_COUNT = parseInt(process.env.ZIPTASK_BACKUP_RETAIN ?? '7', 10)
 
