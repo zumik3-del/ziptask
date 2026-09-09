@@ -12,7 +12,7 @@
     "build:bin": "bun run scripts/build.ts",
     "test": "bun test",
     "lint": "bunx biome check src/",
-    "changelog": "node bin/changelog.cjs"
+    "changelog": "bun run scripts/changelog.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0"
