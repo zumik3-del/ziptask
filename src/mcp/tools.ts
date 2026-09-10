@@ -1,34 +1,28 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { z } from 'zod/v4'
+import taskTemplate from '../../templates/task-description.md' with { type: 'text' }
+import epicTemplate from '../../templates/epic.md' with { type: 'text' }
+import commentSuccessTemplate from '../../templates/comment-success.md' with { type: 'text' }
+import commentFailureTemplate from '../../templates/comment-failure.md' with { type: 'text' }
 import type { Task, TaskStatus, TaskPriority } from '../core/tasks'
-import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES } from '../core/tasks'
+import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT } from '../core/tasks'
 import type { TaskService } from '../core/service'
 
-const TEMPLATE_DIR = resolve(fileURLToPath(import.meta.url), '..', '..', '..', 'templates')
 const TEMPLATE_NAMES = ['task', 'epic', 'comment-success', 'comment-failure'] as const
 type TemplateName = typeof TEMPLATE_NAMES[number]
 
-// Keep API names stable; map to on-disk filenames where they differ.
-const FILE_NAME: Record<string, string> = { task: 'task-description' }
-
-function readTemplate(name: string): string {
-  const path = resolve(TEMPLATE_DIR, `${FILE_NAME[name] ?? name}.md`)
-  try {
-    return readFileSync(path, 'utf-8')
-  } catch {
-    throw new Error(`Template not found: ${name}`)
-  }
+// Keep API names stable; imports embed the markdown so the compiled binary works.
+const TEMPLATES: Record<TemplateName, string> = {
+  task: taskTemplate,
+  epic: epicTemplate,
+  'comment-success': commentSuccessTemplate,
+  'comment-failure': commentFailureTemplate
 }
 
 function handleGetTemplate(_svc: TaskService, args: { name: TemplateName }): ToolResult {
-  try {
-    return textResult(readTemplate(args.name))
-  } catch (e) {
-    return errorResult(e instanceof Error ? e.message : String(e))
-  }
+  const template = TEMPLATES[args.name]
+  if (template === undefined) return errorResult(`Template not found: ${args.name}`)
+  return textResult(template)
 }
 
 type ToolResult = {
@@ -80,7 +74,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
     assignee: z.string().optional(),
     status: z.string().optional(),
     fields: z.array(z.string()).optional(),
-    limit: z.number().optional(),
+    limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional(),
     updated_since: z.number().optional(),
     epic_id: z.number().optional(),
     ids: z.array(z.number()).optional()
@@ -101,7 +95,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleUpdateStatus(svc, args))
 
   server.tool('list_queue', 'Deps-satisfied queued tasks, pipe lines id|priority|title', {
-    limit: z.number().optional()
+    limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional()
   }, async (args) => handleListQueue(svc, args))
 
   server.tool('add_comment', 'Add comment to task. Requires non-empty agent and content; one-liner from get_template("comment-success") or "comment-failure"', {
@@ -112,7 +106,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
 
   server.tool('get_timeline', 'Merged audit_log + comments feed for a task, pipe seq|type|agent|at|text', {
     id: z.number(),
-    limit: z.number().optional()
+    limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional()
   }, async (args) => handleGetTimeline(svc, args))
 
   server.tool('get_template', 'Return a markdown template by name', {

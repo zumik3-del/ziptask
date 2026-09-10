@@ -1,5 +1,5 @@
 import type { Task, TaskStatus } from './tasks'
-import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe } from './tasks'
+import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit } from './tasks'
 
 
 export interface TaskStore {
@@ -23,13 +23,10 @@ export interface TaskStore {
   insertComment(taskId: number, agent: string, content: string, type?: 'comment' | 'resolution'): number
   auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void
   timelineEntries(taskId: number, limit: number): TimelineRow[]
-  doneCount(sinceIso: string): number
-  taskSummaries(): Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at' | 'is_epic'>>
-  auditTransitionsForTasks(): Array<{ task_id: number; new_value: string; created_at: string }>
   nonTerminalChildCount(epicId: number): number
   childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number }
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void
-  appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string, now: string): void
+  appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void
 }
 
 export type TimelineRow = { type: string; agent: string; text: string; created_at: string }
@@ -42,14 +39,27 @@ export class TaskService {
   private readonly auditLog: boolean
   private readonly reapCooldownSec: number
   private readonly autoClaimCeiling: number
+  private readonly defaultPriority: string
+  private readonly defaultReporter: string
+  private readonly listLimit: number
+  private readonly timelineLimit: number
+  private readonly queueLimit: number
   private lastReapAt = 0
 
-  constructor(private store: TaskStore, opts?: { leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number }) {
+  constructor(private store: TaskStore, opts?: {
+    leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number
+    defaultPriority?: string; defaultReporter?: string; listLimit?: number; timelineLimit?: number; queueLimit?: number
+  }) {
     this.leaseTtlMin = opts?.leaseTtlMin ?? 15
     this.maxAttempts = opts?.maxAttempts ?? 3
     this.auditLog = opts?.auditLog ?? true
     this.reapCooldownSec = opts?.reapCooldownSec ?? 60
     this.autoClaimCeiling = opts?.autoClaimCeiling ?? 10000
+    this.defaultPriority = opts?.defaultPriority ?? 'p2'
+    this.defaultReporter = opts?.defaultReporter ?? 'system'
+    this.listLimit = opts?.listLimit ?? 50
+    this.timelineLimit = opts?.timelineLimit ?? 50
+    this.queueLimit = opts?.queueLimit ?? 100
   }
 
   private _shouldReap(force = false): boolean {
@@ -75,7 +85,7 @@ export class TaskService {
     depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
   }): SvcResult<{ id: number; status: 'queued' }> {
     const deps = a.depends_on ?? []
-    const reporter = a.reporter ?? 'system'
+    const reporter = a.reporter ?? this.defaultReporter
     const now = nowIso()
 
     // D5: epic cannot coexist with epic_id or depends_on
@@ -111,7 +121,7 @@ export class TaskService {
     const id = this.store.insertTask({
       title: a.title,
       description: a.description ?? null,
-      priority: a.priority ?? 'p2',
+      priority: a.priority ?? this.defaultPriority,
       assignee: a.assignee ?? null,
       reporter,
       depends_on: JSON.stringify(deps),
@@ -144,7 +154,7 @@ export class TaskService {
     const depStatuses = this.store.statusesOf(deps)
     const blockedBy = deps.filter(d => {
       const s = depStatuses.get(d)
-      return s && !TERMINAL_STATUSES.includes(s)
+      return s === undefined || !TERMINAL_STATUSES.includes(s)
     })
     // D3: derived roll-up for epics
     if (task.is_epic === 1) {
@@ -170,7 +180,7 @@ export class TaskService {
       status: a.status,
       updatedSinceIso: a.updated_since !== undefined ? new Date(a.updated_since).toISOString() : undefined,
       epicId: a.epic_id,
-      limit: a.limit ?? 50
+      limit: clampLimit(a.limit, this.listLimit)
     })
     return { tasks: rows, total }
   }
@@ -256,7 +266,7 @@ export class TaskService {
       if (epicTask) {
         this.store.appendEpicAuditMirror(task.epic_id, a.agent,
           a.status === 'done' ? 'subtask_done' : 'subtask_failed',
-          `#${task.id} ${sanitizePipe(task.title)}`, now)
+          `#${task.id} ${sanitizePipe(task.title)}`)
       }
     }
 
@@ -265,7 +275,7 @@ export class TaskService {
 
   listQueue(a: { limit?: number }): Task[] {
     if (this._shouldReap()) this._doReap()
-    const limit = Math.floor(a.limit ?? 100)
+    const limit = clampLimit(a.limit, this.queueLimit)
     const rows = this.store.queuedCandidates(limit)
     const allDeps = new Set<number>()
     for (const row of rows) {
@@ -295,7 +305,7 @@ export class TaskService {
     if (this._shouldReap()) this._doReap()
     const task = this.store.getTaskRow(id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
-    const limitN = limit !== undefined ? Math.floor(limit) : 50
+    const limitN = clampLimit(limit, this.timelineLimit)
     const rows = this.store.timelineEntries(id, limitN)
     return { ok: true, data: rows }
   }

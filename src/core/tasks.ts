@@ -66,3 +66,12 @@ export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
 export function nowIso(): string {
   return new Date().toISOString()
 }
+
+export const MAX_RESULT_LIMIT = 1000
+
+export function clampLimit(value: number | undefined, fallback: number, max = MAX_RESULT_LIMIT): number {
+  if (value === undefined) return fallback
+  const n = Math.floor(value)
+  if (!Number.isFinite(n) || n <= 0) return fallback
+  return Math.min(n, max)
+}

@@ -7,8 +7,7 @@ import { createMcpServer } from './mcp/server'
 import { startHttp } from './server'
 import { loadSettings } from './config'
 import { createLogger } from './logger'
-
-const VERSION = (globalThis as any).__ZIPTASK_VERSION__ ?? '0.0.0'
+import { VERSION } from './version'
 
 const settings = loadSettings()
 const logger = createLogger('app', settings.logging.level)
@@ -26,7 +25,12 @@ try {
     maxAttempts: settings.maxAttempts,
     auditLog: settings.auditLog,
     reapCooldownSec: settings.reapCooldownSec,
-    autoClaimCeiling: settings.autoClaimCeiling
+    autoClaimCeiling: settings.autoClaimCeiling,
+    defaultPriority: settings.defaults.priority,
+    defaultReporter: settings.defaults.reporter,
+    listLimit: settings.defaults.listLimit,
+    timelineLimit: settings.defaults.timelineLimit,
+    queueLimit: settings.defaults.queueLimit
   })
 
   function startStdio() {

@@ -115,6 +115,6 @@ export function startHttp(opts: StartHttpOptions) {
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
 
-  svcLogger.info(`MCP HTTP server on http://${host}:${port}`)
+  svcLogger.info(`MCP HTTP server on http://${host}:${server.port}`)
   return server
 }
