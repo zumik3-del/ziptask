@@ -61,7 +61,7 @@ bun run start:stdio    # run over stdio
 
 ```bash
 bun run build:bin        # produces dist/ziptask
-dist/ziptask --version   # prints the package.json version
+dist/ziptask --version   # prints ziptask and the package.json version
 dist/ziptask --stdio     # runs as stdio MCP server
 ```
 
@@ -83,6 +83,7 @@ bun test               # unit tests (per-test temp DBs)
 bunx tsc --noEmit      # type check
 bunx biome check src/  # lint
 bun run src/smoke.ts   # MCP end-to-end over HTTP (ephemeral port + temp DB)
+bun run changelog      # rebuild CHANGELOG.md from git tags (maintainers; clean tree required, then commits and pushes it)
 ```
 
 ## Documentation
