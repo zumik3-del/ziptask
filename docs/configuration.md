@@ -20,7 +20,7 @@ An optional JSON file; `settings.example.json` shows the full shape. Every key i
 | `ZIPTASK_HTTP_MAX_SESSIONS` | `100` | Max concurrent HTTP MCP sessions |
 | `ZIPTASK_HTTP_SESSION_TTL_MS` | `3600000` | HTTP MCP session TTL in ms |
 | `ZIPTASK_LOGGING_LEVEL` | `off` | Structured logger level — `off`, `error`, `info`, `debug`. Writes to stderr only; never stdout, so stdio MCP transport is safe. `--version` intentionally writes to stdout. |
-| `ZIPTASK_AUDIT_LOG` | `true` | Toggle audit log writes. When `false`, no new `audit_log` rows are created; `get_timeline` shows only comment rows for tasks with no historical audit data. Metrics CLI `status_time` degrades but `done_count` stays accurate (derived from `tasks`, not `audit_log`). |
+| `ZIPTASK_AUDIT_LOG` | `true` | Toggle audit log writes. When `false`, no new `audit_log` rows are created; `get_timeline` shows only comment rows for tasks with no historical audit data. Metrics CLI `status_time` degrades but `done_count`/`canceled_count` stay accurate (both derived from `tasks`, not `audit_log`). |
 | `ZIPTASK_DEFAULTS_PRIORITY` | `p2` | Default `priority` when `create_task` omits it |
 | `ZIPTASK_DEFAULTS_REPORTER` | `system` | Default `reporter` when `create_task` omits it |
 | `ZIPTASK_DEFAULTS_LIST_LIMIT` | `50` | Fallback `limit` for `list_tasks` JSON mode |

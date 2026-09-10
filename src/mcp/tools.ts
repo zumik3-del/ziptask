@@ -80,7 +80,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
     ids: z.array(z.number()).optional()
   }, async (args) => handleListTasks(svc, args))
 
-  server.tool('claim_task', 'Claim queued task (auto-picks best, or task_id). include: extra fields in response', {
+  server.tool('claim_task', 'Claim a task (auto-picks the best queued, or task_id — queued/blocked). include: extra fields in response', {
     agent: z.string(),
     task_id: z.number().optional(),
     include: z.array(z.string()).optional()

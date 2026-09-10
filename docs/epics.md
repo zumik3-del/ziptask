@@ -11,7 +11,7 @@ or attach the first sub-task to promote it automatically:
 ```
 create_task {title: 'Sub-work', reporter: 'orchestrator', epic_id: <epic-id>}
 ```
-The target is auto-promoted to `is_epic=1` (audit row `promote_epic`).
+The target is auto-promoted to `is_epic=1` (audit row `subtask_add`).
 
 ## Attaching sub-tasks
 
@@ -57,5 +57,5 @@ The target epic's roll-up is derived on read, so no counter recalculation is nee
 
 - `epic_id` is immutable after creation (no re-parent/detach tool) — use the SQL recipe above.
 - `blocked`/`failed` on an epic are manual flags only; no cascade to children.
-- Metrics: epics are excluded from all metrics calculations — an epic sitting in one status for days would distort `bottleneck`. Implementation lives in `src/core/metrics.ts` (`computeMetrics`); issue #25 is resolved (deferred MCP tool moved to standalone CLI).
-- Metrics CLI: `bun run scripts/metrics.ts --period <hours|all>` (default 24); `--db <path>` or `ZIPTASK_DB` env override. Pipe-format output: `done_count|N`, `status_time|status:min`, `bottleneck|status:min`. Empty DB → `done_count|0` with no `status_time`/`bottleneck`. Invalid period (e.g. `0`) → stderr error, exit 1. When `ZIPTASK_AUDIT_LOG=false`, timeline shows only comment rows and `status_time` degrades but `done_count` stays accurate.
+- Metrics: epics are excluded from all metrics calculations — an epic sitting in one status for days would distort `bottleneck`. Implementation lives in `src/core/metrics.ts` (`computeMetrics`); issue #26 is resolved (deferred MCP tool moved to standalone CLI).
+- Metrics CLI: `bun run scripts/metrics.ts --period <hours|all>` (default 24); `--db <path>` or `ZIPTASK_DB` env override. Pipe-format output always starts with `done_count|N` and `canceled_count|N`, then `status_time|status:min` and `bottleneck|status:min`. Empty DB → `done_count|0` and `canceled_count|0`, with no `status_time`/`bottleneck`. Invalid period (e.g. `0`) → stderr error, exit 1. When `ZIPTASK_AUDIT_LOG=false`, timeline shows only comment rows and `status_time` degrades but `done_count`/`canceled_count` stay accurate (both derived from `tasks`).
