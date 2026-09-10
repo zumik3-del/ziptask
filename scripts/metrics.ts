@@ -26,7 +26,7 @@ const db = openDatabase(dbPath)
 try {
   const repo = new TaskRepo(db)
   const m = computeMetrics(repo, period)
-  const lines: string[] = [`done_count|${m.doneCount}`]
+  const lines: string[] = [`done_count|${m.doneCount}`, `canceled_count|${m.canceledCount}`]
   for (const [status, mins] of Object.entries(m.statusTime).sort()) {
     lines.push(`status_time|${status}:${Math.round(mins)}`)
   }

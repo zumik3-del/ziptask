@@ -2,12 +2,14 @@ import { nowIso } from './tasks'
 
 export type MetricsResult = {
   doneCount: number
+  canceledCount: number
   statusTime: Record<string, number>
   bottleneck: { status: string; minutes: number } | null
 }
 
 export interface MetricsStore {
   doneCount(sinceIso: string): number
+  canceledCount(sinceIso: string): number
   statusDurations(sinceIso: string, nowIsoStr: string): Array<{ status: string; minutes: number }>
 }
 
@@ -17,6 +19,7 @@ export function computeMetrics(store: MetricsStore, period?: number | 'all'): Me
   const since = periodHours === 0 ? '0001-01-01T00:00:00.000Z' : new Date(Date.now() - periodHours * 3600_000).toISOString()
 
   const doneCount = store.doneCount(since)
+  const canceledCount = store.canceledCount(since)
 
   const statusTime: Record<string, number> = {}
   for (const { status, minutes } of store.statusDurations(since, now)) {
@@ -30,5 +33,5 @@ export function computeMetrics(store: MetricsStore, period?: number | 'all'): Me
     }
   }
 
-  return { doneCount, statusTime, bottleneck }
+  return { doneCount, canceledCount, statusTime, bottleneck }
 }

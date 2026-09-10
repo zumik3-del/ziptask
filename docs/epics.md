@@ -24,10 +24,10 @@ Nested membership is rejected (epic cannot be a sub-task; sub-task cannot be an 
 
 ## Roll-up and closure
 
-- `get_task fields:["subtasks"]` on the epic returns `{total, open, done, failed}` (open = queued+in_progress+review+blocked).
+- `get_task fields:["subtasks"]` on the epic returns `{total, open, done, failed, canceled}` (open = queued+in_progress+review+blocked; `canceled` counts withdrawn children, which are terminal).
 - `list_tasks epic_id:<epic-id>` returns only children.
-- The epic timeline (`get_timeline`) mirrors terminal sub-task events: `subtask_add`, `subtask_done`, `subtask_failed`.
-- `update_status(epic→done)` is guarded: rejected with `CHILDREN: N sub-tasks not terminal` while any child is non-terminal.
+- The epic timeline (`get_timeline`) mirrors terminal sub-task events: `subtask_add`, `subtask_done`, `subtask_failed` (canceled children emit no mirror row).
+- `update_status(epic→done)` is guarded: rejected with `CHILDREN: N sub-tasks not terminal` while any child is non-terminal (canceled children are terminal and do not block closure).
 
 ## Constraints
 

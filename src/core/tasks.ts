@@ -1,4 +1,4 @@
-export type TaskStatus = 'queued' | 'in_progress' | 'review' | 'done' | 'failed' | 'blocked'
+export type TaskStatus = 'queued' | 'in_progress' | 'review' | 'done' | 'failed' | 'blocked' | 'canceled'
 export type TaskPriority = 'p0' | 'p1' | 'p2' | 'p3'
 
 export interface Task {
@@ -28,10 +28,11 @@ export const STATUS_CODES: Record<TaskStatus | 'not_found', number> = {
   review: 3,
   done: 4,
   failed: 5,
-  blocked: 6
+  blocked: 6,
+  canceled: 7
 }
 
-export const TASK_STATUSES = ['queued', 'in_progress', 'review', 'done', 'failed', 'blocked'] as const
+export const TASK_STATUSES = ['queued', 'in_progress', 'review', 'done', 'failed', 'blocked', 'canceled'] as const
 export const TASK_PRIORITIES = ['p0', 'p1', 'p2', 'p3'] as const
 
 export function statusToCode(status: TaskStatus | 'not_found'): number {
@@ -48,15 +49,16 @@ export function pipeJoin(...fields: Array<string | number>): string {
 
 export type CommentType = 'comment' | 'resolution'
 
-export const TERMINAL_STATUSES: TaskStatus[] = ['done', 'failed']
+export const TERMINAL_STATUSES: TaskStatus[] = ['done', 'failed', 'canceled']
 
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
-  queued: ['in_progress', 'blocked'],
-  in_progress: ['review', 'failed', 'blocked'],
-  review: ['done', 'in_progress', 'failed'],
+  queued: ['in_progress', 'blocked', 'canceled'],
+  in_progress: ['review', 'failed', 'blocked', 'canceled'],
+  review: ['done', 'in_progress', 'failed', 'canceled'],
   done: [],
   failed: [],
-  blocked: ['queued', 'in_progress', 'review']
+  blocked: ['queued', 'in_progress', 'review', 'canceled'],
+  canceled: []
 }
 
 export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {

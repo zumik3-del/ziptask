@@ -24,7 +24,7 @@ export interface TaskStore {
   auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void
   timelineEntries(taskId: number, limit: number): TimelineRow[]
   nonTerminalChildCount(epicId: number): number
-  childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number }
+  childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number; canceled: number }
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void
   appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void
 }
@@ -146,7 +146,7 @@ export class TaskService {
     return { ok: true, data: { id, status: 'queued' } }
   }
 
-  getTaskView(id: number): SvcResult<{ task: Task; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number } }> {
+  getTaskView(id: number): SvcResult<{ task: Task; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number; canceled: number } }> {
     if (this._shouldReap()) this._doReap()
     const task = this.store.getTaskRow(id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
@@ -261,11 +261,11 @@ export class TaskService {
     }
 
     // D6: mirror subtask_done/subtask_failed onto the parent epic
-    if (task.epic_id !== null && TERMINAL_STATUSES.includes(a.status) && this.auditLog) {
+    const subtaskMirror = a.status === 'done' ? 'subtask_done' : a.status === 'failed' ? 'subtask_failed' : null
+    if (task.epic_id !== null && subtaskMirror !== null && this.auditLog) {
       const epicTask = this.store.getTaskRow(task.epic_id)
       if (epicTask) {
-        this.store.appendEpicAuditMirror(task.epic_id, a.agent,
-          a.status === 'done' ? 'subtask_done' : 'subtask_failed',
+        this.store.appendEpicAuditMirror(task.epic_id, a.agent, subtaskMirror,
           `#${task.id} ${sanitizePipe(task.title)}`)
       }
     }

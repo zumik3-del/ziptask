@@ -1,13 +1,13 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { isValidTransition } from './core/tasks'
+import { isValidTransition, STATUS_CODES, TASK_STATUSES } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus
 } from './mcp/tools'
 import {
-  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text,
+  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, driveToDone,
   type CreateTaskRowOpts
 } from './test-context'
 
@@ -345,6 +345,75 @@ describe('terminal status', () => {
   })
   test('failed is terminal', () => {
     expect(isValidTransition('failed', 'queued')).toBe(false)
+  })
+  test('canceled is in TASK_STATUSES and STATUS_CODES maps to 7', () => {
+    expect(TASK_STATUSES).toContain('canceled')
+    expect(STATUS_CODES.canceled).toBe(7)
+  })
+  test('canceled is terminal: no out-transitions for any status', () => {
+    for (const to of TASK_STATUSES) {
+      expect(isValidTransition('canceled', to)).toBe(false)
+    }
+  })
+})
+
+describe('canceled transitions (#112)', () => {
+  const cancel = (id: number, version: number) =>
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'canceled', version })
+
+  test('queued → canceled accepted, sets completed_at', () => {
+    const id = json(handleCreateTask(svc, { title: 'Q', reporter: 'dev' })).id
+    expect(json(cancel(id, 1)).status).toBe('canceled')
+    const row = getTaskRow(db, id)
+    expect(row.status).toBe('canceled')
+    expect(row.completed_at).not.toBeNull()
+  })
+
+  test('in_progress → canceled accepted and clears lease_expires_at', () => {
+    const id = json(handleCreateTask(svc, { title: 'IP', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const claimed = getTaskRow(db, id)
+    expect(claimed.lease_expires_at).not.toBeNull()
+    expect(json(cancel(id, claimed.version)).status).toBe('canceled')
+    const row = getTaskRow(db, id)
+    expect(row.status).toBe('canceled')
+    expect(row.lease_expires_at).toBeNull()
+    expect(row.completed_at).not.toBeNull()
+  })
+
+  test('review → canceled accepted', () => {
+    const id = json(handleCreateTask(svc, { title: 'R', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const v1 = getTaskRow(db, id).version
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: v1 })
+    const v2 = getTaskRow(db, id).version
+    expect(json(cancel(id, v2)).status).toBe('canceled')
+  })
+
+  test('blocked → canceled accepted', () => {
+    const id = json(handleCreateTask(svc, { title: 'B', reporter: 'dev' })).id
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: 1 })
+    expect(json(cancel(id, 2)).status).toBe('canceled')
+  })
+
+  test('done → canceled rejected with INVALID', () => {
+    const id = json(handleCreateTask(svc, { title: 'D', reporter: 'dev' })).id
+    driveToDone(svc, id, 'dev')
+    const v = json(handleGetTask(svc, { id, fields: ['version'] })).version
+    const res = cancel(id, v)
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: done → canceled')
+  })
+
+  test('failed → canceled rejected with INVALID', () => {
+    const id = json(handleCreateTask(svc, { title: 'F', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const v1 = getTaskRow(db, id).version
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'failed', version: v1 })
+    const v2 = getTaskRow(db, id).version
+    const res = cancel(id, v2)
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: failed → canceled')
   })
 })
 

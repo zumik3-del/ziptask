@@ -58,7 +58,7 @@ describe('pipe formats (v2)', () => {
   test('STATUS_CODES legend', async () => {
     const { STATUS_CODES } = await import('./core/tasks')
     expect(STATUS_CODES).toEqual({
-      not_found: 0, queued: 1, in_progress: 2, review: 3, done: 4, failed: 5, blocked: 6
+      not_found: 0, queued: 1, in_progress: 2, review: 3, done: 4, failed: 5, blocked: 6, canceled: 7
     })
   })
 })

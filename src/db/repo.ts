@@ -109,8 +109,11 @@ export class TaskRepo {
 
   transitionStatus(id: number, expectedVersion: number, status: TaskStatus, now: string, completedAt: string | null): void {
     this.db.run(
-      'UPDATE tasks SET status = ?, version = version + 1, updated_at = ?, completed_at = COALESCE(?, completed_at) WHERE id = ? AND version = ?',
-      [status, now, completedAt, id, expectedVersion]
+      `UPDATE tasks SET status = ?, version = version + 1, updated_at = ?,
+         completed_at = COALESCE(?, completed_at),
+         lease_expires_at = CASE WHEN ? = 'canceled' THEN NULL ELSE lease_expires_at END
+       WHERE id = ? AND version = ?`,
+      [status, now, completedAt, status, id, expectedVersion]
     )
   }
 
@@ -162,6 +165,13 @@ export class TaskRepo {
     return row.cnt
   }
 
+  canceledCount(sinceIso: string): number {
+    const row = this.db.query(
+      "SELECT COUNT(*) as cnt FROM tasks WHERE status = 'canceled' AND is_epic = 0 AND completed_at >= ?"
+    ).get(sinceIso) as { cnt: number }
+    return row.cnt
+  }
+
   statusDurations(sinceIso: string, nowIsoStr: string): Array<{ status: string; minutes: number }> {
     return this.db.query(`
       WITH events AS (
@@ -193,21 +203,22 @@ export class TaskRepo {
 
   nonTerminalChildCount(epicId: number): number {
     const row = this.db.query(
-      "SELECT COUNT(*) as cnt FROM tasks WHERE epic_id = ? AND status NOT IN ('done', 'failed')"
+      "SELECT COUNT(*) as cnt FROM tasks WHERE epic_id = ? AND status NOT IN ('done', 'failed', 'canceled')"
     ).get(epicId) as { cnt: number }
     return row.cnt
   }
 
-  childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number } {
+  childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number; canceled: number } {
     const rows = this.db.query(
       `SELECT
          COUNT(*) as total,
-         SUM(CASE WHEN status NOT IN ('done', 'failed') THEN 1 ELSE 0 END) as open,
+         SUM(CASE WHEN status NOT IN ('done', 'failed', 'canceled') THEN 1 ELSE 0 END) as open,
          SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done,
-         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+         SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END) as canceled
        FROM tasks WHERE epic_id = ?`
-    ).get(epicId) as { total: number; open: number; done: number; failed: number } | null
-    return rows ?? { total: 0, open: 0, done: 0, failed: 0 }
+    ).get(epicId) as { total: number; open: number; done: number; failed: number; canceled: number } | null
+    return rows ?? { total: 0, open: 0, done: 0, failed: 0, canceled: 0 }
   }
 
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void {
