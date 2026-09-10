@@ -19,5 +19,11 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bunx biome check src/
       - run: bunx tsc --noEmit
-      - run: bun test
+      - run: bun test --coverage --coverage-reporter text --coverage-reporter lcov
         timeout-minutes: 5
+      - name: Upload coverage to Coveralls
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.COVERALLS_REPO_TOKEN }}
+          file: ./coverage/lcov.info

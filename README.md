@@ -1,5 +1,7 @@
 # ziptask
 
+[![Coverage Status](https://coveralls.io/repos/github/zumik3-del/ziptask/badge.svg?branch=main)](https://coveralls.io/github/zumik3-del/ziptask?branch=main)
+
 MCP task tracker for AI agents. A pure state layer — statuses, dependencies, leases, versioning — over SQLite, served to agents over MCP.
 
 ## Install
