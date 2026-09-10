@@ -24,7 +24,9 @@ try {
   const svc = new TaskService(new TaskRepo(db), {
     leaseTtlMin: settings.leaseTtlMin,
     maxAttempts: settings.maxAttempts,
-    auditLog: settings.auditLog
+    auditLog: settings.auditLog,
+    reapCooldownSec: settings.reapCooldownSec,
+    autoClaimCeiling: settings.autoClaimCeiling
   })
 
   function startStdio() {

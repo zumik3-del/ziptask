@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { isValidTransition, nowIso } from './core/tasks'
-import { checkCycles, depsSatisfied } from './core/service'
+import { checkCycles, depsSatisfied, parseDeps, type TaskStore } from './core/service'
 import { openDatabase } from './db/db'
 import { MIGRATIONS } from './db/migrations'
 import { TaskRepo } from './db/repo'
@@ -1210,5 +1210,276 @@ describe('audit_log toggle', () => {
       expect(actions).toContain('claim')
       expect(actions).toContain('update_status')
     } finally { closeTestDb(db) }
+  })
+})
+
+describe('reap cooldown (#104)', () => {
+  function fakeStore(reapCb?: () => void): TaskStore {
+    return {
+      getTaskRow: () => null,
+      insertTask: () => 1,
+      deleteTask: () => {},
+      listTasks: () => ({ rows: [], total: 0 }),
+      queuedCandidates: () => [],
+      depsOf: () => null,
+      statusOf: () => null,
+      statusesOf: () => new Map(),
+      batchTasks: () => new Map(),
+      markClaimed: () => 0,
+      transitionStatus: () => {},
+      expiredLeases: () => { reapCb?.(); return [] },
+      reapSettle: () => 0,
+      insertComment: () => 1,
+      auditAppend: () => {},
+      timelineEntries: () => [],
+      doneCount: () => 0,
+      taskSummaries: () => [],
+      auditTransitionsForTasks: () => [],
+      nonTerminalChildCount: () => 0,
+      childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0 }),
+      promoteEpicWithMirror: () => {},
+      appendEpicAuditMirror: () => {}
+    }
+  }
+
+  test('first read call reaps (lastReapAt=0), second read within cooldown skips', () => {
+    let reapCallCount = 0
+    const svc = new TaskService(fakeStore(() => { reapCallCount++ }), { reapCooldownSec: 3600 })
+
+    svc.getTaskView(1)
+    expect(reapCallCount).toBe(1)
+
+    // Second read within cooldown window → skip
+    svc.listTasks({})
+    expect(reapCallCount).toBe(1)
+
+    svc.addComment({ id: 1, agent: 'a', content: 'x' })
+    expect(reapCallCount).toBe(1)
+
+    svc.getTimeline(1)
+    expect(reapCallCount).toBe(1)
+
+    // Write path always forces reap
+    svc.claimTask({ agent: 'test' })
+    expect(reapCallCount).toBe(2)
+
+    svc.updateStatus({ id: 1, agent: 'test', status: 'review', version: 1 })
+    expect(reapCallCount).toBe(3)
+
+    // Public reap always forces
+    svc.reapExpiredLeases()
+    expect(reapCallCount).toBe(4)
+  })
+
+  test('reapCooldownSec=0 reaps on every call (no caching)', () => {
+    let reapCallCount = 0
+    const svc = new TaskService(fakeStore(() => { reapCallCount++ }), { reapCooldownSec: 0 })
+
+    svc.getTaskView(1)
+    expect(reapCallCount).toBe(1)
+    svc.getTaskView(2)
+    expect(reapCallCount).toBe(2)
+    svc.claimTask({ agent: 'test' })
+    expect(reapCallCount).toBe(3)
+  })
+
+  test('public reapExpiredLeases always forces regardless of cooldown', () => {
+    let reapCallCount = 0
+    const svc = new TaskService(fakeStore(() => { reapCallCount++ }), { reapCooldownSec: 3600 })
+
+    svc.getTaskView(1)
+    expect(reapCallCount).toBe(1)
+    svc.reapExpiredLeases()
+    expect(reapCallCount).toBe(2)
+    svc.reapExpiredLeases()
+    expect(reapCallCount).toBe(3)
+  })
+})
+
+describe('auto-claim ceiling (#105)', () => {
+  test('low ceiling stops scan early, returns EMPTY when free task is beyond ceiling', () => {
+    const db2 = createTestDb()
+    const repo2 = new TaskRepo(db2)
+    const svc2 = new TaskService(repo2, { leaseTtlMin: 15, autoClaimCeiling: 100 })
+
+    for (let i = 0; i < 150; i++) {
+      repo2.insertTask({
+        title: `Blocked ${i}`,
+        description: null,
+        priority: 'p2',
+        assignee: null,
+        reporter: 'dev',
+        depends_on: JSON.stringify([999]),
+        now: nowIso()
+      })
+    }
+    const _freeId = repo2.insertTask({
+      title: 'Free',
+      description: null,
+      priority: 'p2',
+      assignee: null,
+      reporter: 'dev',
+      depends_on: '[]',
+      now: nowIso()
+    })
+
+    const res = handleClaimTask(svc2, { agent: 'agent-1' })
+    expect(text(res)).toContain('EMPTY')
+
+    closeTestDb(db2)
+  })
+
+  test('default ceiling finds free task beyond 100 blocked tasks', () => {
+    const db2 = createTestDb()
+    const repo2 = new TaskRepo(db2)
+    const svc2 = new TaskService(repo2, { leaseTtlMin: 15 })
+
+    for (let i = 0; i < 150; i++) {
+      repo2.insertTask({
+        title: `Blocked ${i}`,
+        description: null,
+        priority: 'p2',
+        assignee: null,
+        reporter: 'dev',
+        depends_on: JSON.stringify([999]),
+        now: nowIso()
+      })
+    }
+    const _freeId = repo2.insertTask({
+      title: 'Free',
+      description: null,
+      priority: 'p2',
+      assignee: null,
+      reporter: 'dev',
+      depends_on: '[]',
+      now: nowIso()
+    })
+
+    const res = handleClaimTask(svc2, { agent: 'agent-1' })
+    expect(json(res).id).toBe(_freeId)
+
+    closeTestDb(db2)
+  })
+
+  test('parse-once cache: auto-claim with many dep-blocked tasks finds free one', () => {
+    // Regression: parse-once refactor must not change behavior for the common case
+    for (let i = 0; i < 10; i++) {
+      createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
+    }
+    const freeId = createTaskRow({ title: 'Free', reporter: 'dev' })
+    const res = handleClaimTask(svc, { agent: 'agent-1' })
+    expect(json(res).id).toBe(freeId)
+  })
+})
+
+describe('epic-dep rejection message (#106)', () => {
+  test('error message includes the offending epic id in #N format', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    const res = handleCreateTask(svc, { title: 'Bad', reporter: 'dev', depends_on: [epicId] })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain(`#${epicId}`)
+    expect(text(res)).toContain('dependencies on epic')
+  })
+
+  test('error message is stable across multiple epic deps', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    const res = handleCreateTask(svc, { title: 'Bad', reporter: 'dev', depends_on: [epicId, 999] })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain(`#${epicId}`)
+    // Unknown dep 999 is ignored (no row → not an epic)
+  })
+})
+
+describe('corrupt depends_on tolerance (#107)', () => {
+  test('parseDeps returns [] for various corrupt inputs', () => {
+    expect(parseDeps('not json')).toEqual([])
+    expect(parseDeps('{invalid}')).toEqual([])
+    expect(parseDeps('')).toEqual([])
+    expect(parseDeps('null')).toEqual([])
+    expect(parseDeps('42')).toEqual([])
+    expect(parseDeps('"string"')).toEqual([])
+  })
+
+  test('parseDeps preserves valid behavior', () => {
+    expect(parseDeps('[]')).toEqual([])
+    expect(parseDeps('[1, 2, 3]')).toEqual([1, 2, 3])
+    expect(parseDeps('[1, "two", 3]')).toEqual([1, 3])
+  })
+
+  test('getTaskView survives corrupt depends_on', () => {
+    const id = createTaskRow({ title: 'Corrupt', reporter: 'dev' })
+    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", ['{bad json}', id])
+    const res = handleGetTask(svc, { id })
+    expect(json(res).id).toBe(id)
+    expect(json(res).status).toBe('queued')
+    expect(json(res).blocked_by).toEqual([])
+  })
+
+  test('claimTask auto-claim survives corrupt depends_on (treated as no deps)', () => {
+    const corruptId = createTaskRow({ title: 'Corrupt', reporter: 'dev' })
+    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", ['{bad json}', corruptId])
+    const res = handleClaimTask(svc, { agent: 'agent-1' })
+    expect(json(res).id).toBe(corruptId)
+  })
+
+  test('listQueue survives corrupt depends_on', () => {
+    const corruptId = createTaskRow({ title: 'Corrupt', reporter: 'dev' })
+    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", ['{bad json}', corruptId])
+    const out = text(handleListQueue(svc, {}))
+    expect(out).toContain(`${corruptId}|`)
+  })
+
+  test('checkCycles survives corrupt depends_on in graph traversal', () => {
+    const id1 = createTaskRow({ title: 'A', reporter: 'dev' })
+    const id2 = createTaskRow({ title: 'B', reporter: 'dev' })
+    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", ['{bad json}', id2])
+    expect(() => checkCycles((id) => repo.depsOf(id), id1, [id2])).not.toThrow()
+  })
+
+  test('depsSatisfied survives corrupt depends_on input', () => {
+    // parseDeps is the gateway; if it returns [], depsSatisfied gets []
+    expect(depsSatisfied((id) => repo.statusOf(id), [])).toBe(true)
+  })
+})
+
+describe('atomic epic promotion (#108)', () => {
+  test('promoteEpicWithMirror exists on TaskStore', () => {
+    expect(typeof (svc as any).store.promoteEpicWithMirror).toBe('function')
+  })
+
+  test('subtask attach atomically promotes epic and adds mirror', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Pre-Epic', reporter: 'dev' })).id
+    const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
+
+    const epic = getTaskRow(db, epicId)
+    expect(epic.is_epic).toBe(1)
+
+    const mirrors = db.query(
+      "SELECT action, new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
+    ).all(epicId) as any[]
+    expect(mirrors.length).toBe(1)
+    expect(mirrors[0].new_value).toContain(`#${subId}`)
+    expect(mirrors[0].new_value).toContain('Sub')
+  })
+
+  test('standalone promoteEpic still exists for other paths', () => {
+    expect(typeof (svc as any).store.promoteEpic).toBe('function')
+  })
+
+  test('standalone appendEpicAuditMirror still exists', () => {
+    expect(typeof (svc as any).store.appendEpicAuditMirror).toBe('function')
+  })
+
+  test('direct promoteEpicWithMirror call is atomic (both or neither)', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'DirectEpic', reporter: 'dev' })).id
+    ;(svc as any).store.promoteEpicWithMirror(
+      epicId, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true
+    )
+    const epic = getTaskRow(db, epicId)
+    expect(epic.is_epic).toBe(1)
+    const mirrors = db.query(
+      "SELECT action FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
+    ).all(epicId) as any[]
+    expect(mirrors.length).toBe(1)
   })
 })

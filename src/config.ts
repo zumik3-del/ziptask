@@ -8,6 +8,8 @@ export const DEFAULTS = {
   port: 0,
   leaseTtlMin: 15,
   maxAttempts: 3,
+  reapCooldownSec: 60,
+  autoClaimCeiling: 10000,
   http: { maxSessions: 100, sessionTtlMs: 3_600_000 },
   defaults: { priority: 'p2', reporter: 'system', listLimit: 50, timelineLimit: 50, queueLimit: 100 },
   logging: { level: 'off' as const },
@@ -20,6 +22,8 @@ const SettingsSchema = z.object({
   port: z.number().int().nonnegative().optional(),
   leaseTtlMin: z.number().int().positive().optional(),
   maxAttempts: z.number().int().positive().optional(),
+  reapCooldownSec: z.number().int().positive().optional(),
+  autoClaimCeiling: z.number().int().positive().optional(),
   http: z.object({
     maxSessions: z.number().int().positive().optional(),
     sessionTtlMs: z.number().int().positive().optional()
@@ -43,6 +47,8 @@ export type Settings = z.infer<typeof SettingsSchema> & {
   port: number
   leaseTtlMin: number
   maxAttempts: number
+  reapCooldownSec: number
+  autoClaimCeiling: number
   http: { maxSessions: number; sessionTtlMs: number }
   defaults: { priority: string; reporter: string; listLimit: number; timelineLimit: number; queueLimit: number }
   logging: { level: string }
@@ -63,6 +69,8 @@ export const ENV_MAPPINGS: EnvMapping[] = [
   { env: 'ZIPTASK_PORT', path: 'port', type: 'int' },
   { env: 'ZIPTASK_LEASE_TTL_MIN', path: 'leaseTtlMin', type: 'int' },
   { env: 'ZIPTASK_MAX_ATTEMPTS', path: 'maxAttempts', type: 'int' },
+  { env: 'ZIPTASK_REAP_COOLDOWN_SEC', path: 'reapCooldownSec', type: 'int' },
+  { env: 'ZIPTASK_AUTO_CLAIM_CEILING', path: 'autoClaimCeiling', type: 'int' },
   { env: 'ZIPTASK_HTTP_MAX_SESSIONS', path: 'http.maxSessions', type: 'int' },
   { env: 'ZIPTASK_HTTP_SESSION_TTL_MS', path: 'http.sessionTtlMs', type: 'int' },
   { env: 'ZIPTASK_DEFAULTS_PRIORITY', path: 'defaults.priority', type: 'string' },

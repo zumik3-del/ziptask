@@ -4,6 +4,8 @@
   "port": 0,
   "leaseTtlMin": 15,
   "maxAttempts": 3,
+  "reapCooldownSec": 60,
+  "autoClaimCeiling": 10000,
   "http": {
     "maxSessions": 100,
     "sessionTtlMs": 3600000

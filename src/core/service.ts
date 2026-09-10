@@ -28,7 +28,7 @@ export interface TaskStore {
   auditTransitionsForTasks(): Array<{ task_id: number; new_value: string; created_at: string }>
   nonTerminalChildCount(epicId: number): number
   childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number }
-  promoteEpic(id: number, now: string): void
+  promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void
   appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string, now: string): void
 }
 
@@ -40,11 +40,34 @@ export class TaskService {
   private readonly leaseTtlMin: number
   private readonly maxAttempts: number
   private readonly auditLog: boolean
+  private readonly reapCooldownSec: number
+  private readonly autoClaimCeiling: number
+  private lastReapAt = 0
 
-  constructor(private store: TaskStore, opts?: { leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean }) {
+  constructor(private store: TaskStore, opts?: { leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number }) {
     this.leaseTtlMin = opts?.leaseTtlMin ?? 15
     this.maxAttempts = opts?.maxAttempts ?? 3
     this.auditLog = opts?.auditLog ?? true
+    this.reapCooldownSec = opts?.reapCooldownSec ?? 60
+    this.autoClaimCeiling = opts?.autoClaimCeiling ?? 10000
+  }
+
+  private _shouldReap(force = false): boolean {
+    if (force) return true
+    const nowMs = Date.now()
+    return nowMs - this.lastReapAt >= this.reapCooldownSec * 1000
+  }
+
+  private _doReap(): void {
+    const now = nowIso()
+    const expired = this.store.expiredLeases(now)
+    for (const task of expired) {
+      const newAttempts = task.attempts + 1
+      const newStatus: TaskStatus = newAttempts > task.max_attempts ? 'failed' : 'queued'
+      const changes = this.store.reapSettle(task.id, task.version, newStatus, newAttempts, now)
+      if (changes === 1 && this.auditLog) this.store.auditAppend(task.id, 'system', 'lease_expired', 'in_progress', newStatus)
+    }
+    this.lastReapAt = Date.now()
   }
 
   createTask(a: {
@@ -64,10 +87,10 @@ export class TaskService {
     }
     // D5: rejects depends_on pointing at an epic
     if (deps.length > 0) {
-      const epicIds = this.store.batchTasks(deps).values()
-      for (const t of epicIds) {
+      const batch = this.store.batchTasks(deps)
+      for (const [d, t] of batch) {
         if (t && t.is_epic === 1) {
-          return { ok: false, error: `INVALID: dependencies on epic tasks not allowed (${deps.find(d => this.store.getTaskRow(d)?.is_epic === 1)})` }
+          return { ok: false, error: `INVALID: dependencies on epic tasks not allowed (#${d})` }
         }
       }
     }
@@ -104,21 +127,17 @@ export class TaskService {
     if (this.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
     if (a.description) this.store.insertComment(id, reporter, a.description)
 
-    // D2: auto-promote target epic and D6: mirror subtask_add
+    // D2: auto-promote target epic and D6: mirror subtask_add (atomic)
     if (epicId !== null) {
-      this.store.promoteEpic(epicId, now)
-      const targetTask = this.store.getTaskRow(epicId)
-      if (targetTask && this.auditLog) {
-        this.store.appendEpicAuditMirror(epicId, reporter, 'subtask_add',
-          `#${id} ${sanitizePipe(a.title)}`, now)
-      }
+      this.store.promoteEpicWithMirror(epicId, reporter, 'subtask_add',
+        `#${id} ${sanitizePipe(a.title)}`, now, this.auditLog)
     }
 
     return { ok: true, data: { id, status: 'queued' } }
   }
 
   getTaskView(id: number): SvcResult<{ task: Task; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number } }> {
-    this.reapExpiredLeases()
+    if (this._shouldReap()) this._doReap()
     const task = this.store.getTaskRow(id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     const deps = parseDeps(task.depends_on)
@@ -138,7 +157,7 @@ export class TaskService {
   }
 
   listTasks(a: { assignee?: string; status?: string; updated_since?: number; epic_id?: number; limit?: number; ids?: number[] }): { tasks: Task[]; total: number } | { items: Array<{ id: number; task: Task | null }>; total: number } {
-    this.reapExpiredLeases()
+    if (this._shouldReap()) this._doReap()
     if (a.ids !== undefined && a.ids.length > 0) {
       const batch = this.store.batchTasks(a.ids)
       return {
@@ -157,7 +176,7 @@ export class TaskService {
   }
 
   claimTask(a: { agent: string; task_id?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Task }> {
-    this.reapExpiredLeases()
+    this._doReap()
     let task: Task | null = null
 
     if (a.task_id) {
@@ -169,17 +188,20 @@ export class TaskService {
       if (!depsSatisfied((id) => this.store.statusOf(id), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
     } else {
       const BATCH = 100
+      const depCache = new Map<number, number[]>()
       let offset = 0
-      while (offset < 10000) {
+      while (offset < this.autoClaimCeiling) {
         const page = this.store.queuedCandidates(BATCH, offset)
         if (page.length === 0) break
         const allDeps = new Set<number>()
         for (const row of page) {
-          for (const dep of parseDeps(row.depends_on)) allDeps.add(dep)
+          let deps = depCache.get(row.id)
+          if (deps === undefined) { deps = parseDeps(row.depends_on); depCache.set(row.id, deps) }
+          for (const dep of deps) allDeps.add(dep)
         }
         const depStatuses = this.store.statusesOf(Array.from(allDeps))
         for (const row of page) {
-          const deps = parseDeps(row.depends_on)
+          const deps = depCache.get(row.id)!
           const satisfied = deps.every(d => {
             const s = depStatuses.get(d)
             return s && TERMINAL_STATUSES.includes(s)
@@ -203,7 +225,7 @@ export class TaskService {
   }
 
   updateStatus(a: { id: number; agent: string; status: TaskStatus; version: number; comment?: string }): SvcResult<{ id: number; status: TaskStatus; version: number }> {
-    this.reapExpiredLeases()
+    this._doReap()
     const task = this.store.getTaskRow(a.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     if (task.version !== a.version) return { ok: false, error: `CONFLICT: expected version ${task.version}, got ${a.version}` }
@@ -242,7 +264,7 @@ export class TaskService {
   }
 
   listQueue(a: { limit?: number }): Task[] {
-    this.reapExpiredLeases()
+    if (this._shouldReap()) this._doReap()
     const limit = Math.floor(a.limit ?? 100)
     const rows = this.store.queuedCandidates(limit)
     const allDeps = new Set<number>()
@@ -260,7 +282,7 @@ export class TaskService {
   }
 
   addComment(a: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
-    this.reapExpiredLeases()
+    if (this._shouldReap()) this._doReap()
     const task = this.store.getTaskRow(a.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     if (!a.agent.trim()) return { ok: false, error: 'EMPTY: agent required' }
@@ -270,7 +292,7 @@ export class TaskService {
   }
 
   getTimeline(id: number, limit?: number): SvcResult<TimelineRow[]> {
-    this.reapExpiredLeases()
+    if (this._shouldReap()) this._doReap()
     const task = this.store.getTaskRow(id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     const limitN = limit !== undefined ? Math.floor(limit) : 50
@@ -279,19 +301,13 @@ export class TaskService {
   }
 
   reapExpiredLeases(): void {
-    const now = nowIso()
-    const expired = this.store.expiredLeases(now)
-    for (const task of expired) {
-      const newAttempts = task.attempts + 1
-      const newStatus: TaskStatus = newAttempts > task.max_attempts ? 'failed' : 'queued'
-      const changes = this.store.reapSettle(task.id, task.version, newStatus, newAttempts, now)
-      if (changes === 1 && this.auditLog) this.store.auditAppend(task.id, 'system', 'lease_expired', 'in_progress', newStatus)
-    }
+    this._doReap()
   }
 }
 
 export function parseDeps(raw: string): number[] {
-  const parsed = JSON.parse(raw) as unknown
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { return [] }
   if (Array.isArray(parsed)) return parsed.filter((x): x is number => typeof x === 'number')
   return []
 }
