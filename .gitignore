@@ -1,6 +1,7 @@
 task-tracker-plan.md
 node_modules/
 dist/
+coverage/
 data/
 *.db
 .test-data/
