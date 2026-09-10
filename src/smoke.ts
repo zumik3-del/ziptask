@@ -222,6 +222,7 @@ try {
 
   await client.close()
   console.log('[smoke] ALL CHECKS PASSED')
+  process.exit(0)
 } finally {
   try { rmSync(TMP_DB) } catch {}
   try { rmSync(TMP_DB + '-wal') } catch {}

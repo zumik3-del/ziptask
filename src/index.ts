@@ -23,6 +23,7 @@ try {
   const db = openDatabase(settings.dbPath)
   const svc = new TaskService(new TaskRepo(db), {
     leaseTtlMin: settings.leaseTtlMin,
+    maxAttempts: settings.maxAttempts,
     auditLog: settings.auditLog
   })
 

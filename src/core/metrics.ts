@@ -1,4 +1,3 @@
-// Metrics tool kept provisionally; keep/drop decision deferred to issue #25.
 import type { Task } from './tasks'
 import { nowIso } from './tasks'
 
