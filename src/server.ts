@@ -1,6 +1,8 @@
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import type { TaskService } from './core/service'
 import { createMcpServer } from './mcp/server'
+import type { Logger } from './logger'
+import { createLogger } from './logger'
 
 export interface Session {
   transport: WebStandardStreamableHTTPServerTransport
@@ -40,11 +42,13 @@ export interface StartHttpOptions {
   host: string
   maxSessions?: number
   sessionTtlMs?: number
+  logger?: Logger
   onShutdown?: () => void
 }
 
 export function startHttp(opts: StartHttpOptions) {
-  const { svc, port, host, maxSessions = 100, sessionTtlMs = 3_600_000, onShutdown } = opts
+  const { svc, port, host, maxSessions = 100, sessionTtlMs = 3_600_000, logger, onShutdown } = opts
+  const svcLogger = logger ?? createLogger('http', 'off')
   const sessions = new Map<string, Session>()
 
   const cleanup = setInterval(() => {
@@ -111,6 +115,6 @@ export function startHttp(opts: StartHttpOptions) {
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
 
-  console.log(`[ziptask] MCP HTTP server on http://${host}:${port}`)
+  svcLogger.info(`MCP HTTP server on http://${host}:${port}`)
   return server
 }

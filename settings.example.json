@@ -4,6 +4,8 @@
   "port": 0,
   "leaseTtlMin": 15,
   "maxAttempts": 3,
+  "reapCooldownSec": 60,
+  "autoClaimCeiling": 10000,
   "http": {
     "maxSessions": 100,
     "sessionTtlMs": 3600000
@@ -14,5 +16,9 @@
     "listLimit": 50,
     "timelineLimit": 50,
     "queueLimit": 100
-  }
+  },
+  "logging": {
+    "level": "off"
+  },
+  "auditLog": true
 }

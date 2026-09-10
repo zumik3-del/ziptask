@@ -33,8 +33,12 @@ describe('loadSettings defaults', () => {
       port: DEFAULTS.port,
       leaseTtlMin: DEFAULTS.leaseTtlMin,
       maxAttempts: DEFAULTS.maxAttempts,
+      reapCooldownSec: DEFAULTS.reapCooldownSec,
+      autoClaimCeiling: DEFAULTS.autoClaimCeiling,
       http: { ...DEFAULTS.http },
-      defaults: { ...DEFAULTS.defaults }
+      defaults: { ...DEFAULTS.defaults },
+      logging: { ...DEFAULTS.logging },
+      auditLog: DEFAULTS.auditLog
     })
   })
 
@@ -45,6 +49,8 @@ describe('loadSettings defaults', () => {
     expect(s.port).toBe(0)
     expect(s.leaseTtlMin).toBe(15)
     expect(s.maxAttempts).toBe(3)
+    expect(s.reapCooldownSec).toBe(60)
+    expect(s.autoClaimCeiling).toBe(10000)
     expect(s.http.maxSessions).toBe(100)
     expect(s.http.sessionTtlMs).toBe(3_600_000)
     expect(s.defaults.priority).toBe('p2')
@@ -52,6 +58,8 @@ describe('loadSettings defaults', () => {
     expect(s.defaults.listLimit).toBe(50)
     expect(s.defaults.timelineLimit).toBe(50)
     expect(s.defaults.queueLimit).toBe(100)
+    expect(s.logging.level).toBe('off')
+    expect(s.auditLog).toBe(true)
   })
 })
 
@@ -250,7 +258,7 @@ describe('maxAttempts flow', () => {
        auditTransitionsForTasks: () => [],
        nonTerminalChildCount: () => 0,
        childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0 }),
-       promoteEpic: () => {},
+        promoteEpicWithMirror: () => {},
        appendEpicAuditMirror: () => {}
      }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts })
 
@@ -286,7 +294,7 @@ describe('maxAttempts flow', () => {
        auditTransitionsForTasks: () => [],
        nonTerminalChildCount: () => 0,
        childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0 }),
-       promoteEpic: () => {},
+        promoteEpicWithMirror: () => {},
        appendEpicAuditMirror: () => {}
      }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts })
 

@@ -76,13 +76,14 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
     fields: z.array(z.string()).optional()
   }, async (args) => handleGetTask(svc, args))
 
-  server.tool('list_tasks', 'Filters: assignee,status,updated_since(unix ms),epic_id(children of epic). description only via explicit fields', {
+  server.tool('list_tasks', 'Filters: assignee,status,updated_since(unix ms),epic_id(children of epic). ids batch-mode returns pipe id|code; assignee via fields:["assignee"]. description only via explicit fields', {
     assignee: z.string().optional(),
     status: z.string().optional(),
     fields: z.array(z.string()).optional(),
     limit: z.number().optional(),
     updated_since: z.number().optional(),
-    epic_id: z.number().optional()
+    epic_id: z.number().optional(),
+    ids: z.array(z.number()).optional()
   }, async (args) => handleListTasks(svc, args))
 
   server.tool('claim_task', 'Claim queued task (auto-picks best, or task_id). include: extra fields in response', {
@@ -98,11 +99,6 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
     version: z.number(),
     comment: z.string().optional().describe('typed resolution when done/failed')
   }, async (args) => handleUpdateStatus(svc, args))
-
-  server.tool('batch_statuses', 'Pipe lines id|code (0=not_found 1=queued 2=in_progress 3=review 4=done 5=failed 6=blocked); include:["assignee"] adds assignee (- if null)', {
-    ids: z.array(z.number()),
-    include: z.array(z.string()).optional()
-  }, async (args) => handleBatchStatuses(svc, args))
 
   server.tool('list_queue', 'Deps-satisfied queued tasks, pipe lines id|priority|title', {
     limit: z.number().optional()
@@ -122,10 +118,6 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
   server.tool('get_template', 'Return a markdown template by name', {
     name: z.enum(TEMPLATE_NAMES)
   }, async (args) => handleGetTemplate(svc, args))
-
-  server.tool('metrics', 'Aggregated stats: done_count, status_time per status, bottleneck. period=hours (default 24) or all', {
-    period: z.union([z.number().positive(), z.literal('all')]).optional()
-  }, async (args) => handleMetrics(svc, args))
 }
 
 export function handleCreateTask(svc: TaskService, args: {
@@ -165,10 +157,21 @@ export function handleListTasks(svc: TaskService, args: {
   limit?: number
   updated_since?: number
   epic_id?: number
+  ids?: number[]
 }): ToolResult {
-  const result = svc.listTasks(args)
+  if (args.ids !== undefined && args.ids.length > 0) {
+    const withAssignee = args.fields?.includes('assignee') ?? false
+    const batch = svc.listTasks({ ids: args.ids }) as { items: Array<{ id: number; task: Task | null }>; total: number }
+    const lines = batch.items.map(({ id, task }: { id: number; task: Task | null }) => {
+      if (!task) return withAssignee ? pipeJoin(id, 0, '-') : pipeJoin(id, 0)
+      const code = statusToCode(task.status)
+      return withAssignee ? pipeJoin(id, code, task.assignee ?? '-') : pipeJoin(id, code)
+    })
+    return textResult(lines.join('\n'))
+  }
+  const result = svc.listTasks(args) as { tasks: Task[]; total: number }
   const fields = args.fields ?? ['id', 'title', 'status', 'priority', 'assignee']
-  const tasks = result.tasks.map(task => pickFields(task, fields))
+  const tasks = result.tasks.map((task: Task) => pickFields(task, fields))
   return jsonResult({ tasks, total: result.total })
 }
 
@@ -196,17 +199,6 @@ export function handleUpdateStatus(svc: TaskService, args: {
   return r.ok ? jsonResult(r.data) : errorResult(r.error)
 }
 
-export function handleBatchStatuses(svc: TaskService, args: { ids: number[]; include?: string[] }): ToolResult {
-  const withAssignee = args.include?.includes('assignee') ?? false
-  const items = svc.batchStatuses(args.ids)
-  const lines = items.map(({ id, task }) => {
-    if (!task) return withAssignee ? pipeJoin(id, 0, '-') : pipeJoin(id, 0)
-    const code = statusToCode(task.status)
-    return withAssignee ? pipeJoin(id, code, task.assignee ?? '-') : pipeJoin(id, code)
-  })
-  return textResult(lines.join('\n'))
-}
-
 export function handleListQueue(svc: TaskService, args: { limit?: number }): ToolResult {
   const ready = svc.listQueue(args)
   const lines = ready.map(t => pipeJoin(t.id, t.priority, sanitizePipe(t.title)))
@@ -225,16 +217,4 @@ export function handleGetTimeline(svc: TaskService, args: { id: number; limit?: 
   return textResult(lines.join('\n'))
 }
 
-export function handleMetrics(svc: TaskService, args: { period?: number | 'all' }): ToolResult {
-  const r = svc.metrics(args.period)
-  if (!r.ok) return errorResult(r.error)
-  const m = r.data
-  const lines: string[] = [`done_count|${m.doneCount}`]
-  for (const [status, mins] of Object.entries(m.statusTime).sort()) {
-    lines.push(`status_time|${status}:${Math.round(mins)}`)
-  }
-  if (m.bottleneck) {
-    lines.push(`bottleneck|${m.bottleneck.status}:${Math.round(m.bottleneck.minutes)}`)
-  }
-  return textResult(lines.join('\n'))
-}
+

@@ -161,6 +161,13 @@ export class TaskRepo {
     return row.cnt
   }
 
+  doneCountFromTasks(sinceIso: string): number {
+    const row = this.db.query(
+      "SELECT COUNT(*) as cnt FROM tasks WHERE status = 'done' AND completed_at >= ?"
+    ).get(sinceIso) as { cnt: number }
+    return row.cnt
+  }
+
   taskSummaries(): Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at' | 'is_epic'>> {
     return this.db.query('SELECT id, status, created_at, updated_at, completed_at, is_epic FROM tasks').all() as Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at' | 'is_epic'>>
   }
@@ -192,6 +199,19 @@ export class TaskRepo {
 
   promoteEpic(id: number, now: string): void {
     this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
+  }
+
+  promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void {
+    const txn = this.db.transaction(() => {
+      this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
+      if (auditLog) {
+        this.db.run(
+          'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, NULL, ?, ?)',
+          [id, agent, action, newValue, now]
+        )
+      }
+    })
+    txn()
   }
 
   appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string, now: string): void {

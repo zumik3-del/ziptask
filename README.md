@@ -76,6 +76,8 @@ dist/ziptask --stdio     # runs as stdio MCP server
 | `ZIPTASK_HOST` | `127.0.0.1` | HTTP listen host |
 | `ZIPTASK_PORT` | `0` (random) | HTTP listen port |
 | `ZIPTASK_LEASE_TTL_MIN` | `15` | Claim lease length in minutes |
+| `ZIPTASK_LOGGING_LEVEL` | `off` | Structured logger level — `off`, `error`, `info`, `debug`. Writes to stderr only; never stdout, so stdio MCP transport is safe. `--version` intentionally writes to stdout. |
+| `ZIPTASK_AUDIT_LOG` | `true` | Toggle audit log writes. When `false`, no new `audit_log` rows are created; `get_timeline` shows only comment rows for tasks with no historical audit data. Metrics CLI `status_time` degrades but `done_count` stays accurate. |
 
 ## MCP tools
 
@@ -83,15 +85,13 @@ dist/ziptask --stdio     # runs as stdio MCP server
 |---|---|
 | `create_task` | Enqueue a task; always `queued` — `blocked` is a manual flag only. Fields: `epic?` (declare as epic, not claimable), `epic_id?` (attach as sub-task to an existing epic) |
 | `get_task` | Read a task; `description` only via explicit `fields`. Epics: `subtasks` roll-up (`{total,open,done,failed}`) via `fields:["subtasks"]`; `epic_id` via `fields` when reading a sub-task |
-| `list_tasks` | Filter by `assignee`/`status`/`updated_since`/`epic_id` (children of an epic). JSON result |
+| `list_tasks` | JSON mode: filter by `assignee`/`status`/`updated_since`/`epic_id`; `description` only via explicit `fields`. Pipe mode (batch): pass `ids` (array of ints) — implicit pipe `id|code`, no `format` param; `fields:["assignee"]` → `id|code|assignee`, null assignee → `-`; request order is preserved, unknown id → `0`. All other filters ignored when `ids` is set. Merges the former `batch_statuses` tool — rationale: the separate "ask about tasks" was an ambiguous duplicate of `list_tasks`-by-ids; unified under one tool with two output shapes. |
 | `claim_task` | Claim a queued task (auto-pick or by id); returns `{id, lease_ttl_min, version}`. Epics are excluded from auto-pick and explicit claim returns `INVALID: #N is an epic, not claimable` |
 | `update_status` | Transition status with optimistic version lock. Epic close-guard: `done`/`failed` rejected while non-terminal children exist → `CHILDREN: N sub-tasks not terminal` |
-| `batch_statuses` | Pipe lines `id\|code` (+ `\|assignee` via `include`) |
 | `list_queue` | Pipe lines of dep-satisfied queued tasks (epics excluded) |
 | `add_comment` | Append a comment to a task |
 | `get_timeline` | Merged audit log + comments feed. Epics show `subtask_add`/`subtask_done`/`subtask_failed` mirror rows — history reads as `create → subtask_add… → subtask_done… → resolution` |
 | `get_template` | Fetch a markdown template (task description, comments) |
-| `metrics` | Aggregated stats: `done_count`, `status_time`, `bottleneck`. Epics excluded from all metrics |
 
 ## Statuses
 
@@ -145,7 +145,8 @@ Nested membership is rejected (epic cannot be a sub-task; sub-task cannot be an 
 
 - `epic_id` is immutable after creation (no re-parent/detach). Manual SQL is the escape hatch.
 - `blocked`/`failed` on an epic are manual flags only; no cascade to children.
-- Metrics (`metrics` tool) exclude epics — an epic sitting in one status for days would distort `bottleneck`.
+- Metrics: epics are excluded from all metrics calculations — an epic sitting in one status for days would distort `bottleneck`. Implementation lives in `src/core/metrics.ts` (`computeMetrics`); issue #25 is resolved (deferred MCP tool moved to standalone CLI).
+- Metrics CLI: `bun run scripts/metrics.ts --period <hours|all>` (default 24); `--db <path>` or `ZIPTASK_DB` env override. Pipe-format output: `done_count|N`, `status_time|status:min`, `bottleneck|status:min`. Empty DB → `done_count|0` with no `status_time`/`bottleneck`. Invalid period (e.g. `0`) → stderr error, exit 1. When `ZIPTASK_AUDIT_LOG=false`, timeline shows only comment rows and `status_time` degrades but `done_count` stays accurate.
 
 ## Architecture
 
@@ -166,28 +167,6 @@ bunx tsc --noEmit      # type check
 bunx biome check src/  # lint
 bun run src/smoke.ts   # MCP end-to-end over HTTP (ephemeral port + temp DB)
 ```
-
-## Docker
-
-```bash
-docker build -t ziptask .
-docker run -d --name ziptask \
-  -p 3000:3000 \
-  -e ZIPTASK_HOST=0.0.0.0 \
-  -e ZIPTASK_PORT=3000 \
-  -v /host/data:/var/lib/ziptask \
-  -v /host/backups:/backups \
-  ziptask
-```
-
-The container takes an online SQLite backup on a cron schedule; old archives are pruned.
-
-| Variable | Default | Description |
-|---|---|---|
-| `ZIPTASK_BACKUP_DIR` | `/backups` | Backup destination (mount a volume) |
-| `ZIPTASK_BACKUP_PREFIX` | `ziptask` | Backup file prefix |
-| `ZIPTASK_BACKUP_RETAIN` | `7` | Backups to keep (oldest pruned) |
-| `CRON_SCHEDULE` | `0 2 * * *` | Cron expression for the backup job |
 
 ## License
 
