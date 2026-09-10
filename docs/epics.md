@@ -40,9 +40,22 @@ Nested membership is rejected (epic cannot be a sub-task; sub-task cannot be an 
 | `epic_id` pointing at a sub-task (nesting) | `INVALID: cannot attach to a sub-task (no nesting)` |
 | Explicit `claim_task` on an epic | `INVALID: #N is an epic, not claimable` |
 
+## Re-parent or detach (escape hatch)
+
+There is no tool for re-parenting: `epic_id` is immutable through the API. When a task lands in the wrong epic (or an epic is retired), use raw SQL against `ZIPTASK_DB`:
+
+```sql
+-- move to another epic
+UPDATE tasks SET epic_id = <new-epic-id>, updated_at = <iso-now> WHERE id = <task-id>;
+-- detach to top level
+UPDATE tasks SET epic_id = NULL, updated_at = <iso-now> WHERE id = <task-id>;
+```
+
+The target epic's roll-up is derived on read, so no counter recalculation is needed. Raw SQL bypasses the API guards — verify first that the target exists, is not `done`/`failed`/`canceled`, is not itself a sub-task, and is not the task itself. Leave `version` untouched (no client optimistic-lock is racing a manual edit). Detaching may leave the old epic empty.
+
 ## Notes
 
-- `epic_id` is immutable after creation (no re-parent/detach). Manual SQL is the escape hatch.
+- `epic_id` is immutable after creation (no re-parent/detach tool) — use the SQL recipe above.
 - `blocked`/`failed` on an epic are manual flags only; no cascade to children.
 - Metrics: epics are excluded from all metrics calculations — an epic sitting in one status for days would distort `bottleneck`. Implementation lives in `src/core/metrics.ts` (`computeMetrics`); issue #25 is resolved (deferred MCP tool moved to standalone CLI).
 - Metrics CLI: `bun run scripts/metrics.ts --period <hours|all>` (default 24); `--db <path>` or `ZIPTASK_DB` env override. Pipe-format output: `done_count|N`, `status_time|status:min`, `bottleneck|status:min`. Empty DB → `done_count|0` with no `status_time`/`bottleneck`. Invalid period (e.g. `0`) → stderr error, exit 1. When `ZIPTASK_AUDIT_LOG=false`, timeline shows only comment rows and `status_time` degrades but `done_count` stays accurate.
