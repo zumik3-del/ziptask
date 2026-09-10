@@ -2,12 +2,13 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { isValidTransition, nowIso } from './core/tasks'
+import { isValidTransition, nowIso, clampLimit, MAX_RESULT_LIMIT } from './core/tasks'
 import { checkCycles, depsSatisfied, parseDeps, type TaskStore } from './core/service'
 import { openDatabase } from './db/db'
 import { MIGRATIONS } from './db/migrations'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
+import { computeMetrics } from './core/metrics'
 import {
   handleCreateTask, handleGetTask, handleListTasks, handleClaimTask,
   handleUpdateStatus, handleListQueue,
@@ -1083,6 +1084,10 @@ describe('schema guard (v1.6)', () => {
       expect(row?.version).toBe(MIGRATIONS.length)
       const cols = db3.query('PRAGMA table_info(tasks)').all() as any[]
       expect(cols.map(c => c.name)).toContain('is_epic')
+      const idx = (db3.query("SELECT name FROM sqlite_master WHERE type='index'").all() as any[]).map(r => r.name)
+      expect(idx).toContain('idx_audit_log_task_id')
+      expect(idx).toContain('idx_comments_task_id')
+      expect(idx).toContain('idx_tasks_status_completed')
       db3.close()
     } finally { rmTempDb(path) }
   })
@@ -1121,7 +1126,7 @@ describe('schema guard (v1.6)', () => {
       let thrown: Error | null = null
       try { openDatabase(path) } catch (err) { thrown = err as Error }
       expect(thrown).toBeInstanceOf(Error)
-      expect(thrown!.message).toMatch(/^SCHEMA: migration failed; database does not match/)
+      expect(thrown!.message).toMatch(/^SCHEMA: migration to version \d+ failed at step \d+ \(from \d+\)/)
       expect(thrown!.message).toMatch(/original: /)
       const raw = new Database(path)
       const ver = raw.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | null
@@ -1183,19 +1188,6 @@ describe('audit_log toggle', () => {
     } finally { closeTestDb(db) }
   })
 
-  test('auditLog=false: doneCountFromTasks returns correct count', () => {
-    const { db, svc, repo } = makeAuditSvc(false)
-    try {
-      const id1 = json(handleCreateTask(svc, { title: 'Done1', reporter: 'dev' })).id
-      const id2 = json(handleCreateTask(svc, { title: 'Done2', reporter: 'dev' })).id
-      driveToDone(svc, id1, 'dev')
-      driveToDone(svc, id2, 'dev')
-      const since = new Date(Date.now() - 60_000).toISOString()
-      const count = repo.doneCountFromTasks(since)
-      expect(count).toBe(2)
-    } finally { closeTestDb(db) }
-  })
-
   test('auditLog=true (default): audit rows written on create/claim/update (v2)', () => {
     const { db, svc } = makeAuditSvc(true)
     try {
@@ -1232,9 +1224,6 @@ describe('reap cooldown (#104)', () => {
       insertComment: () => 1,
       auditAppend: () => {},
       timelineEntries: () => [],
-      doneCount: () => 0,
-      taskSummaries: () => [],
-      auditTransitionsForTasks: () => [],
       nonTerminalChildCount: () => 0,
       childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0 }),
       promoteEpicWithMirror: () => {},
@@ -1415,6 +1404,17 @@ describe('corrupt depends_on tolerance (#107)', () => {
     expect(json(res).blocked_by).toEqual([])
   })
 
+  test('blocked_by lists dangling deps, matching readiness (never runs but not listed = footgun)', () => {
+    const depId = json(handleCreateTask(svc, { title: 'Dep', reporter: 'dev' })).id
+    const id = json(handleCreateTask(svc, { title: 'Dependent', reporter: 'dev', depends_on: [depId, 999] })).id
+
+    expect(json(handleGetTask(svc, { id })).blocked_by).toEqual([depId, 999])
+
+    driveToDone(svc, depId, 'dev')
+    expect(json(handleGetTask(svc, { id })).blocked_by).toEqual([999])
+    expect(text(handleListQueue(svc, {}))).not.toContain(`${id}|`)
+  })
+
   test('claimTask auto-claim survives corrupt depends_on (treated as no deps)', () => {
     const corruptId = createTaskRow({ title: 'Corrupt', reporter: 'dev' })
     db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", ['{bad json}', corruptId])
@@ -1462,10 +1462,6 @@ describe('atomic epic promotion (#108)', () => {
     expect(mirrors[0].new_value).toContain('Sub')
   })
 
-  test('standalone promoteEpic still exists for other paths', () => {
-    expect(typeof (svc as any).store.promoteEpic).toBe('function')
-  })
-
   test('standalone appendEpicAuditMirror still exists', () => {
     expect(typeof (svc as any).store.appendEpicAuditMirror).toBe('function')
   })
@@ -1481,5 +1477,96 @@ describe('atomic epic promotion (#108)', () => {
       "SELECT action FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
     ).all(epicId) as any[]
     expect(mirrors.length).toBe(1)
+  })
+})
+
+describe('limit guards (#3)', () => {
+  test('undefined → fallback', () => {
+    expect(clampLimit(undefined, 50)).toBe(50)
+  })
+
+  test('positive within range is preserved (floored)', () => {
+    expect(clampLimit(10, 50)).toBe(10)
+    expect(clampLimit(10.9, 50)).toBe(10)
+  })
+
+  test('zero and negative → fallback (never unbounded)', () => {
+    expect(clampLimit(0, 50)).toBe(50)
+    expect(clampLimit(-1, 50)).toBe(50)
+    expect(clampLimit(-9999, 50)).toBe(50)
+  })
+
+  test('huge values are capped', () => {
+    expect(clampLimit(1_000_000, 50)).toBe(MAX_RESULT_LIMIT)
+  })
+
+  test('NaN/Infinity → fallback', () => {
+    expect(clampLimit(Number.NaN, 50)).toBe(50)
+    expect(clampLimit(Number.POSITIVE_INFINITY, 50)).toBe(50)
+  })
+
+  test('list_queue with negative limit falls back, not unbounded', () => {
+    for (let i = 0; i < 3; i++) handleCreateTask(svc, { title: `Q${i}`, reporter: 'dev' })
+    const out = text(handleListQueue(svc, { limit: -1 }))
+    expect(out.split('\n').length).toBe(3)
+  })
+
+  test('get_timeline with negative limit falls back to default, not unbounded', () => {
+    const id = json(handleCreateTask(svc, { title: 'TL', reporter: 'dev' })).id
+    const out = text(handleGetTimeline(svc, { id, limit: -1 }))
+    expect(out.length).toBeGreaterThan(0)
+  })
+})
+
+describe('service defaults from config (#6)', () => {
+  test('defaultPriority/defaultReporter are honoured when args omit them', () => {
+    const configured = new TaskService(repo, { defaultPriority: 'p0', defaultReporter: 'human' })
+    const id = json(handleCreateTask(configured, { title: 'C' })).id
+    const row = getTaskRow(db, id)
+    expect(row.priority).toBe('p0')
+    expect(row.reporter).toBe('human')
+  })
+})
+
+describe('metrics exclude epics (#2)', () => {
+  function driveEpicToDone(id: number) {
+    let v = json(handleGetTask(svc, { id, fields: ['version'] })).version
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'in_progress', version: v })
+    v = json(handleGetTask(svc, { id, fields: ['version'] })).version
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'review', version: v })
+    v = json(handleGetTask(svc, { id, fields: ['version'] })).version
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'done', version: v })
+  }
+
+  test('done_count excludes closed epics', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
+    const plainId = json(handleCreateTask(svc, { title: 'Plain', reporter: 'dev' })).id
+    driveToDone(svc, subId, 'dev')
+    driveToDone(svc, plainId, 'dev')
+    driveEpicToDone(epicId)
+
+    expect(repo.doneCount('0001-01-01T00:00:00.000Z')).toBe(2)
+    expect(computeMetrics(repo, 'all').doneCount).toBe(2)
+  })
+
+  test('statusDurations computes clamped segment minutes and ignores epics', () => {
+    const ins = (id: number, action: string, nv: string, at: string) =>
+      db.run("INSERT INTO audit_log (task_id,agent,action,old_value,new_value,created_at) VALUES (?,?,?,?,?,?)", [id, 'dev', action, null, nv, at])
+
+    const id = repo.insertTask({ title: 'T', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
+    db.run("UPDATE tasks SET created_at=?, updated_at=?, status='done', completed_at=? WHERE id=?", ['2020-01-01T00:00:00.000Z', '2020-01-01T00:30:00.000Z', '2020-01-01T00:30:00.000Z', id])
+    ins(id, 'claim', 'in_progress', '2020-01-01T00:10:00.000Z')
+    ins(id, 'update_status', 'review', '2020-01-01T00:20:00.000Z')
+    ins(id, 'update_status', 'done', '2020-01-01T00:30:00.000Z')
+
+    const epicId = repo.insertTask({ title: 'E', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z', isEpic: 1 })
+    db.run('UPDATE tasks SET created_at=? WHERE id=?', ['2020-01-01T00:00:00.000Z', epicId])
+
+    const map = Object.fromEntries(repo.statusDurations('0001-01-01T00:00:00.000Z', '2100-01-01T00:00:00.000Z').map(r => [r.status, r.minutes]))
+    expect(Math.round(map.queued)).toBe(10)
+    expect(Math.round(map.in_progress)).toBe(10)
+    expect(Math.round(map.review)).toBe(10)
+    expect(map.done ?? 0).toBe(0)
   })
 })

@@ -48,5 +48,10 @@ export const MIGRATIONS = [
   // 002: epic → sub-task mechanism (schema v3; additive over live DB)
   `ALTER TABLE tasks ADD COLUMN is_epic INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE tasks ADD COLUMN epic_id INTEGER REFERENCES tasks(id)`,
-  `CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id)`
+  `CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id)`,
+
+  // 003: query indexes for timeline and metrics
+  `CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_comments_task_id ON comments(task_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_tasks_status_completed ON tasks(status, completed_at)`
 ]

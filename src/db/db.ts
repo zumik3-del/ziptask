@@ -1,24 +1,21 @@
 import { Database } from 'bun:sqlite'
 import { MIGRATIONS } from './migrations'
 
-let dbRef: Database | null = null
-
 export function openDatabase(path?: string): Database {
   const dbPath = path ?? './data/ziptask.db'
   const { mkdirSync } = require('node:fs')
   const { dirname } = require('node:path')
   mkdirSync(dirname(dbPath), { recursive: true })
-  dbRef = new Database(dbPath)
-  dbRef.exec('PRAGMA journal_mode = WAL')
-  dbRef.exec('PRAGMA busy_timeout = 5000')
-  dbRef.exec('PRAGMA foreign_keys = ON')
-  applyMigrations(dbRef)
-  return dbRef
+  const db = new Database(dbPath)
+  db.exec('PRAGMA journal_mode = WAL')
+  db.exec('PRAGMA busy_timeout = 5000')
+  db.exec('PRAGMA foreign_keys = ON')
+  applyMigrations(db)
+  return db
 }
 
 export function closeDatabase(db: Database): void {
   db.close()
-  dbRef = null
 }
 
 function applyMigrations(db: Database) {
@@ -40,6 +37,7 @@ function applyMigrations(db: Database) {
   try {
     migrate()
   } catch (err) {
-    throw new Error(`SCHEMA: migration failed; database does not match this binary's migration history (created by an older or dev build?) — restore from backup or recreate the database; original: ${err}`)
+    const detail = err instanceof Error ? `${err.message}` : String(err)
+    throw new Error(`SCHEMA: migration to version ${last} failed at step ${current + 1} (from ${current}); original: ${detail}`)
   }
 }

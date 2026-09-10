@@ -53,7 +53,7 @@ export class TaskRepo {
       params.push(f.epicId)
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
-    const limit = Math.floor(f.limit)
+    const limit = Math.max(0, Math.floor(f.limit))
     const rows = this.db.query(
       `SELECT * FROM tasks ${where} ORDER BY created_at DESC LIMIT ${limit}`
     ).all(...params as any[]) as Task[]
@@ -62,8 +62,8 @@ export class TaskRepo {
   }
 
   queuedCandidates(limit?: number, offset?: number): Task[] {
-    const n = Math.floor(limit ?? 10)
-    const o = Math.floor(offset ?? 0)
+    const n = Math.max(0, Math.floor(limit ?? 10))
+    const o = Math.max(0, Math.floor(offset ?? 0))
     return this.db.query(
       `SELECT * FROM tasks WHERE status = 'queued' AND is_epic = 0
        ORDER BY CASE priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 WHEN 'p3' THEN 3 END, created_at ASC
@@ -144,38 +144,51 @@ export class TaskRepo {
   }
 
   timelineEntries(taskId: number, limit: number): Array<{ type: string; agent: string; text: string; created_at: string }> {
-    let sql = `SELECT 'action' as type, agent, action || ': ' || COALESCE(old_value, 'null') || '->' || COALESCE(new_value, 'null') as text, created_at, rowid
+    const n = Math.max(0, Math.floor(limit))
+    const sql = `SELECT 'action' as type, agent, action || ': ' || COALESCE(old_value, 'null') || '->' || COALESCE(new_value, 'null') as text, created_at, rowid
       FROM audit_log WHERE task_id = ?
       UNION ALL
       SELECT 'comment', agent, content, created_at, rowid
       FROM comments WHERE task_id = ?
-      ORDER BY created_at ASC, rowid ASC`
-    if (limit > 0) sql += ` LIMIT ${limit}`
+      ORDER BY created_at ASC, rowid ASC
+      LIMIT ${n}`
     return this.db.query(sql).all(taskId, taskId) as Array<{ type: string; agent: string; text: string; created_at: string }>
   }
 
   doneCount(sinceIso: string): number {
     const row = this.db.query(
-      "SELECT COUNT(*) as cnt FROM audit_log WHERE action = 'update_status' AND new_value = 'done' AND created_at >= ?"
+      "SELECT COUNT(*) as cnt FROM tasks WHERE status = 'done' AND is_epic = 0 AND completed_at >= ?"
     ).get(sinceIso) as { cnt: number }
     return row.cnt
   }
 
-  doneCountFromTasks(sinceIso: string): number {
-    const row = this.db.query(
-      "SELECT COUNT(*) as cnt FROM tasks WHERE status = 'done' AND completed_at >= ?"
-    ).get(sinceIso) as { cnt: number }
-    return row.cnt
-  }
-
-  taskSummaries(): Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at' | 'is_epic'>> {
-    return this.db.query('SELECT id, status, created_at, updated_at, completed_at, is_epic FROM tasks').all() as Array<Pick<Task, 'id' | 'status' | 'created_at' | 'updated_at' | 'completed_at' | 'is_epic'>>
-  }
-
-  auditTransitionsForTasks(): Array<{ task_id: number; new_value: string; created_at: string }> {
-    return this.db.query(
-      "SELECT task_id, new_value, created_at FROM audit_log WHERE action IN ('claim', 'update_status') ORDER BY task_id ASC, created_at ASC"
-    ).all() as Array<{ task_id: number; new_value: string; created_at: string }>
+  statusDurations(sinceIso: string, nowIsoStr: string): Array<{ status: string; minutes: number }> {
+    return this.db.query(`
+      WITH events AS (
+        SELECT t.id AS task_id, t.created_at AS at, 'queued' AS status, 0 AS ord, -1 AS eid
+        FROM tasks t WHERE t.is_epic = 0
+        UNION ALL
+        SELECT a.task_id, a.created_at, a.new_value, 1 AS ord, a.id AS eid
+        FROM audit_log a JOIN tasks t ON t.id = a.task_id
+        WHERE t.is_epic = 0 AND a.action IN ('claim', 'update_status', 'lease_expired')
+      ),
+      ordered AS (
+        SELECT e.task_id, e.status, e.at AS seg_start,
+          LEAD(e.at) OVER (PARTITION BY e.task_id ORDER BY e.at, e.ord, e.eid) AS next_at,
+          t.completed_at AS completed_at
+        FROM events e JOIN tasks t ON t.id = e.task_id
+      ),
+      clamped AS (
+        SELECT status,
+          MAX(seg_start, ?) AS s,
+          MIN(COALESCE(next_at, completed_at, ?), ?) AS e
+        FROM ordered
+      )
+      SELECT status, SUM((julianday(e) - julianday(s)) * 1440.0) AS minutes
+      FROM clamped
+      WHERE e > s
+      GROUP BY status
+    `).all(sinceIso, nowIsoStr, nowIsoStr) as Array<{ status: string; minutes: number }>
   }
 
   nonTerminalChildCount(epicId: number): number {
@@ -197,27 +210,23 @@ export class TaskRepo {
     return rows ?? { total: 0, open: 0, done: 0, failed: 0 }
   }
 
-  promoteEpic(id: number, now: string): void {
-    this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
-  }
-
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void {
     const txn = this.db.transaction(() => {
       this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
       if (auditLog) {
         this.db.run(
           'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, NULL, ?, ?)',
-          [id, agent, action, newValue, now]
+          [id, agent, action, newValue, monotonicIso()]
         )
       }
     })
     txn()
   }
 
-  appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string, now: string): void {
+  appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void {
     this.db.run(
       'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, NULL, ?, ?)',
-      [taskId, agent, action, newValue, now]
+      [taskId, agent, action, newValue, monotonicIso()]
     )
   }
 }

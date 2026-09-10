@@ -10,7 +10,7 @@ One-liner — downloads a compiled binary, writes default config, prints client 
 curl -LsS https://raw.githubusercontent.com/zumik3-del/ziptask/main/scripts/install.sh | sh
 ```
 
-Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path`. Pin a version with `ZIPTASK_VERSION=0.1.0`. On systemd systems the installer provisions a background service on port 3005 (override with `--port`); skip it with `--no-service`.
+Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path`. Pin a version with `ZIPTASK_VERSION=0.1.1`. On systemd systems the installer provisions a background service on port 3005 (override with `--port`); skip it with `--no-service`.
 
 ### Service mode
 
@@ -64,7 +64,7 @@ bun run start:stdio    # run over stdio
 
 ```bash
 bun run build:bin        # produces dist/ziptask
-dist/ziptask --version   # prints ziptask 0.1.0
+dist/ziptask --version   # prints the package.json version
 dist/ziptask --stdio     # runs as stdio MCP server
 ```
 
@@ -77,7 +77,12 @@ dist/ziptask --stdio     # runs as stdio MCP server
 | `ZIPTASK_PORT` | `0` (random) | HTTP listen port |
 | `ZIPTASK_LEASE_TTL_MIN` | `15` | Claim lease length in minutes |
 | `ZIPTASK_LOGGING_LEVEL` | `off` | Structured logger level — `off`, `error`, `info`, `debug`. Writes to stderr only; never stdout, so stdio MCP transport is safe. `--version` intentionally writes to stdout. |
-| `ZIPTASK_AUDIT_LOG` | `true` | Toggle audit log writes. When `false`, no new `audit_log` rows are created; `get_timeline` shows only comment rows for tasks with no historical audit data. Metrics CLI `status_time` degrades but `done_count` stays accurate. |
+| `ZIPTASK_AUDIT_LOG` | `true` | Toggle audit log writes. When `false`, no new `audit_log` rows are created; `get_timeline` shows only comment rows for tasks with no historical audit data. Metrics CLI `status_time` degrades but `done_count` stays accurate (derived from `tasks`, not `audit_log`). |
+| `ZIPTASK_DEFAULTS_PRIORITY` | `p2` | Default `priority` when `create_task` omits it |
+| `ZIPTASK_DEFAULTS_REPORTER` | `system` | Default `reporter` when `create_task` omits it |
+| `ZIPTASK_DEFAULTS_LIST_LIMIT` | `50` | Fallback `limit` for `list_tasks` JSON mode |
+| `ZIPTASK_DEFAULTS_TIMELINE_LIMIT` | `50` | Fallback `limit` for `get_timeline` |
+| `ZIPTASK_DEFAULTS_QUEUE_LIMIT` | `100` | Fallback `limit` for `list_queue` |
 
 ## MCP tools
 
