@@ -110,7 +110,7 @@ describe('reap cooldown (#104)', () => {
       auditAppend: () => {},
       timelineEntries: () => [],
       nonTerminalChildCount: () => 0,
-      childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0 }),
+      childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
       promoteEpicWithMirror: () => {},
       appendEpicAuditMirror: () => {}
     }

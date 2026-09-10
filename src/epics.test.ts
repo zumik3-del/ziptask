@@ -286,6 +286,73 @@ describe('list_tasks epic_id filter', () => {
   })
 })
 
+describe('canceled children do not block epic closure (#112)', () => {
+  const cancelChild = (id: number) => handleUpdateStatus(svc, { id, agent: 'dev', status: 'canceled', version: 1 })
+
+  test('nonTerminalChildCount ignores canceled children', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
+    const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
+    expect(repo.nonTerminalChildCount(epicId)).toBe(1)
+    cancelChild(subId)
+    expect(repo.nonTerminalChildCount(epicId)).toBe(0)
+  })
+
+  test('nonTerminalChildCount still counts open children when a sibling is canceled', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
+    const sub1 = json(handleCreateTask(svc, { title: 'Sub1', reporter: 'dev', epic_id: epicId })).id
+    json(handleCreateTask(svc, { title: 'Sub2', reporter: 'dev', epic_id: epicId }))
+    cancelChild(sub1)
+    expect(repo.nonTerminalChildCount(epicId)).toBe(1)
+  })
+
+  test('childStatusCounts reports canceled', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
+    const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
+    cancelChild(subId)
+    const counts = repo.childStatusCounts(epicId)
+    expect(counts.total).toBe(1)
+    expect(counts.canceled).toBe(1)
+    expect(counts.open).toBe(0)
+  })
+
+  test('epic update_status → done succeeds when only canceled children remain', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
+    const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
+    cancelChild(subId)
+    const t1 = getTaskRow(db, epicId)
+    handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'in_progress', version: t1.version })
+    const t2 = getTaskRow(db, epicId)
+    handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'review', version: t2.version })
+    const t3 = getTaskRow(db, epicId)
+    const done = json(handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'done', version: t3.version }))
+    expect(done.status).toBe('done')
+  })
+
+  test('get_task subtasks roll-up includes canceled', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
+    const sub1 = json(handleCreateTask(svc, { title: 'Sub1', reporter: 'dev', epic_id: epicId })).id
+    const sub2 = json(handleCreateTask(svc, { title: 'Sub2', reporter: 'dev', epic_id: epicId })).id
+    cancelChild(sub1)
+    driveToDone(svc, sub2, 'dev')
+    const view = json(handleGetTask(svc, { id: epicId, fields: ['subtasks'] }))
+    expect(view.subtasks.total).toBe(2)
+    expect(view.subtasks.canceled).toBe(1)
+    expect(view.subtasks.done).toBe(1)
+    expect(view.subtasks.open).toBe(0)
+    expect(view.subtasks.failed).toBe(0)
+  })
+
+  test('canceling a child writes no subtask_done/subtask_failed mirror', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
+    const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
+    cancelChild(subId)
+    const mirrors = db.query(
+      "SELECT action FROM audit_log WHERE task_id = ? AND action IN ('subtask_done', 'subtask_failed')"
+    ).all(epicId) as any[]
+    expect(mirrors.length).toBe(0)
+  })
+})
+
 describe('atomic epic promotion (#108)', () => {
   test('promoteEpicWithMirror exists on TaskStore', () => {
     expect(typeof (svc as any).store.promoteEpicWithMirror).toBe('function')

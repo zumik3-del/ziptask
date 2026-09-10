@@ -254,7 +254,7 @@ describe('maxAttempts flow', () => {
        auditAppend: () => {},
        timelineEntries: () => [],
        nonTerminalChildCount: () => 0,
-       childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0 }),
+       childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
         promoteEpicWithMirror: () => {},
        appendEpicAuditMirror: () => {}
      }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts })
@@ -287,7 +287,7 @@ describe('maxAttempts flow', () => {
        auditAppend: () => {},
        timelineEntries: () => [],
        nonTerminalChildCount: () => 0,
-       childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0 }),
+       childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
         promoteEpicWithMirror: () => {},
        appendEpicAuditMirror: () => {}
      }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts })

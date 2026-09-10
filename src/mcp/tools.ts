@@ -86,12 +86,12 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
     include: z.array(z.string()).optional()
   }, async (args) => handleClaimTask(svc, args))
 
-  server.tool('update_status', 'Transition status. Optimistic lock via version — read current version via get_task fields:["version"] (or from your claim response); on CONFLICT re-read version and retry', {
+  server.tool('update_status', 'Transition status. Optimistic lock via version — read current version via get_task fields:["version"] (or from your claim response); on CONFLICT re-read version and retry. canceled is terminal and withdraws any non-terminal task', {
     id: z.number(),
     agent: z.string(),
     status: z.enum(TASK_STATUSES),
     version: z.number(),
-    comment: z.string().optional().describe('typed resolution when done/failed')
+    comment: z.string().optional().describe('typed resolution when done/failed/canceled')
   }, async (args) => handleUpdateStatus(svc, args))
 
   server.tool('list_queue', 'Deps-satisfied queued tasks, pipe lines id|priority|title', {
