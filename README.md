@@ -10,7 +10,7 @@ One-liner — downloads a compiled binary, writes default config, prints client 
 curl -LsS https://raw.githubusercontent.com/zumik3-del/ziptask/main/scripts/install.sh | sh
 ```
 
-Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path`. Pin a version with `ZIPTASK_VERSION=0.1.1`. On systemd systems the installer provisions a background service on port 3005 (override with `--port`); skip it with `--no-service`.
+Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path`. Pin a version with `ZIPTASK_VERSION=0.1.2`. On systemd systems the installer provisions a background service on port 3005 (override with `--port`); skip it with `--no-service`. `update.sh` and `uninstall.sh` are installed into `~/.ziptask/scripts/`.
 
 ### Service mode
 
@@ -33,11 +33,13 @@ Remove with `bash ~/.ziptask/scripts/uninstall.sh` (use `--keep-data` to preserv
   "mcpServers": {
     "ziptask": {
       "command": "~/.ziptask/bin/ziptask",
-      "args": ["--stdio"]
+      "args": ["--stdio", "--settings", "~/.ziptask/settings.json"]
     }
   }
 }
 ```
+
+Pass `--settings` so the DB path and options come from `settings.json` regardless of the client's working directory — otherwise the DB defaults to `./data/ziptask.db` under the client's cwd. Some clients do not expand `~` in arguments; substitute the absolute path (the installer prints a ready-to-paste block).
 
 Upgrade path is via `bash ~/.ziptask/scripts/update.sh` — it fetches the latest release, downloads the matching binary, and restarts the systemd service when active. To pin a version, pass `--version <tag>` (the script accepts tags with or without a `v` prefix):
 
@@ -70,12 +72,25 @@ dist/ziptask --stdio     # runs as stdio MCP server
 
 ## Configuration
 
+Layered: built-in defaults → `settings.json` → environment variables (env wins).
+
+### `settings.json`
+
+An optional JSON file; `settings.example.json` shows the full shape. Every key is optional and merged over the defaults, so a partial file is valid. The installer writes `~/.ziptask/settings.json` and passes `--settings` in the systemd unit and the printed stdio config, so it is always read. Select a file with `--settings <path>` or the `ZIPTASK_SETTINGS` env var (`--settings` wins). The installer sets `dbPath` to an absolute path so stdio clients don't create the DB under their own cwd. Keys mirror the environment variables below: `dbPath`, `host`, `port`, `leaseTtlMin`, `maxAttempts`, `reapCooldownSec`, `autoClaimCeiling`, `http.maxSessions`, `http.sessionTtlMs`, `defaults.priority`, `defaults.reporter`, `defaults.listLimit`, `defaults.timelineLimit`, `defaults.queueLimit`, `logging.level`, `auditLog`.
+
+### Environment variables
+
 | Variable | Default | Description |
 |---|---|---|
 | `ZIPTASK_DB` | `./data/ziptask.db` | SQLite path (directory auto-created) |
 | `ZIPTASK_HOST` | `127.0.0.1` | HTTP listen host |
 | `ZIPTASK_PORT` | `0` (random) | HTTP listen port |
 | `ZIPTASK_LEASE_TTL_MIN` | `15` | Claim lease length in minutes |
+| `ZIPTASK_MAX_ATTEMPTS` | `3` | Attempts before a reaped task is failed (needs human) |
+| `ZIPTASK_REAP_COOLDOWN_SEC` | `60` | Minimum seconds between lease-reap sweeps on read paths |
+| `ZIPTASK_AUTO_CLAIM_CEILING` | `10000` | Max candidate rows scanned by auto-claim |
+| `ZIPTASK_HTTP_MAX_SESSIONS` | `100` | Max concurrent HTTP MCP sessions |
+| `ZIPTASK_HTTP_SESSION_TTL_MS` | `3600000` | HTTP MCP session TTL in ms |
 | `ZIPTASK_LOGGING_LEVEL` | `off` | Structured logger level — `off`, `error`, `info`, `debug`. Writes to stderr only; never stdout, so stdio MCP transport is safe. `--version` intentionally writes to stdout. |
 | `ZIPTASK_AUDIT_LOG` | `true` | Toggle audit log writes. When `false`, no new `audit_log` rows are created; `get_timeline` shows only comment rows for tasks with no historical audit data. Metrics CLI `status_time` degrades but `done_count` stays accurate (derived from `tasks`, not `audit_log`). |
 | `ZIPTASK_DEFAULTS_PRIORITY` | `p2` | Default `priority` when `create_task` omits it |
@@ -83,6 +98,11 @@ dist/ziptask --stdio     # runs as stdio MCP server
 | `ZIPTASK_DEFAULTS_LIST_LIMIT` | `50` | Fallback `limit` for `list_tasks` JSON mode |
 | `ZIPTASK_DEFAULTS_TIMELINE_LIMIT` | `50` | Fallback `limit` for `get_timeline` |
 | `ZIPTASK_DEFAULTS_QUEUE_LIMIT` | `100` | Fallback `limit` for `list_queue` |
+| `ZIPTASK_SETTINGS` | (unset) | Path to `settings.json`; `--settings` takes precedence |
+
+### Backups
+
+`bun run scripts/backup.ts` writes an online SQLite backup (`sqlite3 .backup`), compresses it to `*.db.tar.gz`, and deletes all but the newest `ZIPTASK_BACKUP_RETAIN` (default `7`). Env: `ZIPTASK_DB` (source DB, default `./data/ziptask.db`), `ZIPTASK_BACKUP_DIR` (default `./backups`), `ZIPTASK_BACKUP_PREFIX` (default `ziptask`). The update path also creates a pre-upgrade backup (see above).
 
 ## MCP tools
 

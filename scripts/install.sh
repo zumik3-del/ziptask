@@ -134,11 +134,11 @@ if [ -f "$BINARY" ] && [ "$FORCE" = false ]; then
     echo "  \"mcpServers\": {"
     echo "    \"ziptask\": {"
     echo "      \"command\": \"${BINARY}\","
-    echo "      \"args\": [\"--stdio\"]"
+    echo "      \"args\": [\"--stdio\", \"--settings\", \"${SETTINGS}\"]"
     echo "    }"
     echo "  }"
     echo ""
-    echo "Upgrade: ZIPTASK_VERSION=<tag> $(printf '%q' "$0")"
+    echo "Upgrade: bash ${HOME_DIR}/scripts/update.sh"
     exit 0
   fi
   if [ "$INSTALLED_TAG" != "unknown" ] && [ "$(printf '%s\n%s\n' "$INSTALLED_TAG" "$VERSION_NUM" | sort -V | head -n1)" = "$VERSION_NUM" ]; then
@@ -171,7 +171,7 @@ chmod +x "$BINARY"
 if [ ! -f "$SETTINGS" ]; then
   cat > "$SETTINGS" <<EOF
 {
-  "dbPath": "./data/ziptask.db",
+  "dbPath": "${HOME_DIR}/data/ziptask.db",
   "host": "127.0.0.1",
   "port": ${INSTALL_PORT},
   "leaseTtlMin": 15,
@@ -193,6 +193,28 @@ EOF
 else
   info "Preserved existing settings at ${SETTINGS}"
 fi
+
+# --- Install helper scripts ---
+
+install_helper_scripts() {
+  local scripts_dir="$HOME_DIR/scripts"
+  local base_url="https://raw.githubusercontent.com/zumik3-del/ziptask/${VERSION}/scripts"
+  mkdir -p "$scripts_dir"
+  for script in update.sh uninstall.sh; do
+    local dest="$scripts_dir/$script"
+    if command -v curl >/dev/null 2>&1; then
+      if curl -fLsS -o "$dest" "$base_url/$script" 2>/dev/null; then continue; fi
+    else
+      if wget -qO "$dest" "$base_url/$script" 2>/dev/null; then continue; fi
+    fi
+    rm -f "$dest"
+    warn "could not fetch ${script} for ${VERSION}; use the copy in the repository instead"
+  done
+  chmod +x "$scripts_dir"/*.sh 2>/dev/null || true
+  info "Installed helper scripts to ${scripts_dir}"
+}
+
+install_helper_scripts
 
 # --- Install systemd service ---
 
@@ -231,7 +253,7 @@ WorkingDirectory=${HOME_DIR}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=ZIPTASK_HOST=127.0.0.1
 Environment=ZIPTASK_PORT=${INSTALL_PORT}
-ExecStart=${BINARY}
+ExecStart=${BINARY} --settings ${SETTINGS}
 Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=60
@@ -300,7 +322,7 @@ echo ""
 echo "    \"mcpServers\": {"
 echo "      \"ziptask\": {"
 echo "        \"command\": \"${BINARY}\","
-echo "        \"args\": [\"--stdio\"]"
+echo "        \"args\": [\"--stdio\", \"--settings\", \"${SETTINGS}\"]"
 echo "      }"
 echo "    }"
 echo ""
