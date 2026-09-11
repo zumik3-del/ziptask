@@ -17,7 +17,7 @@ ziptask ships an example multi-agent workflow: one **orchestrator** (the primary
 
 ## Prerequisites
 
-- [opencode](https://opencode.ai) installed.
+- An MCP-capable agent runtime. The examples are written for [opencode](https://opencode.ai); see *Using another runtime* below.
 - ziptask connected as an MCP server (see the README **MCP client config**). Subagents drive their tasks through the tracker tools; the `git` agent uses plain `git`/`gh` instead.
 - Optional: the [`gh` CLI](https://cli.github.com) for the `git` agent on GitHub-hosted repositories.
 
@@ -35,6 +35,16 @@ ziptask ships an example multi-agent workflow: one **orchestrator** (the primary
 2. **Orchestrator rules** — `agents_examples/AGENTS.md` is a *global*-style rules file. Copy it to `~/.config/opencode/AGENTS.md`, or merge its sections into your project's root `AGENTS.md`. The orchestrator (your primary agent) reads it; subagents read the project's own `AGENTS.md`.
 
 3. Restart opencode. The subagents appear in the `@` menu and can be delegated to via the Task tool.
+
+## Using another runtime
+
+ziptask is harness-agnostic — it speaks MCP, so **any MCP-capable client** can drive the tracker. opencode is used here as the **reference runtime, not a requirement**:
+
+- The agent files embed opencode-specific frontmatter (`mode`, `permission`, `temperature`, `model`, `steps`). Porting to another runtime means rewriting that metadata block — the role prompt below the frontmatter is plain Markdown and carries over unchanged.
+- The rules in `AGENTS.md` (tracker as the only coordination channel, orchestrator-only task creation and closure, epics, git handoff, the delegation map) are runtime-independent and apply as-is.
+- The `git` agent needs only `git` (and `gh`), so it works anywhere.
+
+Keep the workflow, swap the carrier.
 
 ## Configure your stack
 
