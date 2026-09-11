@@ -91,6 +91,7 @@ bun run changelog      # rebuild CHANGELOG.md from git tags (maintainers; clean 
 - [Configuration](docs/configuration.md) — `settings.json`, environment variables, the upgrade path, and backups.
 - [MCP tools](docs/mcp-tools.md) — tool reference and task statuses.
 - [Epic → sub-task workflow](docs/epics.md) — declaring epics, attaching sub-tasks, roll-up and closure.
+- [Subagent setup](docs/subagents.md) — install and configure the example orchestrator + subagent agents.
 
 ## License
 
