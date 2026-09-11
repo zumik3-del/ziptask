@@ -51,6 +51,20 @@ try {
   await client.connect(transport)
   console.log('[smoke] MCP client connected')
 
+  const instructions = client.getInstructions()
+  assert(
+    typeof instructions === 'string' && instructions.length > 0,
+    `initialize advertises non-empty instructions (${instructions?.length ?? 0} chars)`
+  )
+  assert(
+    (instructions ?? '').includes('STATUS_CODES'),
+    `instructions carry the status-model marker: "${instructions?.slice(0, 60)}..."`
+  )
+  assert(
+    (instructions ?? '').includes('claim_task') && (instructions ?? '').includes('CONFLICT'),
+    'instructions carry the client lifecycle markers (claim_task, CONFLICT)'
+  )
+
   const created = parseToolResult(await client.callTool({
     name: 'create_task',
     arguments: { title: 'Smoke v2 task', description: 'Smoke description', reporter: 'smoke' }

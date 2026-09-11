@@ -18,6 +18,8 @@ curl -LsS https://raw.githubusercontent.com/zumik3-del/ziptask/main/scripts/inst
 
 Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path`. Pin a version with `ZIPTASK_VERSION=0.1.2`. On systemd systems the installer provisions a background service on port 3005 (override with `--port`); skip it with `--no-service`. `update.sh` and `uninstall.sh` are installed into `~/.ziptask/scripts/`.
 
+Prebuilt release binaries target Linux x86_64 only. On other platforms (macOS, arm64 Linux) build from source with `bun run build:bin`.
+
 ### Service mode
 
 When systemd is detected and running, `install.sh` creates `/etc/systemd/system/ziptask.service` (Type=simple, `Restart=on-failure`, port 3005). Manage it with:
@@ -34,7 +36,7 @@ Remove with `bash ~/.ziptask/scripts/uninstall.sh` (use `--keep-data` to preserv
 ### MCP client config (stdio)
 
 ```jsonc
-// Claude / Cursor / opencode — ~/.config/claude/settings.json or equivalent
+// Claude Desktop / Cursor / opencode — see your client's MCP config (key "mcpServers" in most)
 {
   "mcpServers": {
     "ziptask": {
@@ -91,6 +93,7 @@ bun run changelog      # rebuild CHANGELOG.md from git tags (maintainers; clean 
 - [Configuration](docs/configuration.md) — `settings.json`, environment variables, the upgrade path, and backups.
 - [MCP tools](docs/mcp-tools.md) — tool reference and task statuses.
 - [Epic → sub-task workflow](docs/epics.md) — declaring epics, attaching sub-tasks, roll-up and closure.
+- [Subagent setup](docs/subagents.md) — install and configure the example orchestrator + subagent agents.
 
 ## License
 
