@@ -13,16 +13,20 @@ MCP task tracker for AI agents. A pure state layer — statuses, dependencies, l
 One-liner — downloads a compiled binary, writes default config, prints client setup:
 
 ```bash
+# latest release
 curl -LsS https://raw.githubusercontent.com/zumik3-del/ziptask/main/scripts/install.sh | sh
+
+# pin a version (set the variable on the sh side of the pipe)
+curl -LsS https://raw.githubusercontent.com/zumik3-del/ziptask/main/scripts/install.sh | ZIPTASK_VERSION=v0.1.3 sh
 ```
 
-Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path`. Pin a version with `ZIPTASK_VERSION=0.1.2`. On systemd systems the installer provisions a background service on port 3005 (override with `--port`); skip it with `--no-service`. `update.sh` and `uninstall.sh` are installed into `~/.ziptask/scripts/`.
+Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path` (also on the `sh` side of the pipe). On systemd systems the installer provisions a background service on port 3005 (override with `--port`), using `sudo` to write the unit and start the service; if root access is unavailable it skips the service and prints the manual start command. Skip it explicitly with `--no-service`. `update.sh` and `uninstall.sh` are installed into `~/.ziptask/scripts/`.
 
 Prebuilt release binaries target Linux x86_64 only. On other platforms (macOS, arm64 Linux) build from source with `bun run build:bin`.
 
 ### Service mode
 
-When systemd is detected and running, `install.sh` creates `/etc/systemd/system/ziptask.service` (Type=simple, `Restart=on-failure`, port 3005). Manage it with:
+When systemd is detected and running, `install.sh` creates `/etc/systemd/system/ziptask.service` (Type=simple, `Restart=on-failure`, port 3005) and starts it. The unit runs as the user that invoked the installer — even under `sudo`, `SUDO_USER` is honoured, so the binary, DB and service stay under that user's home rather than root's. Manage it with:
 
 ```bash
 sudo systemctl start ziptask
@@ -40,14 +44,28 @@ Remove with `bash ~/.ziptask/scripts/uninstall.sh` (use `--keep-data` to preserv
 {
   "mcpServers": {
     "ziptask": {
-      "command": "~/.ziptask/bin/ziptask",
-      "args": ["--stdio", "--settings", "~/.ziptask/settings.json"]
+      "command": "/home/you/.ziptask/bin/ziptask",
+      "args": ["--stdio", "--settings", "/home/you/.ziptask/settings.json"]
     }
   }
 }
 ```
 
-Pass `--settings` so the DB path and options come from `settings.json` regardless of the client's working directory — otherwise the DB defaults to `./data/ziptask.db` under the client's cwd. Some clients do not expand `~` in arguments; substitute the absolute path (the installer prints a ready-to-paste block).
+Pass `--settings` so the DB path and options come from `settings.json` regardless of the client's working directory — otherwise the DB defaults to `./data/ziptask.db` under the client's cwd. Clients do not expand `~` in `command`/`args`; substitute the absolute path (the installer prints a ready-to-paste block).
+
+### MCP client config (remote HTTP)
+
+When the service is running on the same host, point the client at the HTTP endpoint instead:
+
+```jsonc
+{
+  "mcp": {
+    "ziptask": { "type": "remote", "url": "http://127.0.0.1:3005/mcp" }
+  }
+}
+```
+
+The endpoint has no authentication, so keep it bound to `127.0.0.1` (`ZIPTASK_HOST`/`settings.json`). Use a reverse proxy with auth if it must be reachable from other hosts.
 
 ## Quick start (from source)
 
