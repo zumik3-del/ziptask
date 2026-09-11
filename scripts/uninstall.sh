@@ -3,7 +3,9 @@
 # Usage: bash ~/.ziptask/scripts/uninstall.sh [--keep-data]
 set -euo pipefail
 
-HOME_DIR="${ZIPTASK_HOME:-$HOME/.ziptask}"
+HOME_DIR=""
+TARGET_USER=""
+TARGET_HOME=""
 
 info()  { echo "[ziptask] $*"; }
 warn()  { echo "[ziptask] WARNING: $*" >&2; }
@@ -22,6 +24,23 @@ run_root() {
     sudo "$@"
   fi
 }
+
+# `sudo bash uninstall.sh` runs as root: target the invoking user, not root.
+resolve_target_user() {
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    TARGET_USER="$SUDO_USER"
+  else
+    TARGET_USER="$(id -un)"
+  fi
+  TARGET_HOME=""
+  if command -v getent >/dev/null 2>&1; then
+    TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)" || true
+  fi
+  [ -n "$TARGET_HOME" ] || TARGET_HOME="$HOME"
+  HOME_DIR="${ZIPTASK_HOME:-$TARGET_HOME/.ziptask}"
+}
+
+resolve_target_user
 
 KEEP_DATA=false
 

@@ -6,16 +6,19 @@
 set -e
 
 VERSION="${ZIPTASK_VERSION:-}"
-HOME_DIR="${ZIPTASK_HOME:-$HOME/.ziptask}"
-BIN="$HOME_DIR/bin"
-BINARY="$BIN/ziptask"
-SETTINGS="$HOME_DIR/settings.json"
+HOME_DIR=""
+BIN=""
+BINARY=""
+SETTINGS=""
+TARGET_USER=""
+TARGET_HOME=""
 DB_PATH=""
 REPO_URL="https://github.com/zumik3-del/ziptask/releases"
 REPO_API="https://api.github.com/repos/zumik3-del/ziptask"
 FORCE=false
 INSTALL_PORT=3005
 NO_SERVICE=false
+SERVICE_INSTALLED=false
 
 # --- Parse arguments ---
 
@@ -43,12 +46,16 @@ parse_args() {
         echo "  --no-service     Skip systemd service installation"
         echo "  --help, -h       Show this help"
         echo ""
-        echo "Env vars:"
+        echo "Env vars (set on the sh side of the pipe):"
         echo "  ZIPTASK_VERSION   Install specific version (e.g. v0.2.0)"
         echo "  ZIPTASK_HOME      Install directory (default: ~/.ziptask)"
         echo ""
+        echo "Example:"
+        echo "  curl -LsS <install-url> | ZIPTASK_VERSION=v0.2.0 sh"
+        echo ""
         echo "Service mode (default: enabled on systemd systems):"
-        echo "  Installs /etc/systemd/system/ziptask.service"
+        echo "  Installs /etc/systemd/system/ziptask.service (uses sudo)"
+        echo "  Skipped automatically when root access is unavailable"
         echo "  Start:  sudo systemctl start ziptask"
         echo "  Stop:   sudo systemctl stop ziptask"
         echo "  Logs:   journalctl -u ziptask -f"
@@ -76,6 +83,34 @@ systemd_running() {
   state=$(systemctl is-system-running 2>&1) || true
   [ "$state" = "running" ] || [ "$state" = "degraded" ]
 }
+
+# `curl | sudo sh` runs as root: install for the invoking user, not root.
+resolve_target_user() {
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    TARGET_USER="$SUDO_USER"
+  else
+    TARGET_USER="$(id -un)"
+  fi
+  TARGET_HOME=""
+  if command -v getent >/dev/null 2>&1; then
+    TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)" || true
+  fi
+  [ -n "$TARGET_HOME" ] || TARGET_HOME="$HOME"
+  HOME_DIR="${ZIPTASK_HOME:-$TARGET_HOME/.ziptask}"
+  BIN="$HOME_DIR/bin"
+  BINARY="$BIN/ziptask"
+  SETTINGS="$HOME_DIR/settings.json"
+}
+
+run_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+resolve_target_user
 
 # --- Detect platform ---
 
@@ -156,15 +191,26 @@ URL="${REPO_URL}/download/${VERSION}/${ASSET}"
 mkdir -p "$BIN"
 info "Downloading ${ASSET} ${VERSION} ..."
 
+DL_TMP="${BIN}/.ziptask.$$.tmp"
+trap 'rm -f "$DL_TMP"' EXIT
+
 if command -v curl >/dev/null 2>&1; then
-  curl -fLsS -o "$BINARY" "$URL"
+  curl -fLsS -o "$DL_TMP" "$URL"
 elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$BINARY" "$URL"
+  wget -qO "$DL_TMP" "$URL"
 else
   error "need curl or wget"
 fi
 
-chmod +x "$BINARY"
+chmod +x "$DL_TMP"
+
+DOWNLOADED_VER="$("$DL_TMP" --version 2>/dev/null || echo "")"
+case "$DOWNLOADED_VER" in
+  "ziptask $VERSION_NUM") ;;
+  *) error "downloaded binary failed version check (got '${DOWNLOADED_VER:-nothing}', expected 'ziptask ${VERSION_NUM}')" ;;
+esac
+
+mv -f "$DL_TMP" "$BINARY"
 
 # --- Create / preserve settings ---
 
@@ -226,7 +272,7 @@ install_service() {
 
   if [ ! -d /etc/systemd/system ]; then
     info "systemd not found — skipping service installation"
-    warn "Run manually: ${BINARY} &"
+    warn "Start manually: ${BINARY}"
     return
   fi
 
@@ -236,11 +282,15 @@ install_service() {
     return
   fi
 
-  local service_file="/etc/systemd/system/ziptask.service"
-  local current_user
-  current_user=$(whoami)
+  if [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+    warn "sudo not available — skipping service installation"
+    warn "Start manually: ${BINARY}"
+    return
+  fi
 
-  cat > "$service_file" <<EOF
+  local service_file="/etc/systemd/system/ziptask.service"
+
+  if ! run_root tee "$service_file" >/dev/null <<EOF
 [Unit]
 Description=ziptask — MCP task tracker
 After=network.target
@@ -248,7 +298,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=${current_user}
+User=${TARGET_USER}
 WorkingDirectory=${HOME_DIR}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=ZIPTASK_HOST=127.0.0.1
@@ -262,11 +312,30 @@ StartLimitBurst=5
 [Install]
 WantedBy=multi-user.target
 EOF
+  then
+    warn "Could not write ${service_file} (root access required) — skipping service installation"
+    warn "Start manually: ${BINARY}"
+    return
+  fi
+  SERVICE_INSTALLED=true
 
-  info "Installed systemd unit: ${service_file}"
-  systemctl daemon-reload
-  systemctl enable ziptask 2>/dev/null || true
-  info "Enabled ziptask service"
+  if run_root systemctl daemon-reload; then
+    info "Installed systemd unit: ${service_file}"
+  else
+    warn "systemctl daemon-reload failed"
+  fi
+
+  if run_root systemctl enable ziptask >/dev/null 2>&1; then
+    info "Enabled ziptask service"
+  else
+    warn "Could not enable ziptask service"
+  fi
+
+  if run_root systemctl start ziptask >/dev/null 2>&1; then
+    info "Started ziptask service"
+  else
+    warn "Could not start ziptask service; check: journalctl -u ziptask"
+  fi
 }
 
 install_service
@@ -274,17 +343,21 @@ install_service
 # --- Verify installation ---
 
 verify_installation() {
+  if [ "$NO_SERVICE" = true ]; then
+    return
+  fi
+
   if ! systemd_running; then
     info "systemd not running — skip health check"
     return
   fi
 
-  if ! systemctl is-active ziptask &>/dev/null; then
+  if ! systemctl is-active ziptask >/dev/null 2>&1; then
     info "Service not active yet — run: sudo systemctl start ziptask"
     return
   fi
 
-  if curl -sf "http://127.0.0.1:${INSTALL_PORT}/health" &>/dev/null; then
+  if curl -sf "http://127.0.0.1:${INSTALL_PORT}/health" >/dev/null 2>&1; then
     info "Service healthy at http://127.0.0.1:${INSTALL_PORT}"
   else
     warn "Service installed but health check failed"
@@ -305,14 +378,14 @@ echo "  Settings:   ${SETTINGS}"
 echo "  Port:       ${INSTALL_PORT}"
 echo ""
 
-if systemd_running; then
+if [ "$SERVICE_INSTALLED" = true ]; then
   echo "  Service:    /etc/systemd/system/ziptask.service"
   echo "  Start:      sudo systemctl start ziptask"
   echo "  Stop:       sudo systemctl stop ziptask"
   echo "  Logs:       journalctl -u ziptask -f"
 else
-  echo "  Service:    skipped (systemd not available)"
-  echo "  Start:      ${BINARY}"
+  echo "  Service:    skipped"
+  echo "  Start:      ${BINARY} --settings ${SETTINGS}"
   echo "  Logs:       stdout"
 fi
 
@@ -326,6 +399,14 @@ echo "        \"args\": [\"--stdio\", \"--settings\", \"${SETTINGS}\"]"
 echo "      }"
 echo "    }"
 echo ""
+if [ "$SERVICE_INSTALLED" = true ]; then
+  echo "  MCP client config (remote HTTP, same host):"
+  echo ""
+  echo "    \"mcp\": {"
+  echo "      \"ziptask\": { \"type\": \"remote\", \"url\": \"http://127.0.0.1:${INSTALL_PORT}/mcp\" }"
+  echo "    }"
+  echo ""
+fi
 echo "  Upgrade:    bash ${HOME_DIR}/scripts/update.sh"
 echo "  Uninstall:  bash ${HOME_DIR}/scripts/uninstall.sh"
 echo ""

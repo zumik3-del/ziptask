@@ -3,9 +3,11 @@
 # Usage: bash ~/.ziptask/scripts/update.sh [--version <tag>]
 set -euo pipefail
 
-HOME_DIR="${ZIPTASK_HOME:-$HOME/.ziptask}"
-BIN="$HOME_DIR/bin"
-BINARY="$BIN/ziptask"
+HOME_DIR=""
+TARGET_USER=""
+TARGET_HOME=""
+BIN=""
+BINARY=""
 REPO_API="https://api.github.com/repos/zumik3-del/ziptask"
 REPO_URL="https://github.com/zumik3-del/ziptask/releases"
 VERSION=""
@@ -21,6 +23,25 @@ systemd_running() {
   state=$(systemctl is-system-running 2>&1) || true
   [ "$state" = "running" ] || [ "$state" = "degraded" ]
 }
+
+# `sudo bash update.sh` runs as root: target the invoking user, not root.
+resolve_target_user() {
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    TARGET_USER="$SUDO_USER"
+  else
+    TARGET_USER="$(id -un)"
+  fi
+  TARGET_HOME=""
+  if command -v getent >/dev/null 2>&1; then
+    TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)" || true
+  fi
+  [ -n "$TARGET_HOME" ] || TARGET_HOME="$HOME"
+  HOME_DIR="${ZIPTASK_HOME:-$TARGET_HOME/.ziptask}"
+  BIN="$HOME_DIR/bin"
+  BINARY="$BIN/ziptask"
+}
+
+resolve_target_user
 
 parse_args() {
   while [ $# -gt 0 ]; do
@@ -187,20 +208,35 @@ backup_db
 
 ASSET="ziptask-${OS}-${ARCH}"
 URL="${REPO_URL}/download/${VERSION}/${ASSET}"
+TMP_BINARY="${BIN}/.ziptask.$$.tmp"
 
 echo "[ziptask] Downloading ${ASSET} ${VERSION}..."
 mkdir -p "$BIN"
 
+trap 'rm -f "$TMP_BINARY"' EXIT
+
 if command -v curl >/dev/null 2>&1; then
-  curl -fLsS -o "$BINARY" "$URL"
+  curl -fLsS -o "$TMP_BINARY" "$URL"
 elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$BINARY" "$URL"
+  wget -qO "$TMP_BINARY" "$URL"
 else
   echo "error: need curl or wget" >&2
   exit 1
 fi
 
-chmod +x "$BINARY"
+chmod +x "$TMP_BINARY"
+
+DOWNLOADED_VER="$("$TMP_BINARY" --version 2>/dev/null || echo "")"
+case "$DOWNLOADED_VER" in
+  "ziptask ${LATEST}") ;;
+  *)
+    echo "[ziptask] error: downloaded binary failed version check (got '${DOWNLOADED_VER:-nothing}', expected 'ziptask ${LATEST}')" >&2
+    exit 1
+    ;;
+esac
+
+# Atomic swap: replaces the directory entry without truncating a running binary.
+mv -f "$TMP_BINARY" "$BINARY"
 
 # Restart service if systemd is active
 if systemd_running; then
