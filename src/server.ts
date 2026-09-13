@@ -71,6 +71,26 @@ export function startHttp(opts: StartHttpOptions) {
         return Response.json({ ok: true })
       }
 
+      // EXPERIMENTAL: provisional read-only endpoint, response shape subject to change.
+      if (req.method === 'GET' && url.pathname.startsWith('/api/task/')) {
+        const rawId = url.pathname.slice('/api/task/'.length)
+        const id = Number(rawId)
+        if (rawId.length === 0 || !Number.isInteger(id)) {
+          return Response.json({ error: 'Invalid task id' }, { status: 400 })
+        }
+        const view = svc.getTaskView(id)
+        if (!view.ok) {
+          return Response.json({ error: view.error }, { status: 404 })
+        }
+        const comments = svc.listComments(id)
+        return Response.json({
+          task: view.data.task,
+          blocked_by: view.data.blockedBy,
+          ...(view.data.subtasks !== undefined ? { subtasks: view.data.subtasks } : {}),
+          comments: comments.ok ? comments.data : []
+        })
+      }
+
       if (url.pathname !== '/mcp') {
         return new Response('Not Found', { status: 404 })
       }

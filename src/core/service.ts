@@ -1,4 +1,4 @@
-import type { Task, TaskStatus } from './tasks'
+import type { Task, TaskStatus, CommentType } from './tasks'
 import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit } from './tasks'
 
 
@@ -23,6 +23,7 @@ export interface TaskStore {
   insertComment(taskId: number, agent: string, content: string, type?: 'comment' | 'resolution'): number
   auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void
   timelineEntries(taskId: number, limit: number): TimelineRow[]
+  commentsOf(taskId: number): CommentRow[]
   nonTerminalChildCount(epicId: number): number
   childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number; canceled: number }
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void
@@ -30,6 +31,8 @@ export interface TaskStore {
 }
 
 export type TimelineRow = { type: string; agent: string; text: string; created_at: string }
+
+export type CommentRow = { id: number; agent: string; content: string; type: CommentType; created_at: string }
 
 export type SvcResult<T> = { ok: true; data: T } | { ok: false; error: string }
 
@@ -308,6 +311,13 @@ export class TaskService {
     const limitN = clampLimit(limit, this.timelineLimit)
     const rows = this.store.timelineEntries(id, limitN)
     return { ok: true, data: rows }
+  }
+
+  listComments(id: number): SvcResult<CommentRow[]> {
+    if (this._shouldReap()) this._doReap()
+    const task = this.store.getTaskRow(id)
+    if (!task) return { ok: false, error: 'NOT_FOUND' }
+    return { ok: true, data: this.store.commentsOf(id) }
   }
 
   reapExpiredLeases(): void {

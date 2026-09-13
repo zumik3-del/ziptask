@@ -1,5 +1,6 @@
 import type { Database } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
+import type { CommentRow } from '../core/service'
 
 let lastTsMs = 0
 function monotonicIso(): string {
@@ -156,6 +157,12 @@ export class TaskRepo {
       ORDER BY created_at ASC, rowid ASC
       LIMIT ${n}`
     return this.db.query(sql).all(taskId, taskId) as Array<{ type: string; agent: string; text: string; created_at: string }>
+  }
+
+  commentsOf(taskId: number): CommentRow[] {
+    return this.db.query(
+      'SELECT id, agent, content, type, created_at FROM comments WHERE task_id = ? ORDER BY created_at ASC, id ASC'
+    ).all(taskId) as CommentRow[]
   }
 
   doneCount(sinceIso: string): number {
