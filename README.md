@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Bun](https://img.shields.io/badge/bun-runtime-%23000000?logo=bun)](https://bun.sh)
 
-MCP task tracker for AI agents. A pure state layer — statuses, dependencies, leases, versioning — over SQLite, served to agents over MCP.
+MCP task tracker for AI agents — pure state layer (statuses, deps, leases, versioning) over SQLite.
 
 ![ziptask](assets/ziptask.png)
 
