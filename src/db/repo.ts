@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
-import type { CommentRow } from '../core/service'
+import type { CommentRow } from '../core/types'
 
 let lastTsMs = 0
 function monotonicIso(): string {
@@ -77,11 +77,6 @@ export class TaskRepo {
     return row?.depends_on ?? null
   }
 
-  statusOf(id: number): TaskStatus | null {
-    const row = this.db.query('SELECT status FROM tasks WHERE id = ?').get(id) as { status: TaskStatus } | null
-    return row?.status ?? null
-  }
-
   statusesOf(ids: number[]): Map<number, TaskStatus> {
     if (ids.length === 0) return new Map()
     const inClause = ids.map(() => '?').join(',')
@@ -140,11 +135,15 @@ export class TaskRepo {
     return Number(result.lastInsertRowid)
   }
 
-  auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void {
+  private _auditInsert(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void {
     this.db.run(
       'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)',
       [taskId, agent, action, oldValue ?? null, newValue ?? null, monotonicIso()]
     )
+  }
+
+  auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void {
+    this._auditInsert(taskId, agent, action, oldValue, newValue)
   }
 
   timelineEntries(taskId: number, limit: number): Array<{ type: string; agent: string; text: string; created_at: string }> {
@@ -232,19 +231,13 @@ export class TaskRepo {
     const txn = this.db.transaction(() => {
       this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
       if (auditLog) {
-        this.db.run(
-          'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, NULL, ?, ?)',
-          [id, agent, action, newValue, monotonicIso()]
-        )
+        this._auditInsert(id, agent, action, undefined, newValue)
       }
     })
     txn()
   }
 
   appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void {
-    this.db.run(
-      'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, NULL, ?, ?)',
-      [taskId, agent, action, newValue, monotonicIso()]
-    )
+    this._auditInsert(taskId, agent, action, undefined, newValue)
   }
 }

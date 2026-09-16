@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { checkCycles, depsSatisfied, parseDeps } from './core/service'
+import { checkCycles, depsSatisfied, parseDeps } from './core/deps'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
@@ -68,12 +68,12 @@ describe('deps', () => {
     handleUpdateStatus(svc, { id: id1, agent: 'dev', status: 'in_progress', version: 1 })
     handleUpdateStatus(svc, { id: id1, agent: 'dev', status: 'review', version: 2 })
     handleUpdateStatus(svc, { id: id1, agent: 'dev', status: 'done', version: 3 })
-    expect(depsSatisfied((id) => repo.statusOf(id), [id1])).toBe(true)
+    expect(depsSatisfied(repo.statusesOf([id1]), [id1])).toBe(true)
   })
 
   test('deps not satisfied when pending', () => {
     const id = createTaskRow({ title: 'Pending', reporter: 'dev' })
-    expect(depsSatisfied((id) => repo.statusOf(id), [id])).toBe(false)
+    expect(depsSatisfied(repo.statusesOf([id]), [id])).toBe(false)
   })
 
   test('queue hides tasks with unsatisfied deps', () => {
@@ -199,6 +199,6 @@ describe('corrupt depends_on tolerance (#107)', () => {
 
   test('depsSatisfied survives corrupt depends_on input', () => {
     // parseDeps is the gateway; if it returns [], depsSatisfied gets []
-    expect(depsSatisfied((id) => repo.statusOf(id), [])).toBe(true)
+    expect(depsSatisfied(repo.statusesOf([]), [])).toBe(true)
   })
 })
