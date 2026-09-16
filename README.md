@@ -1,5 +1,7 @@
 # ziptask
 
+![ziptask](assets/ziptask.png)
+
 [![CI](https://github.com/zumik3-del/ziptask/actions/workflows/ci.yml/badge.svg)](https://github.com/zumik3-del/ziptask/actions/workflows/ci.yml)
 [![Coverage Status](https://coveralls.io/repos/github/zumik3-del/ziptask/badge.svg?branch=main)](https://coveralls.io/github/zumik3-del/ziptask?branch=main)
 [![GitHub Release](https://img.shields.io/github/v/release/zumik3-del/ziptask?label=latest)](https://github.com/zumik3-del/ziptask/releases)
