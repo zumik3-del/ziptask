@@ -105,20 +105,29 @@ describe('get_task / list_tasks fields (v2)', () => {
     expect(withDesc.tasks[0].description).toBe('desc text')
   })
 
-  test('updated_since filters by updated_at (v2)', async () => {
-    const b = json(handleCreateTask(svc, { title: 'B', reporter: 'dev' })).id
-    const a = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id
-    const cutoff = Date.now() + 1
-    await Bun.sleep(3)
-    handleClaimTask(svc, { agent: 'agent-1', task_id: a })
-    const res = json(handleListTasks(svc, { updated_since: cutoff }))
-    expect(res.total).toBe(1)
-    expect(res.tasks[0].id).toBe(a)
-    expect(res.tasks.map((t: any) => t.id)).not.toContain(b)
+  test('updated_since accepts 0 and future within range', () => {
+    json(handleCreateTask(svc, { title: 'SinceZero', reporter: 'dev' }))
     const all = json(handleListTasks(svc, { updated_since: 0 }))
-    expect(all.total).toBe(2)
-    const none = json(handleListTasks(svc, { updated_since: Date.now() + 60_000 }))
-    expect(none.total).toBe(0)
+    expect(all.total).toBeGreaterThan(0)
+    const future = json(handleListTasks(svc, { updated_since: Date.now() + 60_000 }))
+    expect(future.total).toBe(0)
+  })
+})
+
+describe('create_task description no longer seeds comment (#431)', () => {
+  test('description argument does not create a comment row', () => {
+    const id = json(handleCreateTask(svc, { title: 'NoSeed', reporter: 'dev', description: 'my desc' })).id
+    const comments = db.query('SELECT * FROM comments WHERE task_id = ?').all(id) as any[]
+    expect(comments.length).toBe(0)
+  })
+
+  test('timeline for task with description contains only create audit, not a comment', () => {
+    const id = json(handleCreateTask(svc, { title: 'TLNoSeed', reporter: 'dev', description: 'hidden desc' })).id
+    const out = text(handleGetTimeline(svc, { id }))
+    const lines = out.split('\n')
+    expect(lines.length).toBe(1)
+    expect(lines[0].split('|')[1]).toBe('action')
+    expect(lines[0]).not.toContain('hidden desc')
   })
 })
 

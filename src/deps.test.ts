@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { checkCycles, depsSatisfied, parseDeps } from './core/service'
+import { checkCycles, depsSatisfied, parseDeps } from './core/deps'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
@@ -68,12 +68,12 @@ describe('deps', () => {
     handleUpdateStatus(svc, { id: id1, agent: 'dev', status: 'in_progress', version: 1 })
     handleUpdateStatus(svc, { id: id1, agent: 'dev', status: 'review', version: 2 })
     handleUpdateStatus(svc, { id: id1, agent: 'dev', status: 'done', version: 3 })
-    expect(depsSatisfied((id) => repo.statusOf(id), [id1])).toBe(true)
+    expect(depsSatisfied(repo.statusesOf([id1]), [id1])).toBe(true)
   })
 
   test('deps not satisfied when pending', () => {
     const id = createTaskRow({ title: 'Pending', reporter: 'dev' })
-    expect(depsSatisfied((id) => repo.statusOf(id), [id])).toBe(false)
+    expect(depsSatisfied(repo.statusesOf([id]), [id])).toBe(false)
   })
 
   test('queue hides tasks with unsatisfied deps', () => {
@@ -199,6 +199,32 @@ describe('corrupt depends_on tolerance (#107)', () => {
 
   test('depsSatisfied survives corrupt depends_on input', () => {
     // parseDeps is the gateway; if it returns [], depsSatisfied gets []
-    expect(depsSatisfied((id) => repo.statusOf(id), [])).toBe(true)
+    expect(depsSatisfied(repo.statusesOf([]), [])).toBe(true)
+  })
+})
+
+describe('queuedCandidates id tie-break (#431)', () => {
+  test('same priority + same created_at orders by ascending id', () => {
+    // Insert tasks with explicit same created_at to test tie-break
+    const baseTime = '2020-01-01T00:00:00.000Z'
+    const idA = repo.insertTask({ title: 'A', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: baseTime })
+    const idB = repo.insertTask({ title: 'B', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: baseTime })
+    const idC = repo.insertTask({ title: 'C', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: baseTime })
+    // Set same created_at
+    db.run("UPDATE tasks SET created_at = ? WHERE id IN (?, ?, ?)", [baseTime, idA, idB, idC])
+
+    const candidates = repo.queuedCandidates(10)
+    // Should order by id ASC when priority and created_at are equal
+    expect(candidates.map((t: any) => t.id)).toEqual([idA, idB, idC])
+  })
+
+  test('priority still takes precedence over id tie-break', () => {
+    const p0id = repo.insertTask({ title: 'P0', description: null, priority: 'p0', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
+    const p2id = repo.insertTask({ title: 'P2', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
+    db.run("UPDATE tasks SET created_at = '2020-01-01T00:00:00.000Z' WHERE id IN (?, ?)", [p0id, p2id])
+
+    const candidates = repo.queuedCandidates(10)
+    expect(candidates[0].id).toBe(p0id)
+    expect(candidates[1].id).toBe(p2id)
   })
 })

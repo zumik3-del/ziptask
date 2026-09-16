@@ -71,3 +71,66 @@ describe('metrics canceled (#112)', () => {
     expect(out).toContain('canceled_count|1')
   })
 })
+
+describe('computeMetrics period validation (#431)', () => {
+  test('period=0 throws RangeError', () => {
+    expect(() => computeMetrics(repo, 0)).toThrow(/period must be a positive number/)
+  })
+
+  test('period=negative throws RangeError', () => {
+    expect(() => computeMetrics(repo, -1)).toThrow(/period must be a positive number/)
+  })
+
+  test('period=NaN throws RangeError', () => {
+    expect(() => computeMetrics(repo, Number.NaN)).toThrow(/period must be a positive number/)
+  })
+
+  test('period=Infinity throws RangeError', () => {
+    expect(() => computeMetrics(repo, Number.POSITIVE_INFINITY)).toThrow(/period must be a positive number/)
+  })
+
+  test('period="all" works', () => {
+    const m = computeMetrics(repo, 'all')
+    expect(m).toHaveProperty('doneCount')
+    expect(m).toHaveProperty('canceledCount')
+  })
+
+  test('period=positive number works', () => {
+    const m = computeMetrics(repo, 24)
+    expect(m).toHaveProperty('doneCount')
+    expect(m).toHaveProperty('canceledCount')
+  })
+
+  test('period=undefined uses default 24h', () => {
+    const m = computeMetrics(repo)
+    expect(m).toHaveProperty('doneCount')
+  })
+})
+
+describe('auditLogCount (#431)', () => {
+  test('returns 0 for empty audit_log', () => {
+    expect(repo.auditLogCount()).toBe(0)
+  })
+
+  test('returns correct count after operations', () => {
+    json(handleCreateTask(svc, { title: 'Count1', reporter: 'dev' }))
+    json(handleCreateTask(svc, { title: 'Count2', reporter: 'dev' }))
+    expect(repo.auditLogCount()).toBe(2)
+    handleClaimTask(svc, { agent: 'dev', task_id: 1 })
+    expect(repo.auditLogCount()).toBe(3)
+  })
+})
+
+describe('metrics CLI empty audit_log warning (#431)', () => {
+  test('stderr warning when audit_log is empty', () => {
+    const dbPath = (db as any).__path as string
+    const script = join(import.meta.dir, '..', 'scripts', 'metrics.ts')
+    const proc = Bun.spawnSync({
+      cmd: ['bun', 'run', script, '--db', dbPath, '--period', 'all'],
+      cwd: join(import.meta.dir, '..')
+    })
+    const err = proc.stderr.toString()
+    expect(err).toContain('Warning: audit_log is empty')
+    expect(proc.exitCode).toBe(0)
+  })
+})

@@ -1,40 +1,7 @@
-import type { Task, TaskStatus, CommentType } from './tasks'
+import type { Task, TaskStatus } from './tasks'
 import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit } from './tasks'
-
-
-export interface TaskStore {
-  getTaskRow(id: number): Task | null
-   insertTask(t: { title: string; description: string | null; priority: string;
-     assignee: string | null; reporter: string; depends_on: string; now: string; maxAttempts?: number
-     epicId?: number; isEpic?: number }): number
-  deleteTask(id: number): void
-  listTasks(f: { assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number })
-    : { rows: Task[]; total: number }
-  queuedCandidates(limit?: number, offset?: number): Task[]
-  depsOf(id: number): string | null
-  statusOf(id: number): TaskStatus | null
-  statusesOf(ids: number[]): Map<number, TaskStatus>
-  batchTasks(ids: number[]): Map<number, Task | null>
-  markClaimed(id: number, expectedVersion: number, agent: string, leaseUntil: string, now: string): number
-  transitionStatus(id: number, expectedVersion: number, status: TaskStatus,
-    now: string, completedAt: string | null): void
-  expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>>
-  reapSettle(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number
-  insertComment(taskId: number, agent: string, content: string, type?: 'comment' | 'resolution'): number
-  auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void
-  timelineEntries(taskId: number, limit: number): TimelineRow[]
-  commentsOf(taskId: number): CommentRow[]
-  nonTerminalChildCount(epicId: number): number
-  childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number; canceled: number }
-  promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void
-  appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void
-}
-
-export type TimelineRow = { type: string; agent: string; text: string; created_at: string }
-
-export type CommentRow = { id: number; agent: string; content: string; type: CommentType; created_at: string }
-
-export type SvcResult<T> = { ok: true; data: T } | { ok: false; error: string }
+import type { TaskStore, TimelineRow, CommentRow, SvcResult } from './types'
+import { parseDeps, checkCycles, depsSatisfied } from './deps'
 
 export class TaskService {
   private readonly leaseTtlMin: number
@@ -65,11 +32,15 @@ export class TaskService {
     this.queueLimit = opts?.queueLimit ?? 100
   }
 
-  private _shouldReap(force = false): boolean {
-    if (force) return true
-    const nowMs = Date.now()
-    return nowMs - this.lastReapAt >= this.reapCooldownSec * 1000
+  private _shouldReap(): boolean {
+    return Date.now() - this.lastReapAt >= this.reapCooldownSec * 1000
   }
+
+  private _reapIfStale(): void {
+    if (this._shouldReap()) this._doReap()
+  }
+
+  // claimTask, updateStatus and reapExpiredLeases deliberately bypass the cooldown via _doReap().
 
   private _doReap(): void {
     const now = nowIso()
@@ -87,6 +58,8 @@ export class TaskService {
     title: string; description?: string; priority?: string; assignee?: string
     depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
   }): SvcResult<{ id: number; status: 'queued' }> {
+    if (!a.title.trim()) return { ok: false, error: 'INVALID: title required' }
+    if (a.title.length > 200) return { ok: false, error: 'INVALID: title too long' }
     const deps = a.depends_on ?? []
     const reporter = a.reporter ?? this.defaultReporter
     const now = nowIso()
@@ -138,7 +111,6 @@ export class TaskService {
       return { ok: false, error: 'CYCLE: dependency graph contains a cycle' }
     }
     if (this.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
-    if (a.description) this.store.insertComment(id, reporter, a.description)
 
     // D2: auto-promote target epic and D6: mirror subtask_add (atomic)
     if (epicId !== null) {
@@ -150,7 +122,7 @@ export class TaskService {
   }
 
   getTaskView(id: number): SvcResult<{ task: Task; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number; canceled: number } }> {
-    if (this._shouldReap()) this._doReap()
+    this._reapIfStale()
     const task = this.store.getTaskRow(id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     const deps = parseDeps(task.depends_on)
@@ -170,7 +142,7 @@ export class TaskService {
   }
 
   listTasks(a: { assignee?: string; status?: string; updated_since?: number; epic_id?: number; limit?: number; ids?: number[] }): { tasks: Task[]; total: number } | { items: Array<{ id: number; task: Task | null }>; total: number } {
-    if (this._shouldReap()) this._doReap()
+    this._reapIfStale()
     if (a.ids !== undefined && a.ids.length > 0) {
       const batch = this.store.batchTasks(a.ids)
       return {
@@ -198,7 +170,7 @@ export class TaskService {
       if (task.status !== 'queued' && task.status !== 'blocked') return { ok: false, error: `CONFLICT: status=${task.status}` }
       if (task.is_epic === 1) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }
       const deps = parseDeps(task.depends_on)
-      if (!depsSatisfied((id) => this.store.statusOf(id), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
+      if (!depsSatisfied(this.store.statusesOf(deps), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
     } else {
       const BATCH = 100
       const depCache = new Map<number, number[]>()
@@ -214,12 +186,7 @@ export class TaskService {
         }
         const depStatuses = this.store.statusesOf(Array.from(allDeps))
         for (const row of page) {
-          const deps = depCache.get(row.id)!
-          const satisfied = deps.every(d => {
-            const s = depStatuses.get(d)
-            return s && TERMINAL_STATUSES.includes(s)
-          })
-          if (satisfied) { task = row; break }
+          if (depsSatisfied(depStatuses, depCache.get(row.id)!)) { task = row; break }
         }
         if (task) break
         offset += BATCH
@@ -238,6 +205,7 @@ export class TaskService {
   }
 
   updateStatus(a: { id: number; agent: string; status: TaskStatus; version: number; comment?: string }): SvcResult<{ id: number; status: TaskStatus; version: number }> {
+    if (!a.agent.trim()) return { ok: false, error: 'INVALID: agent required' }
     this._doReap()
     const task = this.store.getTaskRow(a.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
@@ -254,7 +222,8 @@ export class TaskService {
 
     const now = nowIso()
     const completedAt = TERMINAL_STATUSES.includes(a.status) ? now : null
-    this.store.transitionStatus(a.id, a.version, a.status, now, completedAt)
+    const leaseUntil = a.status === 'in_progress' ? new Date(Date.now() + this.leaseTtlMin * 60_000).toISOString() : null
+    this.store.transitionStatus(a.id, a.version, a.status, now, completedAt, leaseUntil)
     const updated = this.store.getTaskRow(a.id)
     if (!updated || updated.version !== task.version + 1) return { ok: false, error: 'CONFLICT: concurrent modification' }
     if (this.auditLog) this.store.auditAppend(a.id, a.agent, 'update_status', task.status, a.status)
@@ -277,7 +246,7 @@ export class TaskService {
   }
 
   listQueue(a: { limit?: number }): Task[] {
-    if (this._shouldReap()) this._doReap()
+    this._reapIfStale()
     const limit = clampLimit(a.limit, this.queueLimit)
     const rows = this.store.queuedCandidates(limit)
     const allDeps = new Set<number>()
@@ -285,17 +254,11 @@ export class TaskService {
       for (const dep of parseDeps(row.depends_on)) allDeps.add(dep)
     }
     const depStatuses = this.store.statusesOf(Array.from(allDeps))
-    return rows.filter(row => {
-      const deps = parseDeps(row.depends_on)
-      return deps.every(d => {
-        const s = depStatuses.get(d)
-        return s && TERMINAL_STATUSES.includes(s)
-      })
-    })
+    return rows.filter(row => depsSatisfied(depStatuses, parseDeps(row.depends_on)))
   }
 
   addComment(a: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
-    if (this._shouldReap()) this._doReap()
+    this._reapIfStale()
     const task = this.store.getTaskRow(a.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     if (!a.agent.trim()) return { ok: false, error: 'EMPTY: agent required' }
@@ -305,7 +268,7 @@ export class TaskService {
   }
 
   getTimeline(id: number, limit?: number): SvcResult<TimelineRow[]> {
-    if (this._shouldReap()) this._doReap()
+    this._reapIfStale()
     const task = this.store.getTaskRow(id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     const limitN = clampLimit(limit, this.timelineLimit)
@@ -314,7 +277,7 @@ export class TaskService {
   }
 
   listComments(id: number): SvcResult<CommentRow[]> {
-    if (this._shouldReap()) this._doReap()
+    this._reapIfStale()
     const task = this.store.getTaskRow(id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     return { ok: true, data: this.store.commentsOf(id) }
@@ -323,41 +286,4 @@ export class TaskService {
   reapExpiredLeases(): void {
     this._doReap()
   }
-}
-
-export function parseDeps(raw: string): number[] {
-  let parsed: unknown
-  try { parsed = JSON.parse(raw) } catch { return [] }
-  if (Array.isArray(parsed)) return parsed.filter((x): x is number => typeof x === 'number')
-  return []
-}
-
-export function checkCycles(depsOf: (id: number) => string | null, taskId: number, dependsOn: number[]): boolean {
-  if (dependsOn.length === 0) return false
-  const visited = new Set<number>()
-  const stack = [...dependsOn]
-
-  while (stack.length > 0) {
-    const current = stack.pop()!
-    if (current === taskId) return true
-    if (visited.has(current)) continue
-    visited.add(current)
-
-    const raw = depsOf(current)
-    if (!raw) continue
-    const deps = parseDeps(raw)
-    for (const dep of deps) {
-      if (!visited.has(dep)) stack.push(dep)
-    }
-  }
-  return false
-}
-
-export function depsSatisfied(statusOf: (id: number) => TaskStatus | null, dependsOn: number[]): boolean {
-  if (dependsOn.length === 0) return true
-  for (const depId of dependsOn) {
-    const status = statusOf(depId)
-    if (!status || !TERMINAL_STATUSES.includes(status)) return false
-  }
-  return true
 }

@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
-import type { CommentRow } from '../core/service'
+import type { CommentRow } from '../core/types'
 
 let lastTsMs = 0
 function monotonicIso(): string {
@@ -67,7 +67,7 @@ export class TaskRepo {
     const o = Math.max(0, Math.floor(offset ?? 0))
     return this.db.query(
       `SELECT * FROM tasks WHERE status = 'queued' AND is_epic = 0
-       ORDER BY CASE priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 WHEN 'p3' THEN 3 END, created_at ASC
+       ORDER BY CASE priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 WHEN 'p3' THEN 3 END, created_at ASC, id ASC
        LIMIT ${n} OFFSET ${o}`
     ).all() as Task[]
   }
@@ -75,11 +75,6 @@ export class TaskRepo {
   depsOf(id: number): string | null {
     const row = this.db.query('SELECT depends_on FROM tasks WHERE id = ?').get(id) as { depends_on: string } | null
     return row?.depends_on ?? null
-  }
-
-  statusOf(id: number): TaskStatus | null {
-    const row = this.db.query('SELECT status FROM tasks WHERE id = ?').get(id) as { status: TaskStatus } | null
-    return row?.status ?? null
   }
 
   statusesOf(ids: number[]): Map<number, TaskStatus> {
@@ -108,13 +103,14 @@ export class TaskRepo {
     return Number(result.changes)
   }
 
-  transitionStatus(id: number, expectedVersion: number, status: TaskStatus, now: string, completedAt: string | null): void {
+  transitionStatus(id: number, expectedVersion: number, status: TaskStatus, now: string, completedAt: string | null, leaseUntilIso: string | null): void {
     this.db.run(
       `UPDATE tasks SET status = ?, version = version + 1, updated_at = ?,
          completed_at = COALESCE(?, completed_at),
-         lease_expires_at = CASE WHEN ? = 'canceled' THEN NULL ELSE lease_expires_at END
+         lease_expires_at = CASE WHEN ? = 'in_progress' THEN ? WHEN ? = 'canceled' THEN NULL ELSE lease_expires_at END,
+         assignee = CASE WHEN ? = 'canceled' THEN NULL ELSE assignee END
        WHERE id = ? AND version = ?`,
-      [status, now, completedAt, status, id, expectedVersion]
+      [status, now, completedAt, status, leaseUntilIso, status, status, id, expectedVersion]
     )
   }
 
@@ -126,8 +122,8 @@ export class TaskRepo {
 
   reapSettle(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number {
     const result = this.db.run(
-      'UPDATE tasks SET status = ?, lease_expires_at = NULL, attempts = ?, version = version + 1, updated_at = ?, completed_at = CASE WHEN ? = ? THEN ? ELSE completed_at END WHERE id = ? AND status = \'in_progress\' AND version = ?',
-      [status, attempts, now, status, 'failed', now, id, expectedVersion]
+      'UPDATE tasks SET status = ?, lease_expires_at = NULL, assignee = CASE WHEN ? = \'queued\' THEN NULL ELSE assignee END, attempts = ?, version = version + 1, updated_at = ?, completed_at = CASE WHEN ? = ? THEN ? ELSE completed_at END WHERE id = ? AND status = \'in_progress\' AND version = ?',
+      [status, status, attempts, now, status, 'failed', now, id, expectedVersion]
     )
     return Number(result.changes)
   }
@@ -140,11 +136,15 @@ export class TaskRepo {
     return Number(result.lastInsertRowid)
   }
 
-  auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void {
+  private _auditInsert(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void {
     this.db.run(
       'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)',
       [taskId, agent, action, oldValue ?? null, newValue ?? null, monotonicIso()]
     )
+  }
+
+  auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void {
+    this._auditInsert(taskId, agent, action, oldValue, newValue)
   }
 
   timelineEntries(taskId: number, limit: number): Array<{ type: string; agent: string; text: string; created_at: string }> {
@@ -176,6 +176,11 @@ export class TaskRepo {
     const row = this.db.query(
       "SELECT COUNT(*) as cnt FROM tasks WHERE status = 'canceled' AND is_epic = 0 AND completed_at >= ?"
     ).get(sinceIso) as { cnt: number }
+    return row.cnt
+  }
+
+  auditLogCount(): number {
+    const row = this.db.query('SELECT COUNT(*) as cnt FROM audit_log').get() as { cnt: number }
     return row.cnt
   }
 
@@ -232,19 +237,13 @@ export class TaskRepo {
     const txn = this.db.transaction(() => {
       this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
       if (auditLog) {
-        this.db.run(
-          'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, NULL, ?, ?)',
-          [id, agent, action, newValue, monotonicIso()]
-        )
+        this._auditInsert(id, agent, action, undefined, newValue)
       }
     })
     txn()
   }
 
   appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void {
-    this.db.run(
-      'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, NULL, ?, ?)',
-      [taskId, agent, action, newValue, monotonicIso()]
-    )
+    this._auditInsert(taskId, agent, action, undefined, newValue)
   }
 }

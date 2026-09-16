@@ -14,6 +14,9 @@ export interface MetricsStore {
 }
 
 export function computeMetrics(store: MetricsStore, period?: number | 'all'): MetricsResult {
+  if (period !== undefined && period !== 'all' && (!Number.isFinite(period) || period <= 0)) {
+    throw new RangeError('period must be a positive number of hours or "all"')
+  }
   const now = nowIso()
   const periodHours = period === 'all' ? 0 : (period ?? 24)
   const since = periodHours === 0 ? '0001-01-01T00:00:00.000Z' : new Date(Date.now() - periodHours * 3600_000).toISOString()

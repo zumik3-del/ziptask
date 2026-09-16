@@ -3,6 +3,8 @@ import { openDatabase } from './db/db'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { startHttp } from './server'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -51,7 +53,7 @@ describe('GET /api/task/:id HTTP endpoint', () => {
     expect(Array.isArray(body.blocked_by)).toBe(true)
     expect(body.blocked_by).toEqual([])
     expect(Array.isArray(body.comments)).toBe(true)
-    expect(body.comments.length).toBeGreaterThanOrEqual(1)
+    expect(body.comments.length).toBe(0)
   })
 
   test('comments are in chronological order with expected shape', async () => {
@@ -62,18 +64,15 @@ describe('GET /api/task/:id HTTP endpoint', () => {
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/${id}`)
     expect(res.status).toBe(200)
     const body = await res.json() as any
-    expect(body.comments.length).toBe(3)
-    expect(body.comments[0].content).toBe('initial desc')
-    expect(body.comments[0].agent).toBe('dev')
+    expect(body.comments.length).toBe(2)
+    expect(body.comments[0].content).toBe('first comment')
+    expect(body.comments[0].agent).toBe('alice')
     expect(body.comments[0].type).toBe('comment')
     expect(body.comments[0]).toHaveProperty('id')
     expect(body.comments[0]).toHaveProperty('created_at')
-    expect(body.comments[1].content).toBe('first comment')
-    expect(body.comments[1].agent).toBe('alice')
-    expect(body.comments[2].content).toBe('second comment')
-    expect(body.comments[2].agent).toBe('bob')
+    expect(body.comments[1].content).toBe('second comment')
+    expect(body.comments[1].agent).toBe('bob')
     expect(new Date(body.comments[0].created_at) <= new Date(body.comments[1].created_at)).toBe(true)
-    expect(new Date(body.comments[1].created_at) <= new Date(body.comments[2].created_at)).toBe(true)
   })
 
   test('resolution comment type is preserved', async () => {
@@ -160,5 +159,48 @@ describe('GET /api/task/:id HTTP endpoint', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as any
     expect(body.blocked_by).toEqual([])
+  })
+})
+
+describe('MCP schema guards (#431)', () => {
+  let srv: ReturnType<typeof makeServer>
+  let client: Client
+
+  beforeEach(async () => {
+    srv = makeServer()
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${srv.port}/mcp`))
+    client = new Client({ name: 'schema-guard-test', version: '1.0.0' })
+    await client.connect(transport)
+  })
+
+  afterEach(async () => {
+    try { await client.close() } catch {}
+    srv.stop()
+  })
+
+  test('updated_since out of zod range is rejected by MCP layer', async () => {
+    const tooHigh = await client.callTool({
+      name: 'list_tasks',
+      arguments: { updated_since: 8.64e15 + 1 }
+    })
+    expect(tooHigh.isError).toBe(true)
+
+    const tooLow = await client.callTool({
+      name: 'list_tasks',
+      arguments: { updated_since: -8.64e15 - 1 }
+    })
+    expect(tooLow.isError).toBe(true)
+  })
+
+  test('updated_since 0 and in-range future are accepted by MCP layer', async () => {
+    await client.callTool({
+      name: 'create_task',
+      arguments: { title: 'SinceTest', reporter: 'dev' }
+    })
+    const all = await client.callTool({ name: 'list_tasks', arguments: { updated_since: 0 } })
+    expect((all as any).content[0].text).not.toBeNull()
+
+    const future = await client.callTool({ name: 'list_tasks', arguments: { updated_since: Date.now() + 60_000 } })
+    expect((future as any).content[0].text).toContain('0')
   })
 })

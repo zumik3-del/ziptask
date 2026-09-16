@@ -7,6 +7,7 @@ import commentFailureTemplate from '../../templates/comment-failure.md' with { t
 import type { Task, TaskStatus, TaskPriority } from '../core/tasks'
 import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT } from '../core/tasks'
 import type { TaskService } from '../core/service'
+import type { SvcResult } from '../core/types'
 
 const TEMPLATE_NAMES = ['task', 'epic', 'comment-success', 'comment-failure'] as const
 type TemplateName = typeof TEMPLATE_NAMES[number]
@@ -42,6 +43,10 @@ function errorResult(msg: string): ToolResult {
   return { content: [{ type: 'text', text: msg }], isError: true }
 }
 
+function wrap<T>(r: SvcResult<T>): ToolResult {
+  return r.ok ? jsonResult(r.data) : errorResult(r.error)
+}
+
 function pickFields(src: Task, fields: string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const f of fields) {
@@ -75,7 +80,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
     status: z.string().optional(),
     fields: z.array(z.string()).optional(),
     limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional(),
-    updated_since: z.number().optional(),
+    updated_since: z.number().finite().min(-8.64e15).max(8.64e15).optional(),
     epic_id: z.number().optional(),
     ids: z.array(z.number()).optional()
   }, async (args) => handleListTasks(svc, args))
@@ -124,8 +129,7 @@ export function handleCreateTask(svc: TaskService, args: {
   epic?: boolean
   epic_id?: number
 }): ToolResult {
-  const r = svc.createTask(args)
-  return r.ok ? jsonResult(r.data) : errorResult(r.error)
+  return wrap(svc.createTask(args))
 }
 
 export function handleGetTask(svc: TaskService, args: { id: number; fields?: string[] }): ToolResult {
@@ -189,8 +193,7 @@ export function handleUpdateStatus(svc: TaskService, args: {
   version: number
   comment?: string
 }): ToolResult {
-  const r = svc.updateStatus(args)
-  return r.ok ? jsonResult(r.data) : errorResult(r.error)
+  return wrap(svc.updateStatus(args))
 }
 
 export function handleListQueue(svc: TaskService, args: { limit?: number }): ToolResult {
@@ -200,8 +203,7 @@ export function handleListQueue(svc: TaskService, args: { limit?: number }): Too
 }
 
 export function handleAddComment(svc: TaskService, args: { id: number; agent: string; content: string }): ToolResult {
-  const r = svc.addComment(args)
-  return r.ok ? jsonResult(r.data) : errorResult(r.error)
+  return wrap(svc.addComment(args))
 }
 
 export function handleGetTimeline(svc: TaskService, args: { id: number; limit?: number }): ToolResult {

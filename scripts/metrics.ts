@@ -25,6 +25,9 @@ if (periodRaw === 'all') {
 const db = openDatabase(dbPath)
 try {
   const repo = new TaskRepo(db)
+  if (repo.auditLogCount() === 0) {
+    console.error('Warning: audit_log is empty — status_time/bottleneck may be incomplete')
+  }
   const m = computeMetrics(repo, period)
   const lines: string[] = [`done_count|${m.doneCount}`, `canceled_count|${m.canceledCount}`]
   for (const [status, mins] of Object.entries(m.statusTime).sort()) {

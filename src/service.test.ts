@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { nowIso, clampLimit, MAX_RESULT_LIMIT } from './core/tasks'
-import type { TaskStore } from './core/service'
+import type { TaskStore } from './core/types'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { computeMetrics } from './core/metrics'
@@ -99,7 +99,6 @@ describe('reap cooldown (#104)', () => {
       listTasks: () => ({ rows: [], total: 0 }),
       queuedCandidates: () => [],
       depsOf: () => null,
-      statusOf: () => null,
       statusesOf: () => new Map(),
       batchTasks: () => new Map(),
       markClaimed: () => 0,
