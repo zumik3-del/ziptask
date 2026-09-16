@@ -67,7 +67,7 @@ export class TaskRepo {
     const o = Math.max(0, Math.floor(offset ?? 0))
     return this.db.query(
       `SELECT * FROM tasks WHERE status = 'queued' AND is_epic = 0
-       ORDER BY CASE priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 WHEN 'p3' THEN 3 END, created_at ASC
+       ORDER BY CASE priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 WHEN 'p3' THEN 3 END, created_at ASC, id ASC
        LIMIT ${n} OFFSET ${o}`
     ).all() as Task[]
   }
@@ -103,13 +103,14 @@ export class TaskRepo {
     return Number(result.changes)
   }
 
-  transitionStatus(id: number, expectedVersion: number, status: TaskStatus, now: string, completedAt: string | null): void {
+  transitionStatus(id: number, expectedVersion: number, status: TaskStatus, now: string, completedAt: string | null, leaseUntilIso: string | null): void {
     this.db.run(
       `UPDATE tasks SET status = ?, version = version + 1, updated_at = ?,
          completed_at = COALESCE(?, completed_at),
-         lease_expires_at = CASE WHEN ? = 'canceled' THEN NULL ELSE lease_expires_at END
+         lease_expires_at = CASE WHEN ? = 'in_progress' THEN ? WHEN ? = 'canceled' THEN NULL ELSE lease_expires_at END,
+         assignee = CASE WHEN ? = 'canceled' THEN NULL ELSE assignee END
        WHERE id = ? AND version = ?`,
-      [status, now, completedAt, status, id, expectedVersion]
+      [status, now, completedAt, status, leaseUntilIso, status, status, id, expectedVersion]
     )
   }
 
@@ -121,8 +122,8 @@ export class TaskRepo {
 
   reapSettle(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number {
     const result = this.db.run(
-      'UPDATE tasks SET status = ?, lease_expires_at = NULL, attempts = ?, version = version + 1, updated_at = ?, completed_at = CASE WHEN ? = ? THEN ? ELSE completed_at END WHERE id = ? AND status = \'in_progress\' AND version = ?',
-      [status, attempts, now, status, 'failed', now, id, expectedVersion]
+      'UPDATE tasks SET status = ?, lease_expires_at = NULL, assignee = CASE WHEN ? = \'queued\' THEN NULL ELSE assignee END, attempts = ?, version = version + 1, updated_at = ?, completed_at = CASE WHEN ? = ? THEN ? ELSE completed_at END WHERE id = ? AND status = \'in_progress\' AND version = ?',
+      [status, status, attempts, now, status, 'failed', now, id, expectedVersion]
     )
     return Number(result.changes)
   }
@@ -175,6 +176,11 @@ export class TaskRepo {
     const row = this.db.query(
       "SELECT COUNT(*) as cnt FROM tasks WHERE status = 'canceled' AND is_epic = 0 AND completed_at >= ?"
     ).get(sinceIso) as { cnt: number }
+    return row.cnt
+  }
+
+  auditLogCount(): number {
+    const row = this.db.query('SELECT COUNT(*) as cnt FROM audit_log').get() as { cnt: number }
     return row.cnt
   }
 

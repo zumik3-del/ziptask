@@ -14,7 +14,7 @@ export interface TaskStore {
   batchTasks(ids: number[]): Map<number, Task | null>
   markClaimed(id: number, expectedVersion: number, agent: string, leaseUntil: string, now: string): number
   transitionStatus(id: number, expectedVersion: number, status: TaskStatus,
-    now: string, completedAt: string | null): void
+    now: string, completedAt: string | null, leaseUntilIso: string | null): void
   expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>>
   reapSettle(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number
   insertComment(taskId: number, agent: string, content: string, type?: 'comment' | 'resolution'): number

@@ -58,6 +58,8 @@ export class TaskService {
     title: string; description?: string; priority?: string; assignee?: string
     depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
   }): SvcResult<{ id: number; status: 'queued' }> {
+    if (!a.title.trim()) return { ok: false, error: 'INVALID: title required' }
+    if (a.title.length > 200) return { ok: false, error: 'INVALID: title too long' }
     const deps = a.depends_on ?? []
     const reporter = a.reporter ?? this.defaultReporter
     const now = nowIso()
@@ -109,7 +111,6 @@ export class TaskService {
       return { ok: false, error: 'CYCLE: dependency graph contains a cycle' }
     }
     if (this.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
-    if (a.description) this.store.insertComment(id, reporter, a.description)
 
     // D2: auto-promote target epic and D6: mirror subtask_add (atomic)
     if (epicId !== null) {
@@ -204,6 +205,7 @@ export class TaskService {
   }
 
   updateStatus(a: { id: number; agent: string; status: TaskStatus; version: number; comment?: string }): SvcResult<{ id: number; status: TaskStatus; version: number }> {
+    if (!a.agent.trim()) return { ok: false, error: 'INVALID: agent required' }
     this._doReap()
     const task = this.store.getTaskRow(a.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
@@ -220,7 +222,8 @@ export class TaskService {
 
     const now = nowIso()
     const completedAt = TERMINAL_STATUSES.includes(a.status) ? now : null
-    this.store.transitionStatus(a.id, a.version, a.status, now, completedAt)
+    const leaseUntil = a.status === 'in_progress' ? new Date(Date.now() + this.leaseTtlMin * 60_000).toISOString() : null
+    this.store.transitionStatus(a.id, a.version, a.status, now, completedAt, leaseUntil)
     const updated = this.store.getTaskRow(a.id)
     if (!updated || updated.version !== task.version + 1) return { ok: false, error: 'CONFLICT: concurrent modification' }
     if (this.auditLog) this.store.auditAppend(a.id, a.agent, 'update_status', task.status, a.status)

@@ -417,6 +417,121 @@ describe('canceled transitions (#112)', () => {
   })
 })
 
+describe('lease refresh on reopen (#431)', () => {
+  test('blocked → in_progress via update_status sets future lease_expires_at', () => {
+    const id = json(handleCreateTask(svc, { title: 'ReopenLease', reporter: 'dev' })).id
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: 1 })
+    const v2 = json(handleGetTask(svc, { id, fields: ['version'] })).version
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'in_progress', version: v2 })
+    const task = getTaskRow(db, id)
+    expect(task.status).toBe('in_progress')
+    expect(task.lease_expires_at).not.toBeNull()
+    // Should be in the future (leaseTtlMin = 15 min)
+    const expires = new Date(task.lease_expires_at!).getTime()
+    expect(expires).toBeGreaterThan(Date.now())
+  })
+
+  test('review → in_progress via update_status sets future lease_expires_at', () => {
+    const id = json(handleCreateTask(svc, { title: 'ReviewReopen', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const v1 = json(handleGetTask(svc, { id, fields: ['version'] })).version
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: v1 })
+    const v2 = json(handleGetTask(svc, { id, fields: ['version'] })).version
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'in_progress', version: v2 })
+    const task = getTaskRow(db, id)
+    expect(task.status).toBe('in_progress')
+    expect(task.lease_expires_at).not.toBeNull()
+    expect(new Date(task.lease_expires_at!).getTime()).toBeGreaterThan(Date.now())
+  })
+
+  test('regression: freshly reopened task is NOT requeued by subsequent reap (stale-lease instant re-reap)', () => {
+    const id = json(handleCreateTask(svc, { title: 'NoReReap', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const v1 = json(handleGetTask(svc, { id, fields: ['version'] })).version
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: v1 })
+    const v2 = json(handleGetTask(svc, { id, fields: ['version'] })).version
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'in_progress', version: v2 })
+    // Reap should not touch the freshly reopened task
+    svc.reapExpiredLeases()
+    const task = getTaskRow(db, id)
+    expect(task.status).toBe('in_progress')
+    expect(task.lease_expires_at).not.toBeNull()
+  })
+})
+
+describe('assignee release on reap and cancel (#431)', () => {
+  test('reap → queued clears assignee', () => {
+    const id = createTaskRow({ title: 'ReapClear', reporter: 'dev' })
+    handleClaimTask(svc, { agent: 'agent-a', task_id: id })
+    db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour') WHERE id = ?", [id])
+    svc.reapExpiredLeases()
+    const task = getTaskRow(db, id)
+    expect(task.status).toBe('queued')
+    expect(task.assignee).toBeNull()
+  })
+
+  test('reap → failed keeps assignee', () => {
+    const id = createTaskRow({ title: 'ReapKeep', reporter: 'dev' })
+    handleClaimTask(svc, { agent: 'agent-a', task_id: id })
+    db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour'), attempts = 3 WHERE id = ?", [id])
+    svc.reapExpiredLeases()
+    const task = getTaskRow(db, id)
+    expect(task.status).toBe('failed')
+    expect(task.assignee).toBe('agent-a')
+  })
+
+  test('canceled clears assignee', () => {
+    const id = json(handleCreateTask(svc, { title: 'CancelClear', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-a', task_id: id })
+    const task = getTaskRow(db, id)
+    expect(task.assignee).toBe('agent-a')
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'canceled', version: task.version })
+    const canceled = getTaskRow(db, id)
+    expect(canceled.assignee).toBeNull()
+  })
+})
+
+describe('title validation (#431)', () => {
+  test('empty title rejected', () => {
+    const res = handleCreateTask(svc, { title: '', reporter: 'dev' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: title required')
+  })
+
+  test('whitespace-only title rejected', () => {
+    const res = handleCreateTask(svc, { title: '   ', reporter: 'dev' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: title required')
+  })
+
+  test('title >200 chars rejected', () => {
+    const res = handleCreateTask(svc, { title: 'a'.repeat(201), reporter: 'dev' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: title too long')
+  })
+
+  test('title exactly 200 chars accepted', () => {
+    const id = json(handleCreateTask(svc, { title: 'a'.repeat(200), reporter: 'dev' })).id
+    expect(id).toBeGreaterThan(0)
+  })
+})
+
+describe('update_status agent validation (#431)', () => {
+  test('empty agent rejected', () => {
+    const id = json(handleCreateTask(svc, { title: 'AgentTest', reporter: 'dev' })).id
+    const res = handleUpdateStatus(svc, { id, agent: '', status: 'review', version: 1 })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: agent required')
+  })
+
+  test('whitespace-only agent rejected', () => {
+    const id = json(handleCreateTask(svc, { title: 'AgentTest2', reporter: 'dev' })).id
+    const res = handleUpdateStatus(svc, { id, agent: '   ', status: 'review', version: 1 })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: agent required')
+  })
+})
+
 describe('brief default', () => {
   test('returns brief fields by default', () => {
     const id = createTaskRow({ title: 'Brief', reporter: 'dev' })

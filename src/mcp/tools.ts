@@ -80,7 +80,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
     status: z.string().optional(),
     fields: z.array(z.string()).optional(),
     limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional(),
-    updated_since: z.number().optional(),
+    updated_since: z.number().finite().min(-8.64e15).max(8.64e15).optional(),
     epic_id: z.number().optional(),
     ids: z.array(z.number()).optional()
   }, async (args) => handleListTasks(svc, args))
