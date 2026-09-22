@@ -49,7 +49,7 @@ try {
       logger.error('stdio error: %s', err instanceof Error ? err.message : String(err))
       process.exit(1)
     })
-    logger.info(`ziptask started version=${VERSION} db=${settings.dbPath}`)
+    logger.info(`ziptask started version=${VERSION} dbPath=${settings.dbPath}`)
   }
 
   const isStdio = process.argv.includes('--stdio')
