@@ -58,7 +58,7 @@ describe('loadSettings defaults', () => {
     expect(s.defaults.listLimit).toBe(50)
     expect(s.defaults.timelineLimit).toBe(50)
     expect(s.defaults.queueLimit).toBe(100)
-    expect(s.logging.level).toBe('off')
+    expect(s.logging.level).toBe('info')
     expect(s.auditLog).toBe(true)
   })
 })
@@ -153,6 +153,17 @@ describe('loadSettings env overrides', () => {
   test('invalid int env value is skipped (NaN)', () => {
     const s = loadSettings({ env: { ZIPTASK_PORT: 'not-a-number' }, argv: [] })
     expect(s.port).toBe(DEFAULTS.port)
+  })
+
+  test('ZIPTASK_LOG_LEVEL overrides logging level (error/debug/off)', () => {
+    expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'error' }, argv: [] }).logging.level).toBe('error')
+    expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'debug' }, argv: [] }).logging.level).toBe('debug')
+    expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'off' }, argv: [] }).logging.level).toBe('off')
+  })
+
+  test('legacy ZIPTASK_LOGGING_LEVEL is ignored', () => {
+    const s = loadSettings({ env: { ZIPTASK_LOGGING_LEVEL: 'debug' }, argv: [] })
+    expect(s.logging.level).toBe('info')
   })
 
   test('env overrides settings.json for nested keys', () => {

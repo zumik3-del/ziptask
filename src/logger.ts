@@ -11,7 +11,7 @@ export interface Logger {
 export function createLogger(name: string, level: LogLevel): Logger {
   function shouldWrite(l: LogLevel): boolean {
     if (level === 'off') return false
-    return LEVEL_ORDER[l] >= LEVEL_ORDER[level]
+    return LEVEL_ORDER[l] <= LEVEL_ORDER[level]
   }
 
   return {
