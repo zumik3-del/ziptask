@@ -70,19 +70,24 @@ export interface StartHttpOptions {
   onShutdown?: () => void
 }
 
-async function peekInitialize(req: Request, hasSession: boolean): Promise<{ request: Request; agentName: string }> {
-  if (hasSession || req.method !== 'POST') return { request: req, agentName: 'unknown' }
+async function peekInitialize(req: Request): Promise<{ request: Request; agentName: string; isInitialize: boolean }> {
+  if (req.method !== 'POST') return { request: req, agentName: 'unknown', isInitialize: false }
   const body = await req.text()
   const request = new Request(req.url, { method: req.method, headers: req.headers, body })
   let agentName = 'unknown'
+  let isInitialize = false
   try {
     const parsed = JSON.parse(body)
     const init = Array.isArray(parsed) ? parsed.find(m => m?.method === 'initialize') : parsed
+    isInitialize = init?.method === 'initialize'
     const name = init?.params?.clientInfo?.name
     if (typeof name === 'string' && name.length > 0) agentName = name
   } catch {}
-  return { request, agentName }
+  return { request, agentName, isInitialize }
 }
+
+const SESSION_NOT_FOUND = { jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null }
+const SESSION_REQUIRED = { jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request: Mcp-Session-Id header is required' }, id: null }
 
 export function startHttp(opts: StartHttpOptions) {
   const { svc, port, host, dbPath, maxSessions = 100, sessionTtlMs = 3_600_000, logger, onShutdown } = opts
@@ -143,17 +148,22 @@ export function startHttp(opts: StartHttpOptions) {
 
         if (sessionId) {
           const session = sessions.get(sessionId)
-          if (session) {
-            session.lastAccess = Date.now()
-            return trackStreamActivity(await session.transport.handleRequest(req), session)
+          if (!session) {
+            return Response.json(SESSION_NOT_FOUND, { status: 404 })
           }
+          session.lastAccess = Date.now()
+          return trackStreamActivity(await session.transport.handleRequest(req), session)
         }
 
         if (sessions.size >= maxSessions) {
           return Response.json({ error: 'Too many sessions' }, { status: 429 })
         }
 
-        const { request, agentName } = await peekInitialize(req, Boolean(sessionId))
+        const { request, agentName, isInitialize } = await peekInitialize(req)
+        if (!isInitialize) {
+          return Response.json(SESSION_REQUIRED, { status: 400 })
+        }
+
         const mcpServer = createMcpServer(svc)
         const transport = new WebStandardStreamableHTTPServerTransport({
           sessionIdGenerator: () => crypto.randomUUID(),
@@ -173,7 +183,12 @@ export function startHttp(opts: StartHttpOptions) {
         await mcpServer.connect(transport)
         const response = await transport.handleRequest(request)
         const session = transport.sessionId ? sessions.get(transport.sessionId) : undefined
-        return session ? trackStreamActivity(response, session) : response
+        if (!session) {
+          transport.close().catch(() => {})
+          mcpServer.close().catch(() => {})
+          return response
+        }
+        return trackStreamActivity(response, session)
       } catch (err) {
         svcLogger.error(`http handler error: ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
         return new Response('Internal Server Error', { status: 500 })
@@ -183,8 +198,14 @@ export function startHttp(opts: StartHttpOptions) {
 
   const shutdown = () => {
     clearInterval(cleanup)
-    server.stop()
+    for (const [id, session] of sessions) {
+      logSessionClose(id, session.agent)
+      session.transport.close().catch(() => {})
+    }
+    sessions.clear()
+    server.stop(true)
     onShutdown?.()
+    process.exit(0)
   }
 
   process.on('SIGINT', shutdown)
