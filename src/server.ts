@@ -11,6 +11,27 @@ export interface Session {
   agent: string
 }
 
+export const SSE_KEEPALIVE_MS = 10_000
+export const HTTP_IDLE_TIMEOUT_SEC = 60
+
+export function trackStreamActivity(response: Response, session: Session): Response {
+  const contentType = response.headers.get('content-type') ?? ''
+  if (!response.body || !contentType.includes('text/event-stream')) return response
+  const tracked = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        session.lastAccess = Date.now()
+        controller.enqueue(chunk)
+      }
+    })
+  )
+  return new Response(tracked, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers
+  })
+}
+
 class InMemoryEventStore {
   private events = new Map<string, { streamId: string; message: unknown }>()
 
@@ -85,6 +106,7 @@ export function startHttp(opts: StartHttpOptions) {
   const server = Bun.serve({
     port,
     hostname: host,
+    idleTimeout: HTTP_IDLE_TIMEOUT_SEC,
     async fetch(req) {
       try {
         const url = new URL(req.url)
@@ -123,7 +145,7 @@ export function startHttp(opts: StartHttpOptions) {
           const session = sessions.get(sessionId)
           if (session) {
             session.lastAccess = Date.now()
-            return session.transport.handleRequest(req)
+            return trackStreamActivity(await session.transport.handleRequest(req), session)
           }
         }
 
@@ -135,6 +157,7 @@ export function startHttp(opts: StartHttpOptions) {
         const mcpServer = createMcpServer(svc)
         const transport = new WebStandardStreamableHTTPServerTransport({
           sessionIdGenerator: () => crypto.randomUUID(),
+          keepAliveMs: SSE_KEEPALIVE_MS,
           eventStore: new InMemoryEventStore() as any,
           onsessioninitialized: (id) => {
             sessions.set(id, { transport, lastAccess: Date.now(), agent: agentName })
@@ -148,7 +171,9 @@ export function startHttp(opts: StartHttpOptions) {
         })
 
         await mcpServer.connect(transport)
-        return transport.handleRequest(request)
+        const response = await transport.handleRequest(request)
+        const session = transport.sessionId ? sessions.get(transport.sessionId) : undefined
+        return session ? trackStreamActivity(response, session) : response
       } catch (err) {
         svcLogger.error(`http handler error: ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
         return new Response('Internal Server Error', { status: 500 })
