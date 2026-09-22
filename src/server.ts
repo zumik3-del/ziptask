@@ -198,8 +198,14 @@ export function startHttp(opts: StartHttpOptions) {
 
   const shutdown = () => {
     clearInterval(cleanup)
-    server.stop()
+    for (const [id, session] of sessions) {
+      logSessionClose(id, session.agent)
+      session.transport.close().catch(() => {})
+    }
+    sessions.clear()
+    server.stop(true)
     onShutdown?.()
+    process.exit(0)
   }
 
   process.on('SIGINT', shutdown)
