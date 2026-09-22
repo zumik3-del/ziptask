@@ -437,3 +437,67 @@ describe('session keep-alive fix (#753/#754)', () => {
     srv.stop()
   })
 })
+
+describe('stale session recovery', () => {
+  let srv: ReturnType<typeof makeServer>
+
+  beforeEach(() => { srv = makeServer() })
+  afterEach(() => { srv.stop() })
+
+  function mcpRequest(sessionId: string, body: unknown): Promise<Response> {
+    return fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': sessionId
+      },
+      body: JSON.stringify(body)
+    })
+  }
+
+  test('unknown mcp-session-id → 404 Session not found (client re-init trigger)', async () => {
+    const res = await mcpRequest('bogus-stale-session', { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })
+    expect(res.status).toBe(404)
+    const body = await res.json() as any
+    expect(body.error.code).toBe(-32001)
+    expect(body.error.message).toBe('Session not found')
+  })
+
+  test('terminated session id is rejected with 404, not 400 Server not initialized', async () => {
+    const client = new Client({ name: 'stale-agent', version: '1.0.0' })
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${srv.port}/mcp`))
+    await client.connect(transport)
+    const staleId = transport.sessionId
+    expect(staleId).toBeDefined()
+    await transport.terminateSession()
+
+    const res = await mcpRequest(staleId!, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
+    expect(res.status).toBe(404)
+    const body = await res.json() as any
+    expect(body.error.code).toBe(-32001)
+  })
+
+  test('sessionless non-initialize request → 400 Mcp-Session-Id required', async () => {
+    const res = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
+    })
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error.code).toBe(-32000)
+    expect(body.error.message).toContain('Mcp-Session-Id')
+  })
+
+  test('sessionless initialize still opens a usable session', async () => {
+    const client = new Client({ name: 'fresh-agent', version: '1.0.0' })
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${srv.port}/mcp`))
+    await client.connect(transport)
+    expect(transport.sessionId).toBeDefined()
+    const result = await client.callTool({ name: 'list_tasks', arguments: {} })
+    expect(result).toBeDefined()
+    await client.close()
+  })
+})
+
