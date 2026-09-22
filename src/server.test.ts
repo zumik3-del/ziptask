@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import { openDatabase } from './db/db'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { VERSION } from './version'
 
 const TMP = '/tmp/opencode'
 
@@ -202,5 +203,145 @@ describe('MCP schema guards (#431)', () => {
 
     const future = await client.callTool({ name: 'list_tasks', arguments: { updated_since: Date.now() + 60_000 } })
     expect((future as any).content[0].text).toContain('0')
+  })
+})
+
+describe('observability logging', () => {
+  let writeSpy: ReturnType<typeof spyOn>
+  let lines: string[]
+
+  function captureLines(): string[] {
+    const snap = [...lines]
+    lines.length = 0
+    return snap
+  }
+
+  function makeCaptureLogger(): import('./logger').Logger {
+    return {
+      error(msg: string, ...args: unknown[]) {
+        process.stderr.write(`[ziptask] [error] [test] ${msg}${args.length ? ' ' + JSON.stringify(args) : ''}\n`)
+      },
+      info(msg: string, ...args: unknown[]) {
+        process.stderr.write(`[ziptask] [info] [test] ${msg}${args.length ? ' ' + JSON.stringify(args) : ''}\n`)
+      },
+      debug(msg: string, ...args: unknown[]) {
+        process.stderr.write(`[ziptask] [debug] [test] ${msg}${args.length ? ' ' + JSON.stringify(args) : ''}\n`)
+      }
+    }
+  }
+
+  beforeEach(() => {
+    lines = []
+    writeSpy = spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      if (typeof chunk === 'string') lines.push(chunk)
+      return true
+    })
+  })
+
+  afterEach(() => {
+    writeSpy.mockRestore()
+  })
+
+  test('startup line contains version, host, port, dbPath', () => {
+    const dbPath = join(TMP, `obs-startup-${Date.now()}.db`)
+    const db = openDatabase(dbPath)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    const logger = makeCaptureLogger()
+    const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
+    const port = server.port
+
+    const startupLines = captureLines()
+    const startup = startupLines.find(l => l.includes('ziptask started'))
+    expect(startup).toBeDefined()
+    expect(startup).toContain(`version=${VERSION}`)
+    expect(startup).toContain('host=127.0.0.1')
+    expect(startup).toContain(`port=${port}`)
+    expect(startup).toContain(`db=${dbPath}`)
+
+    server.stop()
+    db.close()
+    try { rmSync(dbPath) } catch {}
+    try { rmSync(dbPath + '-wal') } catch {}
+    try { rmSync(dbPath + '-shm') } catch {}
+  })
+
+  test('session open logs id and agent name from clientInfo.name', async () => {
+    const dbPath = join(TMP, `obs-session-${Date.now()}.db`)
+    const db = openDatabase(dbPath)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    const logger = makeCaptureLogger()
+    const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
+    const port = server.port
+
+    const client = new Client({ name: 'agent-verify', version: '1.0.0' })
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`))
+    await client.connect(transport)
+
+    const openLines = captureLines()
+    const openLine = openLines.find(l => l.includes('session open'))
+    expect(openLine).toBeDefined()
+    expect(openLine).toContain('agent=agent-verify')
+    expect(openLine).toMatch(/session open id=[a-f0-9-]+/)
+
+    await client.close()
+    server.stop()
+    db.close()
+    try { rmSync(dbPath) } catch {}
+    try { rmSync(dbPath + '-wal') } catch {}
+    try { rmSync(dbPath + '-shm') } catch {}
+  })
+
+  test('session close logs id and agent name on disconnect', async () => {
+    const dbPath = join(TMP, `obs-close-${Date.now()}.db`)
+    const db = openDatabase(dbPath)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    const logger = makeCaptureLogger()
+    const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
+    const port = server.port
+
+    const client = new Client({ name: 'close-agent', version: '1.0.0' })
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`))
+    await client.connect(transport)
+    await transport.terminateSession()
+
+    const closeLines = captureLines()
+    const closeLine = closeLines.find(l => l.includes('session close'))
+    expect(closeLine).toBeDefined()
+    expect(closeLine).toContain('agent=close-agent')
+    expect(closeLine).toMatch(/session close id=[a-f0-9-]+/)
+
+    server.stop()
+    db.close()
+    try { rmSync(dbPath) } catch {}
+    try { rmSync(dbPath + '-wal') } catch {}
+    try { rmSync(dbPath + '-shm') } catch {}
+  })
+
+  test('fetch path throw logs error and returns 500', async () => {
+    const dbPath = join(TMP, `obs-500-${Date.now()}.db`)
+    const db = openDatabase(dbPath)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    const logger = makeCaptureLogger()
+    const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
+    const port = server.port
+
+    // Inject a throwing getTaskView to trigger the error path
+    ;(svc as any).getTaskView = () => { throw new Error('boom') }
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/task/1`)
+    expect(res.status).toBe(500)
+    const text = await res.text()
+    expect(text).toBe('Internal Server Error')
+
+    const errLines = captureLines()
+    const errLine = errLines.find(l => l.includes('http handler error'))
+    expect(errLine).toBeDefined()
+    expect(errLine).toContain('boom')
+
+    server.stop()
+    db.close()
+    try { rmSync(dbPath) } catch {}
+    try { rmSync(dbPath + '-wal') } catch {}
+    try { rmSync(dbPath + '-shm') } catch {}
   })
 })

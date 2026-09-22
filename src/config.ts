@@ -12,7 +12,7 @@ export const DEFAULTS = {
   autoClaimCeiling: 10000,
   http: { maxSessions: 100, sessionTtlMs: 3_600_000 },
   defaults: { priority: 'p2', reporter: 'system', listLimit: 50, timelineLimit: 50, queueLimit: 100 },
-  logging: { level: 'off' as const },
+  logging: { level: 'info' as const },
   auditLog: true
 } as const
 
@@ -78,7 +78,7 @@ export const ENV_MAPPINGS: EnvMapping[] = [
   { env: 'ZIPTASK_DEFAULTS_LIST_LIMIT', path: 'defaults.listLimit', type: 'int' },
   { env: 'ZIPTASK_DEFAULTS_TIMELINE_LIMIT', path: 'defaults.timelineLimit', type: 'int' },
   { env: 'ZIPTASK_DEFAULTS_QUEUE_LIMIT', path: 'defaults.queueLimit', type: 'int' },
-  { env: 'ZIPTASK_LOGGING_LEVEL', path: 'logging.level', type: 'string' },
+  { env: 'ZIPTASK_LOG_LEVEL', path: 'logging.level', type: 'string' },
   { env: 'ZIPTASK_AUDIT_LOG', path: 'auditLog', type: 'bool' },
 ]
 
@@ -112,10 +112,14 @@ function setNested(obj: Record<string, unknown>, path: string, value: unknown): 
 }
 
 function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
-  const result = { ...target }
+  const result: Record<string, unknown> = {}
+  for (const key of Object.keys(target)) {
+    const t = target[key]
+    result[key] = isPlainObject(t) ? deepMerge(t, {}) : t
+  }
   for (const key of Object.keys(source)) {
     const s = source[key]
-    const t = target[key]
+    const t = result[key]
     result[key] = isPlainObject(s) && isPlainObject(t) ? deepMerge(t, s) : s
   }
   return result
