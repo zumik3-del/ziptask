@@ -12,6 +12,15 @@ import { VERSION } from './version'
 const settings = loadSettings()
 const logger = createLogger('app', settings.logging.level)
 
+process.on('uncaughtException', (err) => {
+  logger.error(`uncaught exception: ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
+  process.exit(1)
+})
+
+process.on('unhandledRejection', (reason) => {
+  logger.error(`unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`)
+})
+
 const isVersion = process.argv.includes('--version')
 if (isVersion) {
   console.log(`ziptask ${VERSION}`)
@@ -40,7 +49,7 @@ try {
       logger.error('stdio error: %s', err instanceof Error ? err.message : String(err))
       process.exit(1)
     })
-    logger.info('MCP stdio server started')
+    logger.info(`ziptask started version=${VERSION} dbPath=${settings.dbPath}`)
   }
 
   const isStdio = process.argv.includes('--stdio')
@@ -51,6 +60,7 @@ try {
       svc,
       port: settings.port,
       host: settings.host,
+      dbPath: settings.dbPath,
       maxSessions: settings.http.maxSessions,
       sessionTtlMs: settings.http.sessionTtlMs,
       logger,
