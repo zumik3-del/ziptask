@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { VERSION } from './version'
+import { createLogger } from './logger'
 
 const TMP = '/tmp/opencode'
 
@@ -217,17 +218,7 @@ describe('observability logging', () => {
   }
 
   function makeCaptureLogger(): import('./logger').Logger {
-    return {
-      error(msg: string, ...args: unknown[]) {
-        process.stderr.write(`[ziptask] [error] [test] ${msg}${args.length ? ' ' + JSON.stringify(args) : ''}\n`)
-      },
-      info(msg: string, ...args: unknown[]) {
-        process.stderr.write(`[ziptask] [info] [test] ${msg}${args.length ? ' ' + JSON.stringify(args) : ''}\n`)
-      },
-      debug(msg: string, ...args: unknown[]) {
-        process.stderr.write(`[ziptask] [debug] [test] ${msg}${args.length ? ' ' + JSON.stringify(args) : ''}\n`)
-      }
-    }
+    return createLogger('test', 'debug')
   }
 
   beforeEach(() => {
@@ -256,7 +247,7 @@ describe('observability logging', () => {
     expect(startup).toContain(`version=${VERSION}`)
     expect(startup).toContain('host=127.0.0.1')
     expect(startup).toContain(`port=${port}`)
-    expect(startup).toContain(`db=${dbPath}`)
+    expect(startup).toContain(`dbPath=${dbPath}`)
 
     server.stop()
     db.close()

@@ -67,12 +67,15 @@ export function startHttp(opts: StartHttpOptions) {
   const { svc, port, host, dbPath, maxSessions = 100, sessionTtlMs = 3_600_000, logger, onShutdown } = opts
   const svcLogger = logger ?? createLogger('http', 'off')
   const sessions = new Map<string, Session>()
+  const logSessionClose = (id: string, agent: string) => {
+    svcLogger.info(`session close id=${id} agent=${agent}`)
+  }
 
   const cleanup = setInterval(() => {
     const now = Date.now()
     for (const [id, session] of sessions) {
       if (now - session.lastAccess > sessionTtlMs) {
-        svcLogger.info(`session close id=${id} agent=${session.agent}`)
+        logSessionClose(id, session.agent)
         session.transport.close().catch(() => {})
         sessions.delete(id)
       }
@@ -139,7 +142,7 @@ export function startHttp(opts: StartHttpOptions) {
           },
           onsessionclosed: (id) => {
             const session = sessions.get(id)
-            svcLogger.info(`session close id=${id} agent=${session?.agent ?? 'unknown'}`)
+            logSessionClose(id, session?.agent ?? 'unknown')
             sessions.delete(id)
           }
         })
@@ -162,6 +165,6 @@ export function startHttp(opts: StartHttpOptions) {
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
 
-  svcLogger.info(`ziptask started version=${VERSION} host=${host} port=${server.port} db=${dbPath ?? ''}`)
+  svcLogger.info(`ziptask started version=${VERSION} host=${host} port=${server.port} dbPath=${dbPath ?? ''}`)
   return server
 }
