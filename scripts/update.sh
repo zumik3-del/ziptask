@@ -238,6 +238,38 @@ esac
 # Atomic swap: replaces the directory entry without truncating a running binary.
 mv -f "$TMP_BINARY" "$BINARY"
 
+# Atomic best-effort refresh of helper scripts from the release tag.
+# Each script is downloaded to a temp file in the same directory, validated
+# (non-empty, bash -n syntax check), chmod +x, then mv'd over the destination.
+# Any failure warns but does NOT abort an otherwise successful update.
+refresh_helper_scripts() {
+  local scripts_dir="$HOME_DIR/scripts"
+  mkdir -p "$scripts_dir"
+  local base_url="https://raw.githubusercontent.com/zumik3-del/ziptask/${VERSION}/scripts"
+  local refreshed=0
+  for script in update.sh uninstall.sh; do
+    local dest="$scripts_dir/$script"
+    local tmp="${dest}.tmp.$$"
+    local ok=false
+    if command -v curl >/dev/null 2>&1; then
+      curl -fLsS -o "$tmp" "${base_url}/${script}" 2>/dev/null && ok=true
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO "$tmp" "${base_url}/${script}" 2>/dev/null && ok=true
+    fi
+    if $ok && [ -s "$tmp" ] && bash -n "$tmp" 2>/dev/null; then
+      chmod +x "$tmp"
+      mv -f "$tmp" "$dest"
+      refreshed=$((refreshed + 1))
+    else
+      rm -f "$tmp"
+      warn "could not refresh ${script} to ${dest}; leaving existing copy."
+    fi
+  done
+  if [ "$refreshed" -gt 0 ]; then
+    info "Refreshed ${refreshed} helper script(s) in ${scripts_dir}."
+  fi
+}
+
 # Restart service if systemd is active
 if systemd_running; then
   if systemctl is-active ziptask &>/dev/null; then
@@ -256,6 +288,10 @@ else
   warn "systemd not running — manual restart required:"
   warn "  ${BINARY}"
 fi
+
+# Refresh helper scripts from the new release (best-effort, post-restart so
+# the running update.sh is no longer the on-disk copy).
+refresh_helper_scripts
 
 echo ""
 echo "[ziptask] Updated to ${LATEST}."
