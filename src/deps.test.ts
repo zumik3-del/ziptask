@@ -228,3 +228,51 @@ describe('queuedCandidates id tie-break (#431)', () => {
     expect(candidates[1].id).toBe(p2id)
   })
 })
+
+describe('listQueue dep-aware priority ordering (#767)', () => {
+  test('lower-priority ready task listed before higher-priority dep-blocked task', () => {
+    // Create a high-priority task that is dep-blocked
+    const blockedP0 = createTaskRow({ title: 'BlockedP0', reporter: 'dev', priority: 'p0', depends_on: [999] })
+    // Create a low-priority task that is ready
+    const readyP2 = createTaskRow({ title: 'ReadyP2', reporter: 'dev', priority: 'p2' })
+    // Queue should show readyP2 first since blockedP0 is dep-blocked
+    const out = text(handleListQueue(svc, {}))
+    const lines = out.split('\n').filter(l => l.trim())
+    expect(lines.length).toBe(1)
+    expect(lines[0]).toContain(`${readyP2}|`)
+    expect(lines[0]).not.toContain(`${blockedP0}|`)
+  })
+
+  test('listQueue matches auto-claim readiness: both skip dep-blocked tasks', () => {
+    const blockedP0 = createTaskRow({ title: 'BlockedP0', reporter: 'dev', priority: 'p0', depends_on: [999] })
+    const readyP2 = createTaskRow({ title: 'ReadyP2', reporter: 'dev', priority: 'p2' })
+    const readyP1 = createTaskRow({ title: 'ReadyP1', reporter: 'dev', priority: 'p1' })
+
+    // listQueue should only show ready tasks
+    const queue = text(handleListQueue(svc, {}))
+    const queueLines = queue.split('\n').filter(l => l.trim())
+    const queueIds = queueLines.map(line => Number(line.split('|')[0]))
+    expect(queueIds).toContain(readyP1)
+    expect(queueIds).toContain(readyP2)
+    expect(queueIds).not.toContain(blockedP0)
+
+    // auto-claim should pick the highest-priority ready task (P1)
+    const claim = json(handleClaimTask(svc, { agent: 'agent-1' }))
+    expect(claim.id).toBe(readyP1)
+  })
+
+  test('all higher-priority tasks dep-blocked: queue returns lowest-priority ready ones', () => {
+    // Block two p0 and one p1 tasks
+    for (let i = 0; i < 2; i++) {
+      createTaskRow({ title: `BlockedP0${i}`, reporter: 'dev', priority: 'p0', depends_on: [999] })
+    }
+    createTaskRow({ title: 'BlockedP1', reporter: 'dev', priority: 'p1', depends_on: [999] })
+    // Two ready p2 tasks
+    const p2a = createTaskRow({ title: 'ReadyP2a', reporter: 'dev', priority: 'p2' })
+    const p2b = createTaskRow({ title: 'ReadyP2b', reporter: 'dev', priority: 'p2' })
+
+    const queue = text(handleListQueue(svc, {}))
+    const ids = queue.split('\n').map(line => Number(line.split('|')[0]))
+    expect(ids).toEqual([p2a, p2b])
+  })
+})

@@ -2,17 +2,19 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { join } from 'node:path'
 import { TaskRepo } from './db/repo'
+import { MetricsRepo } from './db/metrics-repo'
 import { TaskService } from './core/service'
 import { computeMetrics } from './core/metrics'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus
 } from './mcp/tools'
-import { createTestDb, closeTestDb, json } from './test-context'
+import { createTestDb, closeTestDb, json, driveToDone } from './test-context'
 
 let db: Database
 let repo: TaskRepo
+let metrics: MetricsRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15 }) })
+beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); metrics = new MetricsRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15 }) })
 afterEach(() => { closeTestDb(db) })
 
 function versionOf(id: number): number {
@@ -39,10 +41,10 @@ describe('metrics canceled (#112)', () => {
     createCanceledTask('Canceled')
 
     const allSince = '0001-01-01T00:00:00.000Z'
-    expect(repo.doneCount(allSince)).toBe(1)
-    expect(repo.canceledCount(allSince)).toBe(1)
+    expect(metrics.doneCount(allSince)).toBe(1)
+    expect(metrics.canceledCount(allSince)).toBe(1)
 
-    const m = computeMetrics(repo, 'all')
+    const m = computeMetrics(metrics, 'all')
     expect(m.doneCount).toBe(1)
     expect(m.canceledCount).toBe(1)
   })
@@ -51,8 +53,8 @@ describe('metrics canceled (#112)', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
     handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'canceled', version: versionOf(epicId) })
 
-    expect(repo.canceledCount('0001-01-01T00:00:00.000Z')).toBe(0)
-    expect(computeMetrics(repo, 'all').canceledCount).toBe(0)
+    expect(metrics.canceledCount('0001-01-01T00:00:00.000Z')).toBe(0)
+    expect(computeMetrics(metrics, 'all').canceledCount).toBe(0)
   })
 
   test('scripts/metrics.ts output surfaces canceled_count and done_count', () => {
@@ -74,50 +76,50 @@ describe('metrics canceled (#112)', () => {
 
 describe('computeMetrics period validation (#431)', () => {
   test('period=0 throws RangeError', () => {
-    expect(() => computeMetrics(repo, 0)).toThrow(/period must be a positive number/)
+    expect(() => computeMetrics(metrics, 0)).toThrow(/period must be a positive number/)
   })
 
   test('period=negative throws RangeError', () => {
-    expect(() => computeMetrics(repo, -1)).toThrow(/period must be a positive number/)
+    expect(() => computeMetrics(metrics, -1)).toThrow(/period must be a positive number/)
   })
 
   test('period=NaN throws RangeError', () => {
-    expect(() => computeMetrics(repo, Number.NaN)).toThrow(/period must be a positive number/)
+    expect(() => computeMetrics(metrics, Number.NaN)).toThrow(/period must be a positive number/)
   })
 
   test('period=Infinity throws RangeError', () => {
-    expect(() => computeMetrics(repo, Number.POSITIVE_INFINITY)).toThrow(/period must be a positive number/)
+    expect(() => computeMetrics(metrics, Number.POSITIVE_INFINITY)).toThrow(/period must be a positive number/)
   })
 
   test('period="all" works', () => {
-    const m = computeMetrics(repo, 'all')
+    const m = computeMetrics(metrics, 'all')
     expect(m).toHaveProperty('doneCount')
     expect(m).toHaveProperty('canceledCount')
   })
 
   test('period=positive number works', () => {
-    const m = computeMetrics(repo, 24)
+    const m = computeMetrics(metrics, 24)
     expect(m).toHaveProperty('doneCount')
     expect(m).toHaveProperty('canceledCount')
   })
 
   test('period=undefined uses default 24h', () => {
-    const m = computeMetrics(repo)
+    const m = computeMetrics(metrics)
     expect(m).toHaveProperty('doneCount')
   })
 })
 
 describe('auditLogCount (#431)', () => {
   test('returns 0 for empty audit_log', () => {
-    expect(repo.auditLogCount()).toBe(0)
+    expect(metrics.auditLogCount()).toBe(0)
   })
 
   test('returns correct count after operations', () => {
     json(handleCreateTask(svc, { title: 'Count1', reporter: 'dev' }))
     json(handleCreateTask(svc, { title: 'Count2', reporter: 'dev' }))
-    expect(repo.auditLogCount()).toBe(2)
+    expect(metrics.auditLogCount()).toBe(2)
     handleClaimTask(svc, { agent: 'dev', task_id: 1 })
-    expect(repo.auditLogCount()).toBe(3)
+    expect(metrics.auditLogCount()).toBe(3)
   })
 })
 
@@ -132,5 +134,57 @@ describe('metrics CLI empty audit_log warning (#431)', () => {
     const err = proc.stderr.toString()
     expect(err).toContain('Warning: audit_log is empty')
     expect(proc.exitCode).toBe(0)
+  })
+})
+
+describe('MetricsRepo focused tests (#767)', () => {
+  test('doneCount returns 0 when no tasks exist', () => {
+    expect(metrics.doneCount('0001-01-01T00:00:00.000Z')).toBe(0)
+  })
+
+  test('canceledCount returns 0 when no tasks exist', () => {
+    expect(metrics.canceledCount('0001-01-01T00:00:00.000Z')).toBe(0)
+  })
+
+  test('auditLogCount returns 0 for empty audit_log', () => {
+    expect(metrics.auditLogCount()).toBe(0)
+  })
+
+  test('statusDurations returns empty array when no tasks exist', () => {
+    const durations = metrics.statusDurations('0001-01-01T00:00:00.000Z', '2100-01-01T00:00:00.000Z')
+    expect(durations).toEqual([])
+  })
+
+  test('doneCount only counts non-epic done tasks', () => {
+    const plainId = json(handleCreateTask(svc, { title: 'Plain', reporter: 'dev' })).id
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+
+    driveToDone(svc, plainId, 'dev')
+    handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'done', version: 1 })
+
+    expect(metrics.doneCount('0001-01-01T00:00:00.000Z')).toBe(1)
+  })
+
+  test('canceledCount only counts non-epic canceled tasks', () => {
+    const plainId = json(handleCreateTask(svc, { title: 'PlainCancel', reporter: 'dev' })).id
+    const epicId = json(handleCreateTask(svc, { title: 'EpicCancel', reporter: 'dev', epic: true })).id
+
+    handleUpdateStatus(svc, { id: plainId, agent: 'dev', status: 'canceled', version: 1 })
+    handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'canceled', version: 1 })
+
+    expect(metrics.canceledCount('0001-01-01T00:00:00.000Z')).toBe(1)
+  })
+
+  test('MetricsRepo implements MetricsStore interface correctly', () => {
+    // Verify all required methods exist and have correct signatures
+    expect(typeof metrics.doneCount).toBe('function')
+    expect(typeof metrics.canceledCount).toBe('function')
+    expect(typeof metrics.auditLogCount).toBe('function')
+    expect(typeof metrics.statusDurations).toBe('function')
+    // All return expected types
+    expect(typeof metrics.doneCount('0001-01-01T00:00:00.000Z')).toBe('number')
+    expect(typeof metrics.canceledCount('0001-01-01T00:00:00.000Z')).toBe('number')
+    expect(typeof metrics.auditLogCount()).toBe('number')
+    expect(Array.isArray(metrics.statusDurations('0001-01-01T00:00:00.000Z', '2100-01-01T00:00:00.000Z'))).toBe(true)
   })
 })

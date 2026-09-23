@@ -542,3 +542,66 @@ describe('brief default', () => {
     expect(task.priority).toBe('p2')
   })
 })
+
+describe('lease_expires_at cleared on exit from in_progress (#767)', () => {
+  function claimAndTransition(id: number, toStatus: string, agent: string): number {
+    handleClaimTask(svc, { agent, task_id: id })
+    const task = getTaskRow(db, id)
+    handleUpdateStatus(svc, { id, agent, status: toStatus as any, version: task.version })
+    return getTaskRow(db, id)!.version
+  }
+
+  test('in_progress → review clears lease_expires_at', () => {
+    const id = json(handleCreateTask(svc, { title: 'LeaseClear', reporter: 'dev' })).id
+    claimAndTransition(id, 'review', 'agent-1')
+    const task = getTaskRow(db, id)
+    expect(task.status).toBe('review')
+    expect(task.lease_expires_at).toBeNull()
+  })
+
+  test('in_progress → done clears lease_expires_at', () => {
+    const id = json(handleCreateTask(svc, { title: 'LeaseDone', reporter: 'dev' })).id
+    claimAndTransition(id, 'review', 'agent-1')
+    const v = getTaskRow(db, id)!.version
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'done', version: v })
+    const task = getTaskRow(db, id)
+    expect(task.lease_expires_at).toBeNull()
+  })
+
+  test('in_progress → failed clears lease_expires_at', () => {
+    const id = json(handleCreateTask(svc, { title: 'LeaseFail', reporter: 'dev' })).id
+    claimAndTransition(id, 'review', 'agent-1')
+    const v = getTaskRow(db, id)!.version
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'failed', version: v })
+    const task = getTaskRow(db, id)
+    expect(task.lease_expires_at).toBeNull()
+  })
+
+  test('in_progress → canceled clears lease_expires_at', () => {
+    const id = json(handleCreateTask(svc, { title: 'LeaseCancel', reporter: 'dev' })).id
+    claimAndTransition(id, 'review', 'agent-1')
+    const v = getTaskRow(db, id)!.version
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'canceled', version: v })
+    const task = getTaskRow(db, id)
+    expect(task.lease_expires_at).toBeNull()
+  })
+
+  test('in_progress → blocked clears lease_expires_at', () => {
+    const id = json(handleCreateTask(svc, { title: 'LeaseBlock', reporter: 'dev' })).id
+    claimAndTransition(id, 'review', 'agent-1')
+    const v = getTaskRow(db, id)!.version
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'blocked', version: v })
+    const task = getTaskRow(db, id)
+    expect(task.lease_expires_at).toBeNull()
+  })
+
+  test('in_progress → queued (via reap) clears lease_expires_at', () => {
+    const id = createTaskRow({ title: 'LeaseReap', reporter: 'dev' })
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour') WHERE id = ?", [id])
+    svc.reapExpiredLeases()
+    const task = getTaskRow(db, id)
+    expect(task.status).toBe('queued')
+    expect(task.lease_expires_at).toBeNull()
+  })
+})
