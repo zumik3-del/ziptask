@@ -36,6 +36,10 @@ export class TaskService {
     return Date.now() - this.lastReapAt >= this.reapCooldownSec * 1000
   }
 
+  private _atomic<T>(fn: () => T): T {
+    return this.store.transaction(fn)
+  }
+
   private _reapIfStale(): void {
     if (this._shouldReap()) this._doReap()
   }
@@ -94,31 +98,33 @@ export class TaskService {
 
     const isEpic = a.epic ? 1 : 0
     const epicId = a.epic_id ?? null
-    const id = this.store.insertTask({
-      title: a.title,
-      description: a.description ?? null,
-      priority: a.priority ?? this.defaultPriority,
-      assignee: a.assignee ?? null,
-      reporter,
-      depends_on: JSON.stringify(deps),
-      now,
-      maxAttempts: this.maxAttempts,
-      epicId: epicId ?? undefined,
-      isEpic
+    return this._atomic((): SvcResult<{ id: number; status: 'queued' }> => {
+      const id = this.store.insertTask({
+        title: a.title,
+        description: a.description ?? null,
+        priority: a.priority ?? this.defaultPriority,
+        assignee: a.assignee ?? null,
+        reporter,
+        depends_on: JSON.stringify(deps),
+        now,
+        maxAttempts: this.maxAttempts,
+        epicId: epicId ?? undefined,
+        isEpic
+      })
+      if (checkCycles((depId) => this.store.depsOf(depId), id, deps)) {
+        this.store.deleteTask(id)
+        return { ok: false, error: 'CYCLE: dependency graph contains a cycle' }
+      }
+      if (this.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
+
+      // D2: auto-promote target epic and D6: mirror subtask_add (same transaction)
+      if (epicId !== null) {
+        this.store.promoteEpicWithMirror(epicId, reporter, 'subtask_add',
+          `#${id} ${sanitizePipe(a.title)}`, now, this.auditLog)
+      }
+
+      return { ok: true, data: { id, status: 'queued' } }
     })
-    if (checkCycles((id) => this.store.depsOf(id), id, deps)) {
-      this.store.deleteTask(id)
-      return { ok: false, error: 'CYCLE: dependency graph contains a cycle' }
-    }
-    if (this.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
-
-    // D2: auto-promote target epic and D6: mirror subtask_add (atomic)
-    if (epicId !== null) {
-      this.store.promoteEpicWithMirror(epicId, reporter, 'subtask_add',
-        `#${id} ${sanitizePipe(a.title)}`, now, this.auditLog)
-    }
-
-    return { ok: true, data: { id, status: 'queued' } }
   }
 
   getTaskView(id: number): SvcResult<{ task: Task; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number; canceled: number } }> {
@@ -160,6 +166,31 @@ export class TaskService {
     return { tasks: rows, total }
   }
 
+  private _readyCandidates(limit: number): Task[] {
+    const ready: Task[] = []
+    if (limit <= 0) return ready
+    const BATCH = 100
+    const depCache = new Map<number, number[]>()
+    let offset = 0
+    while (ready.length < limit && offset < this.autoClaimCeiling) {
+      const page = this.store.queuedCandidates(BATCH, offset)
+      if (page.length === 0) break
+      const allDeps = new Set<number>()
+      for (const row of page) {
+        let deps = depCache.get(row.id)
+        if (deps === undefined) { deps = parseDeps(row.depends_on); depCache.set(row.id, deps) }
+        for (const dep of deps) allDeps.add(dep)
+      }
+      const depStatuses = this.store.statusesOf(Array.from(allDeps))
+      for (const row of page) {
+        if (ready.length >= limit) break
+        if (depsSatisfied(depStatuses, depCache.get(row.id)!)) ready.push(row)
+      }
+      offset += BATCH
+    }
+    return ready
+  }
+
   claimTask(a: { agent: string; task_id?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Task }> {
     this._doReap()
     let task: Task | null = null
@@ -172,25 +203,7 @@ export class TaskService {
       const deps = parseDeps(task.depends_on)
       if (!depsSatisfied(this.store.statusesOf(deps), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
     } else {
-      const BATCH = 100
-      const depCache = new Map<number, number[]>()
-      let offset = 0
-      while (offset < this.autoClaimCeiling) {
-        const page = this.store.queuedCandidates(BATCH, offset)
-        if (page.length === 0) break
-        const allDeps = new Set<number>()
-        for (const row of page) {
-          let deps = depCache.get(row.id)
-          if (deps === undefined) { deps = parseDeps(row.depends_on); depCache.set(row.id, deps) }
-          for (const dep of deps) allDeps.add(dep)
-        }
-        const depStatuses = this.store.statusesOf(Array.from(allDeps))
-        for (const row of page) {
-          if (depsSatisfied(depStatuses, depCache.get(row.id)!)) { task = row; break }
-        }
-        if (task) break
-        offset += BATCH
-      }
+      task = this._readyCandidates(1)[0] ?? null
     }
 
     if (!task) return { ok: false, error: 'EMPTY: no claimable tasks' }
@@ -223,38 +236,36 @@ export class TaskService {
     const now = nowIso()
     const completedAt = TERMINAL_STATUSES.includes(a.status) ? now : null
     const leaseUntil = a.status === 'in_progress' ? new Date(Date.now() + this.leaseTtlMin * 60_000).toISOString() : null
-    this.store.transitionStatus(a.id, a.version, a.status, now, completedAt, leaseUntil)
-    const updated = this.store.getTaskRow(a.id)
-    if (!updated || updated.version !== task.version + 1) return { ok: false, error: 'CONFLICT: concurrent modification' }
-    if (this.auditLog) this.store.auditAppend(a.id, a.agent, 'update_status', task.status, a.status)
-    if (a.comment) {
-      const type: 'comment' | 'resolution' = TERMINAL_STATUSES.includes(a.status) ? 'resolution' : 'comment'
-      this.store.insertComment(a.id, a.agent, a.comment, type)
-    }
-
     // D6: mirror subtask_done/subtask_failed onto the parent epic
     const subtaskMirror = a.status === 'done' ? 'subtask_done' : a.status === 'failed' ? 'subtask_failed' : null
-    if (task.epic_id !== null && subtaskMirror !== null && this.auditLog) {
-      const epicTask = this.store.getTaskRow(task.epic_id)
-      if (epicTask) {
-        this.store.appendEpicAuditMirror(task.epic_id, a.agent, subtaskMirror,
-          `#${task.id} ${sanitizePipe(task.title)}`)
-      }
-    }
 
-    return { ok: true, data: { id: a.id, status: a.status, version: updated.version } }
+    return this._atomic((): SvcResult<{ id: number; status: TaskStatus; version: number }> => {
+      const changes = this.store.transitionStatus(a.id, a.version, a.status, now, completedAt, leaseUntil)
+      if (changes !== 1) return { ok: false, error: 'CONFLICT: concurrent modification' }
+      const updated = this.store.getTaskRow(a.id)
+      if (!updated) return { ok: false, error: 'CONFLICT: concurrent modification' }
+      if (this.auditLog) this.store.auditAppend(a.id, a.agent, 'update_status', task.status, a.status)
+      if (a.comment) {
+        const type: 'comment' | 'resolution' = TERMINAL_STATUSES.includes(a.status) ? 'resolution' : 'comment'
+        this.store.insertComment(a.id, a.agent, a.comment, type)
+      }
+
+      if (task.epic_id !== null && subtaskMirror !== null && this.auditLog) {
+        const epicTask = this.store.getTaskRow(task.epic_id)
+        if (epicTask) {
+          this.store.appendEpicAuditMirror(task.epic_id, a.agent, subtaskMirror,
+            `#${task.id} ${sanitizePipe(task.title)}`)
+        }
+      }
+
+      return { ok: true, data: { id: a.id, status: a.status, version: updated.version } }
+    })
   }
 
   listQueue(a: { limit?: number }): Task[] {
     this._reapIfStale()
     const limit = clampLimit(a.limit, this.queueLimit)
-    const rows = this.store.queuedCandidates(limit)
-    const allDeps = new Set<number>()
-    for (const row of rows) {
-      for (const dep of parseDeps(row.depends_on)) allDeps.add(dep)
-    }
-    const depStatuses = this.store.statusesOf(Array.from(allDeps))
-    return rows.filter(row => depsSatisfied(depStatuses, parseDeps(row.depends_on)))
+    return this._readyCandidates(limit)
   }
 
   addComment(a: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {

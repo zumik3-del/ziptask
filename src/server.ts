@@ -1,4 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
+import type { EventStore } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
+import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { TaskService } from './core/service'
 import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
@@ -32,20 +34,20 @@ export function trackStreamActivity(response: Response, session: Session): Respo
   })
 }
 
-class InMemoryEventStore {
-  private events = new Map<string, { streamId: string; message: unknown }>()
+class InMemoryEventStore implements EventStore {
+  private events = new Map<string, { streamId: string; message: JSONRPCMessage }>()
 
   private generateEventId(streamId: string): string {
     return `${streamId}_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`
   }
 
-  async storeEvent(streamId: string, message: unknown): Promise<string> {
+  async storeEvent(streamId: string, message: JSONRPCMessage): Promise<string> {
     const eventId = this.generateEventId(streamId)
     this.events.set(eventId, { streamId, message })
     return eventId
   }
 
-  async replayEventsAfter(lastEventId: string, { send }: { send: (eventId: string, message: unknown) => Promise<void> }): Promise<string> {
+  async replayEventsAfter(lastEventId: string, { send }: { send: (eventId: string, message: JSONRPCMessage) => Promise<void> }): Promise<string> {
     if (!lastEventId || !this.events.has(lastEventId)) return ''
     const streamId = this.events.get(lastEventId)!.streamId
     const sorted = [...this.events.entries()].sort((a, b) => a[0].localeCompare(b[0]))
@@ -53,9 +55,13 @@ class InMemoryEventStore {
     for (const [id, { streamId: sId, message }] of sorted) {
       if (sId !== streamId) continue
       if (id === lastEventId) { found = true; continue }
-      if (found) await send(id, message as any)
+      if (found) await send(id, message)
     }
     return streamId
+  }
+
+  clear(): void {
+    this.events.clear()
   }
 }
 
@@ -93,6 +99,7 @@ export function startHttp(opts: StartHttpOptions) {
   const { svc, port, host, dbPath, maxSessions = 100, sessionTtlMs = 3_600_000, logger, onShutdown } = opts
   const svcLogger = logger ?? createLogger('http', 'off')
   const sessions = new Map<string, Session>()
+  let reservedSessions = 0
   const logSessionClose = (id: string, agent: string) => {
     svcLogger.info(`session close id=${id} agent=${agent}`)
   }
@@ -155,40 +162,46 @@ export function startHttp(opts: StartHttpOptions) {
           return trackStreamActivity(await session.transport.handleRequest(req), session)
         }
 
-        if (sessions.size >= maxSessions) {
+        if (sessions.size + reservedSessions >= maxSessions) {
           return Response.json({ error: 'Too many sessions' }, { status: 429 })
         }
-
-        const { request, agentName, isInitialize } = await peekInitialize(req)
-        if (!isInitialize) {
-          return Response.json(SESSION_REQUIRED, { status: 400 })
-        }
-
-        const mcpServer = createMcpServer(svc)
-        const transport = new WebStandardStreamableHTTPServerTransport({
-          sessionIdGenerator: () => crypto.randomUUID(),
-          keepAliveMs: SSE_KEEPALIVE_MS,
-          eventStore: new InMemoryEventStore() as any,
-          onsessioninitialized: (id) => {
-            sessions.set(id, { transport, lastAccess: Date.now(), agent: agentName })
-            svcLogger.info(`session open id=${id} agent=${agentName}`)
-          },
-          onsessionclosed: (id) => {
-            const session = sessions.get(id)
-            logSessionClose(id, session?.agent ?? 'unknown')
-            sessions.delete(id)
+        reservedSessions++
+        try {
+          const { request, agentName, isInitialize } = await peekInitialize(req)
+          if (!isInitialize) {
+            return Response.json(SESSION_REQUIRED, { status: 400 })
           }
-        })
 
-        await mcpServer.connect(transport)
-        const response = await transport.handleRequest(request)
-        const session = transport.sessionId ? sessions.get(transport.sessionId) : undefined
-        if (!session) {
-          transport.close().catch(() => {})
-          mcpServer.close().catch(() => {})
-          return response
+          const mcpServer = createMcpServer(svc)
+          const eventStore = new InMemoryEventStore()
+          const transport = new WebStandardStreamableHTTPServerTransport({
+            sessionIdGenerator: () => crypto.randomUUID(),
+            keepAliveMs: SSE_KEEPALIVE_MS,
+            eventStore,
+            onsessioninitialized: (id) => {
+              sessions.set(id, { transport, lastAccess: Date.now(), agent: agentName })
+              svcLogger.info(`session open id=${id} agent=${agentName}`)
+            },
+            onsessionclosed: (id) => {
+              const session = sessions.get(id)
+              logSessionClose(id, session?.agent ?? 'unknown')
+              sessions.delete(id)
+            }
+          })
+          transport.onclose = () => eventStore.clear()
+
+          await mcpServer.connect(transport)
+          const response = await transport.handleRequest(request)
+          const session = transport.sessionId ? sessions.get(transport.sessionId) : undefined
+          if (!session) {
+            transport.close().catch(() => {})
+            mcpServer.close().catch(() => {})
+            return response
+          }
+          return trackStreamActivity(response, session)
+        } finally {
+          reservedSessions--
         }
-        return trackStreamActivity(response, session)
       } catch (err) {
         svcLogger.error(`http handler error: ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
         return new Response('Internal Server Error', { status: 500 })
