@@ -19,3 +19,9 @@ ziptask exposes 9 tools:
 Codes (`STATUS_CODES`): `0` not_found, `1` queued, `2` in_progress, `3` review, `4` done, `5` failed, `6` blocked, `7` canceled.
 
 Flow: `queued → in_progress → review → done` (or `failed` / `blocked`). Any non-terminal status can be withdrawn to `canceled`. `done`, `failed` and `canceled` are terminal; lease expiry returns to `queued` and increments `attempts`. Tasks with unsatisfied `depends_on` stay `queued` but are hidden from `list_queue` and auto-claim.
+
+## Reads and lease reap
+
+Reads are not guaranteed to be side-effect-free. Before answering, `get_task`, `list_tasks`, `list_queue` and `get_timeline` first run a **lazy lease reap**: if the reap cooldown has elapsed, expired `in_progress` leases are settled (back to `queued`, or `failed` once `attempts > max_attempts`) and their `version` is bumped. A read may therefore change task state and invalidate the `version` a client is holding. The sweep is throttled by `ZIPTASK_REAP_COOLDOWN_SEC` (default `60`) — at most one sweep per cooldown window per process. `add_comment` reaps the same way. `claim_task` and `update_status` reap unconditionally, ignoring the cooldown.
+
+`TaskService.reapExpiredLeases()` is a **test-only seam**: it forces a sweep regardless of cooldown and has no production caller — production code reaps through the read paths and `claim_task`/`update_status` above.
