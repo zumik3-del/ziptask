@@ -75,7 +75,7 @@ Requires [Bun](https://bun.sh) ≥ 1.4.
 
 ```bash
 bun install
-bun run start          # HTTP server on an ephemeral port (MCP endpoint + /health)
+bun run start          # HTTP server on an ephemeral port (MCP endpoint + /health + experimental /api/task/:id)
 bun run start:stdio    # run over stdio
 ```
 
@@ -98,6 +98,8 @@ Layered by carrier, no framework beyond the MCP SDK:
 | Storage | `src/db/` | SQL (bun:sqlite, WAL) + migrations |
 | Entry | `src/index.ts`, `src/server.ts` | Composition root, HTTP transport |
 
+The public task API is MCP, exposed at `POST`/`GET`/`DELETE` `/mcp`, alongside `GET /health` and one experimental REST-style read endpoint, `GET /api/task/:id`, kept as an integration endpoint for the subagentix client. No endpoint authenticates. See [HTTP endpoints](docs/http-endpoints.md).
+
 ## Development
 
 ```bash
@@ -111,7 +113,8 @@ bun run changelog      # rebuild CHANGELOG.md from git tags (maintainers; clean 
 ## Documentation
 
 - [Configuration](docs/configuration.md) — `settings.json`, environment variables, the upgrade path, and backups.
-- [MCP tools](docs/mcp-tools.md) — tool reference and task statuses.
+- [HTTP endpoints](docs/http-endpoints.md) — `/mcp`, `/health`, and the experimental `GET /api/task/:id` integration endpoint.
+- [MCP tools](docs/mcp-tools.md) — tool reference, task statuses, and lease-reap semantics.
 - [Epic → sub-task workflow](docs/epics.md) — declaring epics, attaching sub-tasks, roll-up and closure.
 - [Subagent setup](docs/subagents.md) — install and configure the example orchestrator + subagent agents.
 
