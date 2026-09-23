@@ -3,6 +3,7 @@ import type { Database } from 'bun:sqlite'
 import { nowIso, clampLimit, MAX_RESULT_LIMIT } from './core/tasks'
 import type { TaskStore } from './core/types'
 import { TaskRepo } from './db/repo'
+import { MetricsRepo } from './db/metrics-repo'
 import { TaskService } from './core/service'
 import { computeMetrics } from './core/metrics'
 import {
@@ -16,8 +17,9 @@ import {
 
 let db: Database
 let repo: TaskRepo
+let metrics: MetricsRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15 }) })
+beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); metrics = new MetricsRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15 }) })
 afterEach(() => { closeTestDb(db) })
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
@@ -102,7 +104,8 @@ describe('reap cooldown (#104)', () => {
       statusesOf: () => new Map(),
       batchTasks: () => new Map(),
       markClaimed: () => 0,
-      transitionStatus: () => {},
+      transitionStatus: () => 0,
+      transaction: <T>(fn: () => T) => fn(),
       expiredLeases: () => { reapCb?.(); return [] },
       reapSettle: () => 0,
       insertComment: () => 1,
@@ -312,8 +315,8 @@ describe('metrics exclude epics (#2)', () => {
     driveToDone(svc, plainId, 'dev')
     driveEpicToDone(epicId)
 
-    expect(repo.doneCount('0001-01-01T00:00:00.000Z')).toBe(2)
-    expect(computeMetrics(repo, 'all').doneCount).toBe(2)
+    expect(metrics.doneCount('0001-01-01T00:00:00.000Z')).toBe(2)
+    expect(computeMetrics(metrics, 'all').doneCount).toBe(2)
   })
 
   test('statusDurations computes clamped segment minutes and ignores epics', () => {
@@ -329,10 +332,109 @@ describe('metrics exclude epics (#2)', () => {
     const epicId = repo.insertTask({ title: 'E', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z', isEpic: 1 })
     db.run('UPDATE tasks SET created_at=? WHERE id=?', ['2020-01-01T00:00:00.000Z', epicId])
 
-    const map = Object.fromEntries(repo.statusDurations('0001-01-01T00:00:00.000Z', '2100-01-01T00:00:00.000Z').map(r => [r.status, r.minutes]))
+    const map = Object.fromEntries(metrics.statusDurations('0001-01-01T00:00:00.000Z', '2100-01-01T00:00:00.000Z').map(r => [r.status, r.minutes]))
     expect(Math.round(map.queued)).toBe(10)
     expect(Math.round(map.in_progress)).toBe(10)
     expect(Math.round(map.review)).toBe(10)
     expect(map.done ?? 0).toBe(0)
+  })
+})
+
+describe('atomicity: createTask cycle path (#767)', () => {
+  test('cycle rejection leaves no partial row or audit for the failed task', () => {
+    const createResult = handleCreateTask(svc, { title: 'A', reporter: 'dev', depends_on: [2] })
+    const parsed = json(createResult)
+    const a = parsed.id
+    handleCreateTask(svc, { title: 'B', reporter: 'dev', depends_on: [a] })
+    // Task B (id=2) should not exist (cycle rejected)
+    expect(getTaskRow(db, 2)).toBeNull()
+    // No audit row for B
+    const auditB = db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = 2').get() as { n: number }
+    expect(auditB.n).toBe(0)
+    // Task A exists and has its own create audit
+    const taskA = getTaskRow(db, a)
+    expect(taskA).not.toBeNull()
+    expect(taskA.title).toBe('A')
+    // Query audit using correct bun:sqlite pattern (query().all(variadic))
+    const auditARaw = db.query('SELECT * FROM audit_log WHERE task_id = ?').all(a) as any[]
+    expect(auditARaw.length).toBeGreaterThan(0)
+    expect(auditARaw.some((r: any) => r.action === 'create')).toBe(true)
+  })
+})
+
+describe('atomicity: updateStatus transaction (#767)', () => {
+  test('successful updateStatus writes audit row and optional comment in one transaction', () => {
+    const id = json(handleCreateTask(svc, { title: 'Atomic', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const task = getTaskRow(db, id)
+    const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version, comment: 'atomic note' })
+    expect(json(res).status).toBe('review')
+    // Audit row written
+    const audits = db.query("SELECT * FROM audit_log WHERE task_id = ? AND action = 'update_status'").all(id) as any[]
+    expect(audits.length).toBe(1)
+    expect(audits[0].new_value).toBe('review')
+    // Comment written
+    const comments = db.query("SELECT * FROM comments WHERE task_id = ?").all(id) as any[]
+    expect(comments.length).toBe(1)
+    expect(comments[0].content).toBe('atomic note')
+    expect(comments[0].type).toBe('comment')
+  })
+
+  test('updateStatus with version mismatch writes no audit or comment', () => {
+    const id = json(handleCreateTask(svc, { title: 'NoAudit', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    // Use stale version (1 instead of current)
+    const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: 1, comment: 'should not appear' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('CONFLICT')
+    // No audit row
+    const audits = db.query("SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = 'update_status'").get(id) as { n: number }
+    expect(audits.n).toBe(0)
+    // No comment
+    const comments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }
+    expect(comments.n).toBe(0)
+  })
+
+  test('updateStatus to terminal with comment writes resolution type', () => {
+    const id = json(handleCreateTask(svc, { title: 'Terminal', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const t1 = getTaskRow(db, id)
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: t1.version })
+    const t2 = getTaskRow(db, id)
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'done', version: t2.version, comment: 'all good' })
+    const comment = db.query('SELECT type FROM comments WHERE task_id = ?').get(id) as any
+    expect(comment.type).toBe('resolution')
+  })
+})
+
+describe('CAS: transitionStatus returns changes (#767)', () => {
+  test('transitionStatus returns 1 on successful version-matched transition', () => {
+    const id = createTaskRow({ title: 'CAS', reporter: 'dev' })
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const task = getTaskRow(db, id)
+    // transitionStatus is on the repo; call it directly
+    const changes = repo.transitionStatus(id, task.version, 'review', new Date().toISOString(), null, null)
+    expect(changes).toBe(1)
+  })
+
+  test('transitionStatus returns 0 on version mismatch', () => {
+    const id = createTaskRow({ title: 'CAS2', reporter: 'dev' })
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const task = getTaskRow(db, id)
+    // Use wrong version
+    const changes = repo.transitionStatus(id, task.version + 999, 'review', new Date().toISOString(), null, null)
+    expect(changes).toBe(0)
+    // Task status unchanged
+    const still = getTaskRow(db, id)
+    expect(still.status).toBe('in_progress')
+  })
+
+  test('updateStatus returns CONFLICT when transitionStatus returns 0', () => {
+    const id = json(handleCreateTask(svc, { title: 'CAS3', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const task = getTaskRow(db, id)
+    const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version + 999 })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('CONFLICT')
   })
 })
