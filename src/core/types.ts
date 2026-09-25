@@ -2,11 +2,11 @@ import type { Task, TaskStatus, CommentType } from './tasks'
 
 export interface TaskStore {
   getTaskRow(id: number): Task | null
-  insertTask(t: { title: string; description: string | null; priority: string;
+  insertTask(task: { title: string; description: string | null; priority: string;
     assignee: string | null; reporter: string; depends_on: string; now: string; maxAttempts?: number
     epicId?: number; isEpic?: number }): number
   deleteTask(id: number): void
-  listTasks(f: { assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number })
+  listTasks(filters: { assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number })
     : { rows: Task[]; total: number }
   queuedCandidates(limit: number, offset?: number): Task[]
   depsOf(id: number): string | null
@@ -17,7 +17,7 @@ export interface TaskStore {
     now: string, completedAt: string | null, leaseUntilIso: string | null): number
   transaction<T>(fn: () => T): T
   expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>>
-  reapSettle(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number
+  reapTransition(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number
   insertComment(taskId: number, agent: string, content: string, type?: 'comment' | 'resolution'): number
   auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void
   timelineEntries(taskId: number, limit: number): TimelineRow[]

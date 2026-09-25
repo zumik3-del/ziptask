@@ -21,8 +21,8 @@ process.on('unhandledRejection', (reason) => {
   logger.error(`unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`)
 })
 
-const isVersion = process.argv.includes('--version')
-if (isVersion) {
+const wantsVersion = process.argv.includes('--version')
+if (wantsVersion) {
   console.log(`ziptask ${VERSION}`)
   process.exit(0)
 }

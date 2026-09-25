@@ -313,7 +313,7 @@ describe('version race regression', () => {
     // Simulate holder's concurrent write bumping version (but not changing status)
     db.run("UPDATE tasks SET version = version + 1, updated_at = ? WHERE id = ?", [new Date().toISOString(), id])
     // Reap with original expectedVersion=2; DB now has 3 → 0 changes
-    const changes = repo.reapSettle(id, 2, 'queued', 2, new Date().toISOString())
+    const changes = repo.reapTransition(id, 2, 'queued', 2, new Date().toISOString())
     expect(changes).toBe(0)
     // Status stays in_progress
     const final = getTaskRow(db, id)
@@ -624,11 +624,11 @@ describe('monotonicIso per-repo (#795)', () => {
       for (let i = 0; i < 500; i++) {
         repoA.insertComment(idA, 'a', `ca-adv${i}`)
       }
-      // repoB's internal lastTsMs must NOT have been updated by repoA's advances —
-      // if clocks were shared, repoB.lastTsMs would equal repoA.lastTsMs (≈ now+500ms)
-      // Under independent clocks, repoB.lastTsMs stays at its own baseline (~now+5ms)
-      const tsA = (repoA as any).lastTsMs as number
-      const tsB = (repoB as any).lastTsMs as number
+      // repoB's internal lastTimestampMs must NOT have been updated by repoA's advances —
+      // if clocks were shared, repoB.lastTimestampMs would equal repoA.lastTimestampMs (≈ now+500ms)
+      // Under independent clocks, repoB.lastTimestampMs stays at its own baseline (~now+5ms)
+      const tsA = (repoA as any).lastTimestampMs as number
+      const tsB = (repoB as any).lastTimestampMs as number
       expect(tsA - tsB).toBeGreaterThan(100)
       // Verify repo A's entries are internally monotonic
       const rowsA = dbA.query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC').all(idA) as any[]

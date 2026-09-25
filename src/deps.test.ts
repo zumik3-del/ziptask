@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { checkCycles, depsSatisfied, parseDeps } from './core/deps'
+import { createsCycle, depsSatisfied, parseDeps } from './core/deps'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
@@ -18,11 +18,11 @@ beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskS
 afterEach(() => { closeTestDb(db) })
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
-describe('checkCycles', () => {
+describe('createsCycle', () => {
   test('self-dependency rejected', () => {
     const id = createTaskRow({ title: 'Self', reporter: 'dev' })
     db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id]), id])
-    expect(checkCycles((id) => repo.depsOf(id), id, [id])).toBe(true)
+    expect(createsCycle((id) => repo.depsOf(id), id, [id])).toBe(true)
   })
 
   test('simple 2-node cycle rejected', () => {
@@ -30,7 +30,7 @@ describe('checkCycles', () => {
     const id2 = createTaskRow({ title: 'B', reporter: 'dev' })
     db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id2]), id1])
     db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id1]), id2])
-    expect(checkCycles((id) => repo.depsOf(id), id1, [id2])).toBe(true)
+    expect(createsCycle((id) => repo.depsOf(id), id1, [id2])).toBe(true)
   })
 
   test('3+ node cycle rejected', () => {
@@ -40,7 +40,7 @@ describe('checkCycles', () => {
     db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id2]), id1])
     db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id3]), id2])
     db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id1]), id3])
-    expect(checkCycles((id) => repo.depsOf(id), id1, [id3])).toBe(true)
+    expect(createsCycle((id) => repo.depsOf(id), id1, [id3])).toBe(true)
   })
 
   test('valid DAG accepted (diamond)', () => {
@@ -48,7 +48,7 @@ describe('checkCycles', () => {
     const id2 = createTaskRow({ title: 'B', reporter: 'dev' })
     const id3 = createTaskRow({ title: 'C', reporter: 'dev' })
     db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id1, id2]), id3])
-    expect(checkCycles((id) => repo.depsOf(id), id3, [id1, id2])).toBe(false)
+    expect(createsCycle((id) => repo.depsOf(id), id3, [id1, id2])).toBe(false)
   })
 
   test('cycle attempt via multiple parents rejected', () => {
@@ -58,7 +58,7 @@ describe('checkCycles', () => {
     db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id2]), id1])
     db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id3]), id2])
     db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id1, id2]), id3])
-    expect(checkCycles((id) => repo.depsOf(id), id1, [id2, id3])).toBe(true)
+    expect(createsCycle((id) => repo.depsOf(id), id1, [id2, id3])).toBe(true)
   })
 })
 
@@ -190,11 +190,11 @@ describe('corrupt depends_on tolerance (#107)', () => {
     expect(out).toContain(`${corruptId}|`)
   })
 
-  test('checkCycles survives corrupt depends_on in graph traversal', () => {
+  test('createsCycle survives corrupt depends_on in graph traversal', () => {
     const id1 = createTaskRow({ title: 'A', reporter: 'dev' })
     const id2 = createTaskRow({ title: 'B', reporter: 'dev' })
     db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", ['{bad json}', id2])
-    expect(() => checkCycles((id) => repo.depsOf(id), id1, [id2])).not.toThrow()
+    expect(() => createsCycle((id) => repo.depsOf(id), id1, [id2])).not.toThrow()
   })
 
   test('depsSatisfied survives corrupt depends_on input', () => {

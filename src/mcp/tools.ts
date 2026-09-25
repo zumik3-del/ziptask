@@ -43,7 +43,7 @@ function errorResult(msg: string): ToolResult {
   return { content: [{ type: 'text', text: msg }], isError: true }
 }
 
-function wrap<T>(r: SvcResult<T>): ToolResult {
+function toToolResult<T>(r: SvcResult<T>): ToolResult {
   return r.ok ? jsonResult(r.data) : errorResult(r.error)
 }
 
@@ -129,7 +129,7 @@ export function handleCreateTask(svc: TaskService, args: {
   epic?: boolean
   epic_id?: number
 }): ToolResult {
-  return wrap(svc.createTask(args))
+  return toToolResult(svc.createTask(args))
 }
 
 export function handleGetTask(svc: TaskService, args: { id: number; fields?: string[] }): ToolResult {
@@ -195,7 +195,7 @@ export function handleUpdateStatus(svc: TaskService, args: {
   version: number
   comment?: string
 }): ToolResult {
-  return wrap(svc.updateStatus(args))
+  return toToolResult(svc.updateStatus(args))
 }
 
 export function handleListQueue(svc: TaskService, args: { limit?: number }): ToolResult {
@@ -205,7 +205,7 @@ export function handleListQueue(svc: TaskService, args: { limit?: number }): Too
 }
 
 export function handleAddComment(svc: TaskService, args: { id: number; agent: string; content: string }): ToolResult {
-  return wrap(svc.addComment(args))
+  return toToolResult(svc.addComment(args))
 }
 
 export function handleGetTimeline(svc: TaskService, args: { id: number; limit?: number }): ToolResult {
