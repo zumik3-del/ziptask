@@ -1,9 +1,9 @@
 import type { Database } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
-import type { CommentRow } from '../core/types'
+import type { CommentRow, TaskStore } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
 
-export class TaskRepo {
+export class TaskRepo implements TaskStore {
   private lastTimestampMs = 0
 
   constructor(private db: Database) {}

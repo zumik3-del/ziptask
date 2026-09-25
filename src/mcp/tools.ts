@@ -86,7 +86,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleListTasks(svc, args))
 
   server.tool('claim_task', 'Claim a task (auto-picks the best queued, or task_id — queued/blocked). include: extra fields in response', {
-    agent: z.string(),
+    agent: z.string().refine((v) => v.trim().length > 0, 'agent required'),
     task_id: z.number().optional(),
     include: z.array(z.string()).optional()
   }, async (args) => handleClaimTask(svc, args))
@@ -157,6 +157,9 @@ export function handleListTasks(svc: TaskService, args: {
   epic_id?: number
   ids?: number[]
 }): ToolResult {
+  if (args.status !== undefined && !TASK_STATUSES.includes(args.status as TaskStatus)) {
+    return errorResult('INVALID: status')
+  }
   if (args.ids !== undefined && args.ids.length > 0) {
     const withAssignee = args.fields?.includes('assignee') ?? false
     const batch = svc.listTasks({ ids: args.ids })

@@ -53,6 +53,10 @@ export class TaskService {
     return value.length > max ? `INVALID: ${field} too long` : null
   }
 
+  private _contentError(content: string): string | null {
+    return this._requiredError(content, 'content') ?? this._tooLongError(content, MAX_CONTENT_LENGTH, 'content')
+  }
+
   private _atomic<T>(fn: () => T): T {
     return this.store.transaction(fn)
   }
@@ -83,6 +87,12 @@ export class TaskService {
     if (args.title.length > MAX_TITLE_LENGTH) return { ok: false, error: 'INVALID: title too long' }
     const deps = args.depends_on ?? []
     const reporter = args.reporter ?? this.defaultReporter
+    const reporterErr = this._tooLongError(reporter, MAX_AGENT_LENGTH, 'reporter')
+    if (reporterErr) return { ok: false, error: reporterErr }
+    if (args.assignee !== undefined) {
+      const assigneeErr = this._tooLongError(args.assignee, MAX_AGENT_LENGTH, 'assignee')
+      if (assigneeErr) return { ok: false, error: assigneeErr }
+    }
     const now = nowIso()
 
     // D5: epic cannot coexist with epic_id or depends_on
@@ -239,7 +249,7 @@ export class TaskService {
     const agentErr = this._requiredError(args.agent, 'agent') ?? this._tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent')
     if (agentErr) return { ok: false, error: agentErr }
     if (args.comment !== undefined) {
-      const commentErr = this._tooLongError(args.comment, MAX_CONTENT_LENGTH, 'content')
+      const commentErr = this._contentError(args.comment)
       if (commentErr) return { ok: false, error: commentErr }
     }
     this._doReap()
@@ -297,9 +307,8 @@ export class TaskService {
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     const validationErr =
       this._requiredError(args.agent, 'agent') ??
-      this._requiredError(args.content, 'content') ??
       this._tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent') ??
-      this._tooLongError(args.content, MAX_CONTENT_LENGTH, 'content')
+      this._contentError(args.content)
     if (validationErr) return { ok: false, error: validationErr }
     const comment_id = this.store.insertComment(args.id, args.agent, args.content)
     return { ok: true, data: { comment_id } }
