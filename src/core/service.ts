@@ -1,5 +1,5 @@
 import type { Task, TaskStatus } from './tasks'
-import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit } from './tasks'
+import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './tasks'
 import type { TaskStore, TimelineRow, CommentRow, SvcResult } from './types'
 import { parseDeps, checkCycles, depsSatisfied } from './deps'
 
@@ -192,6 +192,8 @@ export class TaskService {
   }
 
   claimTask(a: { agent: string; task_id?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Task }> {
+    if (!a.agent.trim()) return { ok: false, error: 'INVALID: agent required' }
+    if (a.agent.length > MAX_AGENT_LENGTH) return { ok: false, error: 'INVALID: agent too long' }
     this._doReap()
     let task: Task | null = null
 
@@ -219,6 +221,8 @@ export class TaskService {
 
   updateStatus(a: { id: number; agent: string; status: TaskStatus; version: number; comment?: string }): SvcResult<{ id: number; status: TaskStatus; version: number }> {
     if (!a.agent.trim()) return { ok: false, error: 'INVALID: agent required' }
+    if (a.agent.length > MAX_AGENT_LENGTH) return { ok: false, error: 'INVALID: agent too long' }
+    if (a.comment !== undefined && a.comment.length > MAX_CONTENT_LENGTH) return { ok: false, error: 'INVALID: content too long' }
     this._doReap()
     const task = this.store.getTaskRow(a.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
@@ -274,6 +278,8 @@ export class TaskService {
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     if (!a.agent.trim()) return { ok: false, error: 'EMPTY: agent required' }
     if (!a.content.trim()) return { ok: false, error: 'EMPTY: content required' }
+    if (a.agent.length > MAX_AGENT_LENGTH) return { ok: false, error: 'INVALID: agent too long' }
+    if (a.content.length > MAX_CONTENT_LENGTH) return { ok: false, error: 'INVALID: content too long' }
     const comment_id = this.store.insertComment(a.id, a.agent, a.content)
     return { ok: true, data: { comment_id } }
   }

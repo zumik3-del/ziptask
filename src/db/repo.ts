@@ -2,16 +2,17 @@ import type { Database } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
 import type { CommentRow } from '../core/types'
 
-let lastTsMs = 0
-function monotonicIso(): string {
-  const now = Date.now()
-  const t = now > lastTsMs ? now : lastTsMs + 1
-  lastTsMs = t
-  return new Date(t).toISOString()
-}
-
 export class TaskRepo {
+  private lastTsMs = 0
+
   constructor(private db: Database) {}
+
+  private monotonicIso(): string {
+    const now = Date.now()
+    const t = now > this.lastTsMs ? now : this.lastTsMs + 1
+    this.lastTsMs = t
+    return new Date(t).toISOString()
+  }
 
   transaction<T>(fn: () => T): T {
     return this.db.transaction(fn)()
@@ -39,6 +40,8 @@ export class TaskRepo {
   }
 
   deleteTask(id: number): void {
+    this.db.run('DELETE FROM comments WHERE task_id = ?', [id])
+    this.db.run('DELETE FROM audit_log WHERE task_id = ?', [id])
     this.db.run('DELETE FROM tasks WHERE id = ?', [id])
   }
 
@@ -136,7 +139,7 @@ export class TaskRepo {
   insertComment(taskId: number, agent: string, content: string, type: CommentType = 'comment'): number {
     const result = this.db.run(
       'INSERT INTO comments (task_id, agent, content, type, created_at) VALUES (?, ?, ?, ?, ?)',
-      [taskId, agent, content, type, monotonicIso()]
+      [taskId, agent, content, type, this.monotonicIso()]
     )
     return Number(result.lastInsertRowid)
   }
@@ -144,7 +147,7 @@ export class TaskRepo {
   private _auditInsert(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void {
     this.db.run(
       'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [taskId, agent, action, oldValue ?? null, newValue ?? null, monotonicIso()]
+      [taskId, agent, action, oldValue ?? null, newValue ?? null, this.monotonicIso()]
     )
   }
 
