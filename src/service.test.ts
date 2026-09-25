@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { nowIso, clampLimit, MAX_RESULT_LIMIT } from './core/tasks'
+import { nowIso, clampLimit, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './core/tasks'
 import type { TaskStore } from './core/types'
 import { TaskRepo } from './db/repo'
 import { MetricsRepo } from './db/metrics-repo'
@@ -436,5 +436,106 @@ describe('CAS: transitionStatus returns changes (#767)', () => {
     const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version + 999 })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('CONFLICT')
+  })
+})
+
+describe('deleteTask cascade (#795)', () => {
+  test('deleteTask removes comments and audit_log rows for the task', () => {
+    const id = json(handleCreateTask(svc, { title: 'DeleteMe', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const task = getTaskRow(db, id)
+    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version, comment: 'pre-delete note' })
+    handleAddComment(svc, { id, agent: 'dev', content: 'extra comment' })
+
+    const beforeComments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }
+    const beforeAudit = db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }
+    expect(beforeComments.n).toBeGreaterThan(0)
+    expect(beforeAudit.n).toBeGreaterThan(0)
+
+    repo.deleteTask(id)
+
+    expect(getTaskRow(db, id)).toBeNull()
+    const afterComments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }
+    const afterAudit = db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }
+    expect(afterComments.n).toBe(0)
+    expect(afterAudit.n).toBe(0)
+  })
+
+  test('deleteTask on unknown id is a no-op (no error)', () => {
+    expect(() => repo.deleteTask(99999)).not.toThrow()
+    const audit = db.query('SELECT COUNT(*) AS n FROM audit_log').get() as { n: number }
+    expect(audit.n).toBe(0)
+  })
+})
+
+describe('length limits: agent and content (#795)', () => {
+  const LONG_AGENT = 'a'.repeat(MAX_AGENT_LENGTH + 1)
+  const LONG_CONTENT = 'c'.repeat(MAX_CONTENT_LENGTH + 1)
+  const OK_AGENT = 'a'.repeat(MAX_AGENT_LENGTH)
+  const OK_CONTENT = 'c'.repeat(MAX_CONTENT_LENGTH)
+
+  test('claimTask rejects agent > MAX_AGENT_LENGTH', () => {
+    const id = json(handleCreateTask(svc, { title: 'LongAgent', reporter: 'dev' })).id
+    const res = handleClaimTask(svc, { agent: LONG_AGENT, task_id: id })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: agent too long')
+  })
+
+  test('claimTask accepts agent == MAX_AGENT_LENGTH', () => {
+    const id = json(handleCreateTask(svc, { title: 'OkAgent', reporter: 'dev' })).id
+    const res = json(handleClaimTask(svc, { agent: OK_AGENT, task_id: id }))
+    expect(res.id).toBe(id)
+  })
+
+  test('updateStatus rejects agent > MAX_AGENT_LENGTH', () => {
+    const id = json(handleCreateTask(svc, { title: 'UpdLongAgent', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'ok', task_id: id })
+    const task = getTaskRow(db, id)
+    const res = handleUpdateStatus(svc, { id, agent: LONG_AGENT, status: 'review', version: task!.version })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: agent too long')
+  })
+
+  test('updateStatus rejects comment > MAX_CONTENT_LENGTH', () => {
+    const id = json(handleCreateTask(svc, { title: 'UpdLongComment', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'ok', task_id: id })
+    const task = getTaskRow(db, id)
+    const res = handleUpdateStatus(svc, { id, agent: 'ok', status: 'review', version: task!.version, comment: LONG_CONTENT })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: content too long')
+  })
+
+  test('updateStatus accepts comment == MAX_CONTENT_LENGTH', () => {
+    const id = json(handleCreateTask(svc, { title: 'UpdOkComment', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'ok', task_id: id })
+    const task = getTaskRow(db, id)
+    const res = json(handleUpdateStatus(svc, { id, agent: 'ok', status: 'review', version: task!.version, comment: OK_CONTENT }))
+    expect(res.status).toBe('review')
+    const comments = db.query('SELECT content FROM comments WHERE task_id = ?').all(id) as any[]
+    expect(comments.length).toBe(1)
+    expect(comments[0].content).toBe(OK_CONTENT)
+  })
+
+  test('addComment rejects agent > MAX_AGENT_LENGTH', () => {
+    const id = json(handleCreateTask(svc, { title: 'CmtLongAgent', reporter: 'dev' })).id
+    const res = handleAddComment(svc, { id, agent: LONG_AGENT, content: 'short' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: agent too long')
+  })
+
+  test('addComment rejects content > MAX_CONTENT_LENGTH', () => {
+    const id = json(handleCreateTask(svc, { title: 'CmtLongContent', reporter: 'dev' })).id
+    const res = handleAddComment(svc, { id, agent: 'ok', content: LONG_CONTENT })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: content too long')
+  })
+
+  test('addComment accepts agent/content at exact MAX boundary', () => {
+    const id = json(handleCreateTask(svc, { title: 'CmtOk', reporter: 'dev' })).id
+    const res = json(handleAddComment(svc, { id, agent: OK_AGENT, content: OK_CONTENT }))
+    expect(res.comment_id).toBeGreaterThan(0)
+    const row = db.query('SELECT agent, content FROM comments WHERE id = ?').get(res.comment_id) as any
+    expect(row.agent).toBe(OK_AGENT)
+    expect(row.content).toBe(OK_CONTENT)
   })
 })

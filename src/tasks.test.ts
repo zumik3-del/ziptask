@@ -605,3 +605,37 @@ describe('lease_expires_at cleared on exit from in_progress (#767)', () => {
     expect(task.lease_expires_at).toBeNull()
   })
 })
+
+describe('monotonicIso per-repo (#795)', () => {
+  test('two separate TaskRepo instances have independent monotonic clocks', () => {
+    const dbA = createTestDb()
+    const repoA = new TaskRepo(dbA)
+    const dbB = createTestDb()
+    const repoB = new TaskRepo(dbB)
+    try {
+      const idA = repoA.insertTask({ title: 'A', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
+      const idB = repoB.insertTask({ title: 'B', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
+      // Inject comments rapidly into both repos — each should advance its own clock
+      for (let i = 0; i < 5; i++) {
+        repoA.insertComment(idA, 'a', `ca${i}`)
+        repoB.insertComment(idB, 'b', `cb${i}`)
+      }
+      // Verify repo A's entries are internally monotonic
+      const rowsA = dbA.query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC').all(idA) as any[]
+      for (let i = 1; i < rowsA.length; i++) {
+        expect(rowsA[i].created_at > rowsA[i - 1].created_at).toBe(true)
+      }
+      // Verify repo B's entries are internally monotonic
+      const rowsB = dbB.query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC').all(idB) as any[]
+      for (let i = 1; i < rowsB.length; i++) {
+        expect(rowsB[i].created_at > rowsB[i - 1].created_at).toBe(true)
+      }
+      // Cross-check: repo A's last timestamp must NOT equal repo B's last timestamp
+      // (they share no state, so even if called concurrently they'd diverge)
+      expect(rowsA[rowsA.length - 1].created_at).not.toBe(rowsB[rowsB.length - 1].created_at)
+    } finally {
+      closeTestDb(dbA)
+      closeTestDb(dbB)
+    }
+  })
+})
