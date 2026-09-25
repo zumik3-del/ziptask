@@ -615,11 +615,21 @@ describe('monotonicIso per-repo (#795)', () => {
     try {
       const idA = repoA.insertTask({ title: 'A', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
       const idB = repoB.insertTask({ title: 'B', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
-      // Inject comments rapidly into both repos — each should advance its own clock
+      // Inject 5 comments into both repos to establish baseline monotonicity
       for (let i = 0; i < 5; i++) {
         repoA.insertComment(idA, 'a', `ca${i}`)
         repoB.insertComment(idB, 'b', `cb${i}`)
       }
+      // Advance repoA's clock far ahead (500ms) by bulk-inserting comments
+      for (let i = 0; i < 500; i++) {
+        repoA.insertComment(idA, 'a', `ca-adv${i}`)
+      }
+      // repoB's internal lastTsMs must NOT have been updated by repoA's advances —
+      // if clocks were shared, repoB.lastTsMs would equal repoA.lastTsMs (≈ now+500ms)
+      // Under independent clocks, repoB.lastTsMs stays at its own baseline (~now+5ms)
+      const tsA = (repoA as any).lastTsMs as number
+      const tsB = (repoB as any).lastTsMs as number
+      expect(tsA - tsB).toBeGreaterThan(100)
       // Verify repo A's entries are internally monotonic
       const rowsA = dbA.query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC').all(idA) as any[]
       for (let i = 1; i < rowsA.length; i++) {
@@ -630,9 +640,6 @@ describe('monotonicIso per-repo (#795)', () => {
       for (let i = 1; i < rowsB.length; i++) {
         expect(rowsB[i].created_at > rowsB[i - 1].created_at).toBe(true)
       }
-      // Cross-check: repo A's last timestamp must NOT equal repo B's last timestamp
-      // (they share no state, so even if called concurrently they'd diverge)
-      expect(rowsA[rowsA.length - 1].created_at).not.toBe(rowsB[rowsB.length - 1].created_at)
     } finally {
       closeTestDb(dbA)
       closeTestDb(dbB)
