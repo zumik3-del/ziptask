@@ -11,6 +11,7 @@ export type MetricsResult = {
 export interface MetricsStore {
   doneCount(sinceIso: string): number
   canceledCount(sinceIso: string): number
+  auditLogCount(): number
   statusDurations(sinceIso: string, nowIsoStr: string): Array<{ status: string; minutes: number }>
 }
 

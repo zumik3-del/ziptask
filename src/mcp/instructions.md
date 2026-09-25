@@ -6,6 +6,7 @@ Server owns state (statuses, deps, leases, versions) over SQLite; content stays 
 `STATUS_CODES`: `0` not_found, `1` queued, `2` in_progress, `3` review, `4` done, `5` failed, `6` blocked, `7` canceled. Flow `queued -> in_progress -> review -> done`; `done`/`failed`/`canceled` terminal; `blocked` manual. Readiness comes from `depends_on` at read time (unsatisfied deps stay queued, hidden from `list_queue`/auto-claim). Lease expiry requeues the task and increments `attempts`.
 
 ## Tools
+- `create_task` -> always queued; `blocked` is a manual flag only; build `description` from `get_template("task")`, or `get_template("epic")` for epics.
 - `list_queue` -> pipe `id|priority|title`; `list_tasks` JSON, or batch `ids` -> `id|code`; `description` only via explicit `fields`.
 - `get_task` brief (`id,title,status,priority,blocked_by`), more via `fields`; `description` is the contract (goal, AC, constraints, deliverable).
 - `claim_task` -> `{id, lease_ttl_min, version}`; `update_status` optimistic `version` lock (terminal takes a resolution `comment`); `add_comment`; `get_timeline` -> `seq|type|agent|at|text`; `get_template`.
