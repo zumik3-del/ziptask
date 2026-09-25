@@ -107,7 +107,7 @@ describe('reap cooldown (#104)', () => {
       transitionStatus: () => 0,
       transaction: <T>(fn: () => T) => fn(),
       expiredLeases: () => { reapCb?.(); return [] },
-      reapSettle: () => 0,
+      reapTransition: () => 0,
       insertComment: () => 1,
       auditAppend: () => {},
        timelineEntries: () => [],
