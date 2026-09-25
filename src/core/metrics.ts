@@ -1,4 +1,5 @@
 import { nowIso } from './tasks'
+import { MS_PER_HOUR, DEFAULT_METRICS_PERIOD_HOURS } from '../defaults'
 
 export type MetricsResult = {
   doneCount: number
@@ -18,8 +19,8 @@ export function computeMetrics(store: MetricsStore, period?: number | 'all'): Me
     throw new RangeError('period must be a positive number of hours or "all"')
   }
   const now = nowIso()
-  const periodHours = period === 'all' ? 0 : (period ?? 24)
-  const since = periodHours === 0 ? '0001-01-01T00:00:00.000Z' : new Date(Date.now() - periodHours * 3600_000).toISOString()
+  const periodHours = period === 'all' ? 0 : (period ?? DEFAULT_METRICS_PERIOD_HOURS)
+  const since = periodHours === 0 ? '0001-01-01T00:00:00.000Z' : new Date(Date.now() - periodHours * MS_PER_HOUR).toISOString()
 
   const doneCount = store.doneCount(since)
   const canceledCount = store.canceledCount(since)

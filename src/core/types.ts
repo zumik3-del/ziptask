@@ -8,7 +8,7 @@ export interface TaskStore {
   deleteTask(id: number): void
   listTasks(f: { assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number })
     : { rows: Task[]; total: number }
-  queuedCandidates(limit?: number, offset?: number): Task[]
+  queuedCandidates(limit: number, offset?: number): Task[]
   depsOf(id: number): string | null
   statusesOf(ids: number[]): Map<number, TaskStatus>
   batchTasks(ids: number[]): Map<number, Task | null>

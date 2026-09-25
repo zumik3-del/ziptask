@@ -1,14 +1,15 @@
 import { Database } from 'bun:sqlite'
 import { MIGRATIONS } from './migrations'
+import { DEFAULT_DB_PATH, SQLITE_BUSY_TIMEOUT_MS } from '../defaults'
 
 export function openDatabase(path?: string): Database {
-  const dbPath = path ?? './data/ziptask.db'
+  const dbPath = path ?? DEFAULT_DB_PATH
   const { mkdirSync } = require('node:fs')
   const { dirname } = require('node:path')
   mkdirSync(dirname(dbPath), { recursive: true })
   const db = new Database(dbPath)
   db.exec('PRAGMA journal_mode = WAL')
-  db.exec('PRAGMA busy_timeout = 5000')
+  db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`)
   db.exec('PRAGMA foreign_keys = ON')
   applyMigrations(db)
   return db

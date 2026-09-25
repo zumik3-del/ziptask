@@ -1,5 +1,6 @@
 import type { Database } from 'bun:sqlite'
 import type { MetricsStore } from '../core/metrics'
+import { MINUTES_PER_DAY } from '../defaults'
 
 export class MetricsRepo implements MetricsStore {
   constructor(private db: Database) {}
@@ -45,7 +46,7 @@ export class MetricsRepo implements MetricsStore {
           MIN(COALESCE(next_at, completed_at, ?), ?) AS e
         FROM ordered
       )
-      SELECT status, SUM((julianday(e) - julianday(s)) * 1440.0) AS minutes
+      SELECT status, SUM((julianday(e) - julianday(s)) * ${MINUTES_PER_DAY}) AS minutes
       FROM clamped
       WHERE e > s
       GROUP BY status
