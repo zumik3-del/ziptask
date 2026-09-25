@@ -6,6 +6,7 @@ import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
 import { createLogger } from './logger'
 import { VERSION } from './version'
+import { DEFAULT_HTTP_MAX_SESSIONS, DEFAULT_HTTP_SESSION_TTL_MS, SESSION_CLEANUP_INTERVAL_MS } from './defaults'
 
 export interface Session {
   transport: WebStandardStreamableHTTPServerTransport
@@ -96,7 +97,7 @@ const SESSION_NOT_FOUND = { jsonrpc: '2.0', error: { code: -32001, message: 'Ses
 const SESSION_REQUIRED = { jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request: Mcp-Session-Id header is required' }, id: null }
 
 export function startHttp(opts: StartHttpOptions) {
-  const { svc, port, host, dbPath, maxSessions = 100, sessionTtlMs = 3_600_000, logger, onShutdown } = opts
+  const { svc, port, host, dbPath, maxSessions = DEFAULT_HTTP_MAX_SESSIONS, sessionTtlMs = DEFAULT_HTTP_SESSION_TTL_MS, logger, onShutdown } = opts
   const svcLogger = logger ?? createLogger('http', 'off')
   const sessions = new Map<string, Session>()
   let reservedSessions = 0
@@ -113,7 +114,7 @@ export function startHttp(opts: StartHttpOptions) {
         sessions.delete(id)
       }
     }
-  }, 60_000)
+  }, SESSION_CLEANUP_INTERVAL_MS)
 
   const server = Bun.serve({
     port,

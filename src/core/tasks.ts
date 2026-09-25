@@ -69,6 +69,7 @@ export function nowIso(): string {
   return new Date().toISOString()
 }
 
+export const MAX_TITLE_LENGTH = 200
 export const MAX_AGENT_LENGTH = 200
 export const MAX_CONTENT_LENGTH = 10000
 export const MAX_RESULT_LIMIT = 1000

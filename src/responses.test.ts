@@ -185,14 +185,14 @@ describe('add_comment', () => {
     const id = json(handleCreateTask(svc, { title: 'C', reporter: 'dev' })).id
     const res = handleAddComment(svc, { id, agent: '', content: 'x' })
     expect(res.isError).toBe(true)
-    expect(text(res)).toContain('EMPTY')
+    expect(text(res)).toContain('INVALID: agent required')
   })
 
   test('empty content rejected', () => {
     const id = json(handleCreateTask(svc, { title: 'C', reporter: 'dev' })).id
     const res = handleAddComment(svc, { id, agent: 'dev', content: '' })
     expect(res.isError).toBe(true)
-    expect(text(res)).toContain('EMPTY')
+    expect(text(res)).toContain('INVALID: content required')
   })
 
   test('no audit_log row for plain comment', () => {

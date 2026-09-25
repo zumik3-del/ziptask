@@ -1,0 +1,25 @@
+export const SECOND_MS = 1000
+export const MINUTE_MS = 60_000
+export const MS_PER_HOUR = 3_600_000
+export const MINUTES_PER_DAY = 1440
+
+export const DEFAULT_DB_PATH = './data/ziptask.db'
+export const DEFAULT_HOST = '127.0.0.1'
+export const DEFAULT_PORT = 0
+export const DEFAULT_LEASE_TTL_MIN = 15
+export const DEFAULT_MAX_ATTEMPTS = 3
+export const DEFAULT_REAP_COOLDOWN_SEC = 60
+export const DEFAULT_AUTO_CLAIM_CEILING = 10000
+export const DEFAULT_HTTP_MAX_SESSIONS = 100
+export const DEFAULT_HTTP_SESSION_TTL_MS = MS_PER_HOUR
+export const DEFAULT_PRIORITY = 'p2'
+export const DEFAULT_REPORTER = 'system'
+export const DEFAULT_LIST_LIMIT = 50
+export const DEFAULT_TIMELINE_LIMIT = 50
+export const DEFAULT_QUEUE_LIMIT = 100
+export const DEFAULT_LOG_LEVEL = 'info'
+export const DEFAULT_AUDIT_LOG = true
+export const SQLITE_BUSY_TIMEOUT_MS = 5000
+export const CANDIDATES_PAGE_SIZE = 100
+export const SESSION_CLEANUP_INTERVAL_MS = MINUTE_MS
+export const DEFAULT_METRICS_PERIOD_HOURS = 24

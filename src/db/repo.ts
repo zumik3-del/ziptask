@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
 import type { CommentRow } from '../core/types'
+import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
 
 export class TaskRepo {
   private lastTsMs = 0
@@ -28,7 +29,7 @@ export class TaskRepo {
     maxAttempts?: number
     epicId?: number; isEpic?: number
   }): number {
-    const maxAttempts = t.maxAttempts ?? 3
+    const maxAttempts = t.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const epicId = t.epicId ?? null
     const isEpic = t.isEpic ?? 0
     const result = this.db.run(
@@ -69,8 +70,8 @@ export class TaskRepo {
     return { rows, total }
   }
 
-  queuedCandidates(limit?: number, offset?: number): Task[] {
-    const n = Math.max(0, Math.floor(limit ?? 10))
+  queuedCandidates(limit: number, offset?: number): Task[] {
+    const n = Math.max(0, Math.floor(limit))
     const o = Math.max(0, Math.floor(offset ?? 0))
     return this.db.query(
       `SELECT * FROM tasks WHERE status = 'queued' AND is_epic = 0

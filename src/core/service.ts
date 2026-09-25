@@ -1,7 +1,12 @@
 import type { Task, TaskStatus } from './tasks'
-import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './tasks'
+import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './tasks'
 import type { TaskStore, TimelineRow, CommentRow, SvcResult } from './types'
 import { parseDeps, checkCycles, depsSatisfied } from './deps'
+import {
+  SECOND_MS, MINUTE_MS, CANDIDATES_PAGE_SIZE, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_AUDIT_LOG, DEFAULT_REAP_COOLDOWN_SEC, DEFAULT_AUTO_CLAIM_CEILING, DEFAULT_PRIORITY,
+  DEFAULT_REPORTER, DEFAULT_LIST_LIMIT, DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT
+} from '../defaults'
 
 export class TaskService {
   private readonly leaseTtlMin: number
@@ -20,20 +25,32 @@ export class TaskService {
     leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number
     defaultPriority?: string; defaultReporter?: string; listLimit?: number; timelineLimit?: number; queueLimit?: number
   }) {
-    this.leaseTtlMin = opts?.leaseTtlMin ?? 15
-    this.maxAttempts = opts?.maxAttempts ?? 3
-    this.auditLog = opts?.auditLog ?? true
-    this.reapCooldownSec = opts?.reapCooldownSec ?? 60
-    this.autoClaimCeiling = opts?.autoClaimCeiling ?? 10000
-    this.defaultPriority = opts?.defaultPriority ?? 'p2'
-    this.defaultReporter = opts?.defaultReporter ?? 'system'
-    this.listLimit = opts?.listLimit ?? 50
-    this.timelineLimit = opts?.timelineLimit ?? 50
-    this.queueLimit = opts?.queueLimit ?? 100
+    this.leaseTtlMin = opts?.leaseTtlMin ?? DEFAULT_LEASE_TTL_MIN
+    this.maxAttempts = opts?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
+    this.auditLog = opts?.auditLog ?? DEFAULT_AUDIT_LOG
+    this.reapCooldownSec = opts?.reapCooldownSec ?? DEFAULT_REAP_COOLDOWN_SEC
+    this.autoClaimCeiling = opts?.autoClaimCeiling ?? DEFAULT_AUTO_CLAIM_CEILING
+    this.defaultPriority = opts?.defaultPriority ?? DEFAULT_PRIORITY
+    this.defaultReporter = opts?.defaultReporter ?? DEFAULT_REPORTER
+    this.listLimit = opts?.listLimit ?? DEFAULT_LIST_LIMIT
+    this.timelineLimit = opts?.timelineLimit ?? DEFAULT_TIMELINE_LIMIT
+    this.queueLimit = opts?.queueLimit ?? DEFAULT_QUEUE_LIMIT
   }
 
   private _shouldReap(): boolean {
-    return Date.now() - this.lastReapAt >= this.reapCooldownSec * 1000
+    return Date.now() - this.lastReapAt >= this.reapCooldownSec * SECOND_MS
+  }
+
+  private _leaseUntil(): string {
+    return new Date(Date.now() + this.leaseTtlMin * MINUTE_MS).toISOString()
+  }
+
+  private _required(value: string, field: string): string | null {
+    return value.trim() ? null : `INVALID: ${field} required`
+  }
+
+  private _maxLength(value: string, max: number, field: string): string | null {
+    return value.length > max ? `INVALID: ${field} too long` : null
   }
 
   private _atomic<T>(fn: () => T): T {
@@ -63,7 +80,7 @@ export class TaskService {
     depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
   }): SvcResult<{ id: number; status: 'queued' }> {
     if (!a.title.trim()) return { ok: false, error: 'INVALID: title required' }
-    if (a.title.length > 200) return { ok: false, error: 'INVALID: title too long' }
+    if (a.title.length > MAX_TITLE_LENGTH) return { ok: false, error: 'INVALID: title too long' }
     const deps = a.depends_on ?? []
     const reporter = a.reporter ?? this.defaultReporter
     const now = nowIso()
@@ -169,11 +186,10 @@ export class TaskService {
   private _readyCandidates(limit: number): Task[] {
     const ready: Task[] = []
     if (limit <= 0) return ready
-    const BATCH = 100
     const depCache = new Map<number, number[]>()
     let offset = 0
     while (ready.length < limit && offset < this.autoClaimCeiling) {
-      const page = this.store.queuedCandidates(BATCH, offset)
+      const page = this.store.queuedCandidates(CANDIDATES_PAGE_SIZE, offset)
       if (page.length === 0) break
       const allDeps = new Set<number>()
       for (const row of page) {
@@ -186,14 +202,14 @@ export class TaskService {
         if (ready.length >= limit) break
         if (depsSatisfied(depStatuses, depCache.get(row.id)!)) ready.push(row)
       }
-      offset += BATCH
+      offset += CANDIDATES_PAGE_SIZE
     }
     return ready
   }
 
   claimTask(a: { agent: string; task_id?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Task }> {
-    if (!a.agent.trim()) return { ok: false, error: 'INVALID: agent required' }
-    if (a.agent.length > MAX_AGENT_LENGTH) return { ok: false, error: 'INVALID: agent too long' }
+    const agentErr = this._required(a.agent, 'agent') ?? this._maxLength(a.agent, MAX_AGENT_LENGTH, 'agent')
+    if (agentErr) return { ok: false, error: agentErr }
     this._doReap()
     let task: Task | null = null
 
@@ -211,7 +227,7 @@ export class TaskService {
     if (!task) return { ok: false, error: 'EMPTY: no claimable tasks' }
 
     const now = nowIso()
-    const leaseUntil = new Date(Date.now() + this.leaseTtlMin * 60_000).toISOString()
+    const leaseUntil = this._leaseUntil()
     const changes = this.store.markClaimed(task.id, task.version, a.agent, leaseUntil, now)
     const updated = this.store.getTaskRow(task.id)
     if (changes !== 1 || updated?.status !== 'in_progress') return { ok: false, error: 'CONFLICT: version mismatch' }
@@ -220,9 +236,12 @@ export class TaskService {
   }
 
   updateStatus(a: { id: number; agent: string; status: TaskStatus; version: number; comment?: string }): SvcResult<{ id: number; status: TaskStatus; version: number }> {
-    if (!a.agent.trim()) return { ok: false, error: 'INVALID: agent required' }
-    if (a.agent.length > MAX_AGENT_LENGTH) return { ok: false, error: 'INVALID: agent too long' }
-    if (a.comment !== undefined && a.comment.length > MAX_CONTENT_LENGTH) return { ok: false, error: 'INVALID: content too long' }
+    const agentErr = this._required(a.agent, 'agent') ?? this._maxLength(a.agent, MAX_AGENT_LENGTH, 'agent')
+    if (agentErr) return { ok: false, error: agentErr }
+    if (a.comment !== undefined) {
+      const commentErr = this._maxLength(a.comment, MAX_CONTENT_LENGTH, 'content')
+      if (commentErr) return { ok: false, error: commentErr }
+    }
     this._doReap()
     const task = this.store.getTaskRow(a.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
@@ -239,7 +258,7 @@ export class TaskService {
 
     const now = nowIso()
     const completedAt = TERMINAL_STATUSES.includes(a.status) ? now : null
-    const leaseUntil = a.status === 'in_progress' ? new Date(Date.now() + this.leaseTtlMin * 60_000).toISOString() : null
+    const leaseUntil = a.status === 'in_progress' ? this._leaseUntil() : null
     // D6: mirror subtask_done/subtask_failed onto the parent epic
     const subtaskMirror = a.status === 'done' ? 'subtask_done' : a.status === 'failed' ? 'subtask_failed' : null
 
@@ -276,10 +295,12 @@ export class TaskService {
     this._reapIfStale()
     const task = this.store.getTaskRow(a.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
-    if (!a.agent.trim()) return { ok: false, error: 'EMPTY: agent required' }
-    if (!a.content.trim()) return { ok: false, error: 'EMPTY: content required' }
-    if (a.agent.length > MAX_AGENT_LENGTH) return { ok: false, error: 'INVALID: agent too long' }
-    if (a.content.length > MAX_CONTENT_LENGTH) return { ok: false, error: 'INVALID: content too long' }
+    const validationErr =
+      this._required(a.agent, 'agent') ??
+      this._required(a.content, 'content') ??
+      this._maxLength(a.agent, MAX_AGENT_LENGTH, 'agent') ??
+      this._maxLength(a.content, MAX_CONTENT_LENGTH, 'content')
+    if (validationErr) return { ok: false, error: validationErr }
     const comment_id = this.store.insertComment(a.id, a.agent, a.content)
     return { ok: true, data: { comment_id } }
   }
