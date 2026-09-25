@@ -159,17 +159,19 @@ export function handleListTasks(svc: TaskService, args: {
 }): ToolResult {
   if (args.ids !== undefined && args.ids.length > 0) {
     const withAssignee = args.fields?.includes('assignee') ?? false
-    const batch = svc.listTasks({ ids: args.ids }) as { items: Array<{ id: number; task: Task | null }>; total: number }
-    const lines = batch.items.map(({ id, task }: { id: number; task: Task | null }) => {
+    const batch = svc.listTasks({ ids: args.ids })
+    if (!('items' in batch)) return errorResult('INVALID: ids batch mode')
+    const lines = batch.items.map(({ id, task }) => {
       if (!task) return withAssignee ? pipeJoin(id, 0, '-') : pipeJoin(id, 0)
       const code = statusToCode(task.status)
       return withAssignee ? pipeJoin(id, code, task.assignee ?? '-') : pipeJoin(id, code)
     })
     return textResult(lines.join('\n'))
   }
-  const result = svc.listTasks(args) as { tasks: Task[]; total: number }
+  const result = svc.listTasks(args)
+  if ('items' in result) return errorResult('INVALID: unexpected batch mode')
   const fields = args.fields ?? ['id', 'title', 'status', 'priority', 'assignee']
-  const tasks = result.tasks.map((task: Task) => pickFields(task, fields))
+  const tasks = result.tasks.map((task) => pickFields(task, fields))
   return jsonResult({ tasks, total: result.total })
 }
 

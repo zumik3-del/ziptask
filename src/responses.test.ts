@@ -27,6 +27,17 @@ describe('pipe formats (v2)', () => {
     expect(out).toBe(`${a}|4\n${b}|1\n999|0`)
   })
 
+  test('list_tasks ids pipe with assignee field uses narrowing (not cast) for both present and null assignees', () => {
+    const a = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'worker-1', task_id: a })
+    const b = json(handleCreateTask(svc, { title: 'B', reporter: 'dev' })).id
+    // c stays unclaimed → assignee is null
+    const c = json(handleCreateTask(svc, { title: 'C', reporter: 'dev' })).id
+    const out = text(handleListTasks(svc, { ids: [a, b, c, 999], fields: ['assignee'] }))
+    // a: claimed → has assignee; b: queued → null → '-'; c: queued → null → '-'; 999: not found → '-'
+    expect(out).toBe(`${a}|2|worker-1\n${b}|1|-\n${c}|1|-\n999|0|-`)
+  })
+
   test('list_tasks ids pipe with fields assignee: null → -', () => {
     const a = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'worker-1' })

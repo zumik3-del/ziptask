@@ -605,3 +605,44 @@ describe('lease_expires_at cleared on exit from in_progress (#767)', () => {
     expect(task.lease_expires_at).toBeNull()
   })
 })
+
+describe('monotonicIso per-repo (#795)', () => {
+  test('two separate TaskRepo instances have independent monotonic clocks', () => {
+    const dbA = createTestDb()
+    const repoA = new TaskRepo(dbA)
+    const dbB = createTestDb()
+    const repoB = new TaskRepo(dbB)
+    try {
+      const idA = repoA.insertTask({ title: 'A', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
+      const idB = repoB.insertTask({ title: 'B', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
+      // Inject 5 comments into both repos to establish baseline monotonicity
+      for (let i = 0; i < 5; i++) {
+        repoA.insertComment(idA, 'a', `ca${i}`)
+        repoB.insertComment(idB, 'b', `cb${i}`)
+      }
+      // Advance repoA's clock far ahead (500ms) by bulk-inserting comments
+      for (let i = 0; i < 500; i++) {
+        repoA.insertComment(idA, 'a', `ca-adv${i}`)
+      }
+      // repoB's internal lastTsMs must NOT have been updated by repoA's advances —
+      // if clocks were shared, repoB.lastTsMs would equal repoA.lastTsMs (≈ now+500ms)
+      // Under independent clocks, repoB.lastTsMs stays at its own baseline (~now+5ms)
+      const tsA = (repoA as any).lastTsMs as number
+      const tsB = (repoB as any).lastTsMs as number
+      expect(tsA - tsB).toBeGreaterThan(100)
+      // Verify repo A's entries are internally monotonic
+      const rowsA = dbA.query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC').all(idA) as any[]
+      for (let i = 1; i < rowsA.length; i++) {
+        expect(rowsA[i].created_at > rowsA[i - 1].created_at).toBe(true)
+      }
+      // Verify repo B's entries are internally monotonic
+      const rowsB = dbB.query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC').all(idB) as any[]
+      for (let i = 1; i < rowsB.length; i++) {
+        expect(rowsB[i].created_at > rowsB[i - 1].created_at).toBe(true)
+      }
+    } finally {
+      closeTestDb(dbA)
+      closeTestDb(dbB)
+    }
+  })
+})
