@@ -14,21 +14,21 @@ export function createLogger(name: string, level: LogLevel): Logger {
     return LEVEL_ORDER[l] <= LEVEL_ORDER[level]
   }
 
+  function write(level: LogLevel, msg: string, args: unknown[]): void {
+    if (!shouldWrite(level)) return
+    const prefix = `[ziptask] [${level}] [${name}] ${msg}`
+    process.stderr.write(prefix + (args.length ? ' ' + JSON.stringify(args) : '') + '\n')
+  }
+
   return {
     error(msg: string, ...args: unknown[]) {
-      if (!shouldWrite('error')) return
-      const parts = [`[ziptask] [error] [${name}] ${msg}`]
-      process.stderr.write(parts.join(' ') + (args.length ? ' ' + JSON.stringify(args) : '') + '\n')
+      write('error', msg, args)
     },
     info(msg: string, ...args: unknown[]) {
-      if (!shouldWrite('info')) return
-      const parts = [`[ziptask] [info] [${name}] ${msg}`]
-      process.stderr.write(parts.join(' ') + (args.length ? ' ' + JSON.stringify(args) : '') + '\n')
+      write('info', msg, args)
     },
     debug(msg: string, ...args: unknown[]) {
-      if (!shouldWrite('debug')) return
-      const parts = [`[ziptask] [debug] [${name}] ${msg}`]
-      process.stderr.write(parts.join(' ') + (args.length ? ' ' + JSON.stringify(args) : '') + '\n')
+      write('debug', msg, args)
     }
   }
 }

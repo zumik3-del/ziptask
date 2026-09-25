@@ -1,19 +1,31 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { z } from 'zod/v4'
+import {
+  DEFAULT_DB_PATH, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_REAP_COOLDOWN_SEC, DEFAULT_AUTO_CLAIM_CEILING, DEFAULT_HTTP_MAX_SESSIONS,
+  DEFAULT_HTTP_SESSION_TTL_MS, DEFAULT_PRIORITY, DEFAULT_REPORTER, DEFAULT_LIST_LIMIT,
+  DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT, DEFAULT_LOG_LEVEL, DEFAULT_AUDIT_LOG
+} from './defaults'
 
 export const DEFAULTS = {
-  dbPath: './data/ziptask.db',
-  host: '127.0.0.1',
-  port: 0,
-  leaseTtlMin: 15,
-  maxAttempts: 3,
-  reapCooldownSec: 60,
-  autoClaimCeiling: 10000,
-  http: { maxSessions: 100, sessionTtlMs: 3_600_000 },
-  defaults: { priority: 'p2', reporter: 'system', listLimit: 50, timelineLimit: 50, queueLimit: 100 },
-  logging: { level: 'info' as const },
-  auditLog: true
+  dbPath: DEFAULT_DB_PATH,
+  host: DEFAULT_HOST,
+  port: DEFAULT_PORT,
+  leaseTtlMin: DEFAULT_LEASE_TTL_MIN,
+  maxAttempts: DEFAULT_MAX_ATTEMPTS,
+  reapCooldownSec: DEFAULT_REAP_COOLDOWN_SEC,
+  autoClaimCeiling: DEFAULT_AUTO_CLAIM_CEILING,
+  http: { maxSessions: DEFAULT_HTTP_MAX_SESSIONS, sessionTtlMs: DEFAULT_HTTP_SESSION_TTL_MS },
+  defaults: {
+    priority: DEFAULT_PRIORITY,
+    reporter: DEFAULT_REPORTER,
+    listLimit: DEFAULT_LIST_LIMIT,
+    timelineLimit: DEFAULT_TIMELINE_LIMIT,
+    queueLimit: DEFAULT_QUEUE_LIMIT
+  },
+  logging: { level: DEFAULT_LOG_LEVEL },
+  auditLog: DEFAULT_AUDIT_LOG
 } as const
 
 const SettingsSchema = z.object({
