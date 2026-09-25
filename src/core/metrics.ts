@@ -1,5 +1,5 @@
 import { nowIso } from './tasks'
-import { MS_PER_HOUR, DEFAULT_METRICS_PERIOD_HOURS } from '../defaults'
+import { HOUR_MS, DEFAULT_METRICS_PERIOD_HOURS } from '../defaults'
 
 export type MetricsResult = {
   doneCount: number
@@ -11,6 +11,7 @@ export type MetricsResult = {
 export interface MetricsStore {
   doneCount(sinceIso: string): number
   canceledCount(sinceIso: string): number
+  auditLogCount(): number
   statusDurations(sinceIso: string, nowIsoStr: string): Array<{ status: string; minutes: number }>
 }
 
@@ -20,7 +21,7 @@ export function computeMetrics(store: MetricsStore, period?: number | 'all'): Me
   }
   const now = nowIso()
   const periodHours = period === 'all' ? 0 : (period ?? DEFAULT_METRICS_PERIOD_HOURS)
-  const since = periodHours === 0 ? '0001-01-01T00:00:00.000Z' : new Date(Date.now() - periodHours * MS_PER_HOUR).toISOString()
+  const since = periodHours === 0 ? '0001-01-01T00:00:00.000Z' : new Date(Date.now() - periodHours * HOUR_MS).toISOString()
 
   const doneCount = store.doneCount(since)
   const canceledCount = store.canceledCount(since)

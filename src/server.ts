@@ -16,6 +16,7 @@ export interface Session {
 
 export const SSE_KEEPALIVE_MS = 10_000
 export const HTTP_IDLE_TIMEOUT_SEC = 60
+export const MAX_EVENT_STORE_EVENTS = 1000
 
 export function trackStreamActivity(response: Response, session: Session): Response {
   const contentType = response.headers.get('content-type') ?? ''
@@ -35,7 +36,7 @@ export function trackStreamActivity(response: Response, session: Session): Respo
   })
 }
 
-class InMemoryEventStore implements EventStore {
+export class InMemoryEventStore implements EventStore {
   private events = new Map<string, { streamId: string; message: JSONRPCMessage }>()
 
   private generateEventId(streamId: string): string {
@@ -45,6 +46,16 @@ class InMemoryEventStore implements EventStore {
   async storeEvent(streamId: string, message: JSONRPCMessage): Promise<string> {
     const eventId = this.generateEventId(streamId)
     this.events.set(eventId, { streamId, message })
+    // One store per session and sessions are capped, but a single long-lived session
+    // can still emit unbounded events, so keep memory bounded by evicting the oldest
+    // (Map preserves insertion order). If a client resumes after its last event id was
+    // evicted, replayEventsAfter returns '' and the client re-initializes instead of
+    // replaying — degraded but bounded, never a memory leak.
+    while (this.events.size > MAX_EVENT_STORE_EVENTS) {
+      const oldest = this.events.keys().next().value
+      if (oldest === undefined) break
+      this.events.delete(oldest)
+    }
     return eventId
   }
 

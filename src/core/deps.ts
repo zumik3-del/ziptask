@@ -8,7 +8,7 @@ export function parseDeps(raw: string): number[] {
   return []
 }
 
-export function checkCycles(depsOf: (id: number) => string | null, taskId: number, dependsOn: number[]): boolean {
+export function createsCycle(depsOf: (id: number) => string | null, taskId: number, dependsOn: number[]): boolean {
   if (dependsOn.length === 0) return false
   const visited = new Set<number>()
   const stack = [...dependsOn]

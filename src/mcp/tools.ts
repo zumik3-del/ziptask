@@ -43,7 +43,7 @@ function errorResult(msg: string): ToolResult {
   return { content: [{ type: 'text', text: msg }], isError: true }
 }
 
-function wrap<T>(r: SvcResult<T>): ToolResult {
+function toToolResult<T>(r: SvcResult<T>): ToolResult {
   return r.ok ? jsonResult(r.data) : errorResult(r.error)
 }
 
@@ -86,7 +86,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleListTasks(svc, args))
 
   server.tool('claim_task', 'Claim a task (auto-picks the best queued, or task_id — queued/blocked). include: extra fields in response', {
-    agent: z.string(),
+    agent: z.string().refine((v) => v.trim().length > 0, 'agent required'),
     task_id: z.number().optional(),
     include: z.array(z.string()).optional()
   }, async (args) => handleClaimTask(svc, args))
@@ -129,7 +129,7 @@ export function handleCreateTask(svc: TaskService, args: {
   epic?: boolean
   epic_id?: number
 }): ToolResult {
-  return wrap(svc.createTask(args))
+  return toToolResult(svc.createTask(args))
 }
 
 export function handleGetTask(svc: TaskService, args: { id: number; fields?: string[] }): ToolResult {
@@ -157,6 +157,9 @@ export function handleListTasks(svc: TaskService, args: {
   epic_id?: number
   ids?: number[]
 }): ToolResult {
+  if (args.status !== undefined && !TASK_STATUSES.includes(args.status as TaskStatus)) {
+    return errorResult('INVALID: status')
+  }
   if (args.ids !== undefined && args.ids.length > 0) {
     const withAssignee = args.fields?.includes('assignee') ?? false
     const batch = svc.listTasks({ ids: args.ids })
@@ -195,7 +198,7 @@ export function handleUpdateStatus(svc: TaskService, args: {
   version: number
   comment?: string
 }): ToolResult {
-  return wrap(svc.updateStatus(args))
+  return toToolResult(svc.updateStatus(args))
 }
 
 export function handleListQueue(svc: TaskService, args: { limit?: number }): ToolResult {
@@ -205,7 +208,7 @@ export function handleListQueue(svc: TaskService, args: { limit?: number }): Too
 }
 
 export function handleAddComment(svc: TaskService, args: { id: number; agent: string; content: string }): ToolResult {
-  return wrap(svc.addComment(args))
+  return toToolResult(svc.addComment(args))
 }
 
 export function handleGetTimeline(svc: TaskService, args: { id: number; limit?: number }): ToolResult {

@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { isValidTransition, STATUS_CODES, TASK_STATUSES } from './core/tasks'
+import { isValidTransition, STATUS_CODES, TASK_STATUSES, nowIso } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
@@ -313,7 +313,7 @@ describe('version race regression', () => {
     // Simulate holder's concurrent write bumping version (but not changing status)
     db.run("UPDATE tasks SET version = version + 1, updated_at = ? WHERE id = ?", [new Date().toISOString(), id])
     // Reap with original expectedVersion=2; DB now has 3 → 0 changes
-    const changes = repo.reapSettle(id, 2, 'queued', 2, new Date().toISOString())
+    const changes = repo.reapTransition(id, 2, 'queued', 2, new Date().toISOString())
     expect(changes).toBe(0)
     // Status stays in_progress
     const final = getTaskRow(db, id)
@@ -624,11 +624,11 @@ describe('monotonicIso per-repo (#795)', () => {
       for (let i = 0; i < 500; i++) {
         repoA.insertComment(idA, 'a', `ca-adv${i}`)
       }
-      // repoB's internal lastTsMs must NOT have been updated by repoA's advances —
-      // if clocks were shared, repoB.lastTsMs would equal repoA.lastTsMs (≈ now+500ms)
-      // Under independent clocks, repoB.lastTsMs stays at its own baseline (~now+5ms)
-      const tsA = (repoA as any).lastTsMs as number
-      const tsB = (repoB as any).lastTsMs as number
+      // repoB's internal lastTimestampMs must NOT have been updated by repoA's advances —
+      // if clocks were shared, repoB.lastTimestampMs would equal repoA.lastTimestampMs (≈ now+500ms)
+      // Under independent clocks, repoB.lastTimestampMs stays at its own baseline (~now+5ms)
+      const tsA = (repoA as any).lastTimestampMs as number
+      const tsB = (repoB as any).lastTimestampMs as number
       expect(tsA - tsB).toBeGreaterThan(100)
       // Verify repo A's entries are internally monotonic
       const rowsA = dbA.query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC').all(idA) as any[]
@@ -643,6 +643,67 @@ describe('monotonicIso per-repo (#795)', () => {
     } finally {
       closeTestDb(dbA)
       closeTestDb(dbB)
+    }
+  })
+})
+
+describe('TaskRepo port conformance (#812)', () => {
+  test('TaskRepo implements all TaskStore methods', () => {
+    // Compile-time: this file imports TaskRepo and TaskStore; if TaskRepo did not
+    // implement TaskStore, tsc would fail. Runtime verification: call every method.
+    const db3 = createTestDb()
+    try {
+      const repo3 = new TaskRepo(db3)
+      // All these calls must not throw — verifies method signatures match TaskStore
+      expect(typeof repo3.getTaskRow).toBe('function')
+      expect(typeof repo3.insertTask).toBe('function')
+      expect(typeof repo3.deleteTask).toBe('function')
+      expect(typeof repo3.listTasks).toBe('function')
+      expect(typeof repo3.queuedCandidates).toBe('function')
+      expect(typeof repo3.depsOf).toBe('function')
+      expect(typeof repo3.statusesOf).toBe('function')
+      expect(typeof repo3.batchTasks).toBe('function')
+      expect(typeof repo3.markClaimed).toBe('function')
+      expect(typeof repo3.transitionStatus).toBe('function')
+      expect(typeof repo3.transaction).toBe('function')
+      expect(typeof repo3.expiredLeases).toBe('function')
+      expect(typeof repo3.reapTransition).toBe('function')
+      expect(typeof repo3.insertComment).toBe('function')
+      expect(typeof repo3.auditAppend).toBe('function')
+      expect(typeof repo3.timelineEntries).toBe('function')
+      expect(typeof repo3.commentsOf).toBe('function')
+      expect(typeof repo3.nonTerminalChildCount).toBe('function')
+      expect(typeof repo3.childStatusCounts).toBe('function')
+      expect(typeof repo3.promoteEpicWithMirror).toBe('function')
+      expect(typeof repo3.appendEpicAuditMirror).toBe('function')
+
+      // Verify each method actually works
+      const id = repo3.insertTask({
+        title: 'PortTest', description: null, priority: 'p2',
+        assignee: null, reporter: 'dev', depends_on: '[]', now: nowIso()
+      })
+      expect(repo3.getTaskRow(id)!.title).toBe('PortTest')
+      expect(repo3.depsOf(id)).toBe('[]')
+      expect(repo3.statusesOf([id]).get(id)).toBe('queued')
+      expect(repo3.batchTasks([id]).get(id)?.title).toBe('PortTest')
+      expect(repo3.insertComment(id, 'dev', 'hello')).toBeGreaterThan(0)
+      repo3.auditAppend(id, 'dev', 'test_action', undefined, 'test_value')
+      expect(repo3.timelineEntries(id, 10).length).toBeGreaterThan(0)
+      expect(repo3.commentsOf(id).length).toBeGreaterThan(0)
+      expect(repo3.nonTerminalChildCount(id)).toBe(0)
+      const counts = repo3.childStatusCounts(id)
+      expect(counts.total).toBe(0)
+      expect(counts.open ?? 0).toBe(0)
+      expect(counts.done ?? 0).toBe(0)
+      expect(counts.failed ?? 0).toBe(0)
+      expect(counts.canceled ?? 0).toBe(0)
+      expect(repo3.transaction(() => 42)).toBe(42)
+      expect(repo3.expiredLeases(nowIso())).toEqual([])
+      repo3.deleteTask(id)
+      expect(repo3.queuedCandidates(10, 0)).toHaveLength(0) // no queued tasks after delete
+      expect(repo3.getTaskRow(id)).toBeNull()
+    } finally {
+      closeTestDb(db3)
     }
   })
 })

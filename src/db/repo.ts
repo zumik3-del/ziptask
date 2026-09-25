@@ -1,17 +1,17 @@
 import type { Database } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
-import type { CommentRow } from '../core/types'
+import type { CommentRow, TaskStore } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
 
-export class TaskRepo {
-  private lastTsMs = 0
+export class TaskRepo implements TaskStore {
+  private lastTimestampMs = 0
 
   constructor(private db: Database) {}
 
   private monotonicIso(): string {
     const now = Date.now()
-    const t = now > this.lastTsMs ? now : this.lastTsMs + 1
-    this.lastTsMs = t
+    const t = now > this.lastTimestampMs ? now : this.lastTimestampMs + 1
+    this.lastTimestampMs = t
     return new Date(t).toISOString()
   }
 
@@ -23,19 +23,19 @@ export class TaskRepo {
     return this.db.query('SELECT * FROM tasks WHERE id = ?').get(id) as Task | null
   }
 
-  insertTask(t: {
+  insertTask(task: {
     title: string; description: string | null; priority: string
     assignee: string | null; reporter: string; depends_on: string; now: string
     maxAttempts?: number
     epicId?: number; isEpic?: number
   }): number {
-    const maxAttempts = t.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
-    const epicId = t.epicId ?? null
-    const isEpic = t.isEpic ?? 0
+    const maxAttempts = task.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
+    const epicId = task.epicId ?? null
+    const isEpic = task.isEpic ?? 0
     const result = this.db.run(
       `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic)
        VALUES (?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
-      [t.title, t.description, t.priority, t.assignee, t.reporter, t.depends_on, maxAttempts, t.now, t.now, epicId, isEpic]
+      [task.title, task.description, task.priority, task.assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, isEpic]
     )
     return Number(result.lastInsertRowid)
   }
@@ -46,23 +46,23 @@ export class TaskRepo {
     this.db.run('DELETE FROM tasks WHERE id = ?', [id])
   }
 
-  listTasks(f: {
+  listTasks(filters: {
     assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number
   }): { rows: Task[]; total: number } {
     const conditions: string[] = []
     const params: (string | number | null)[] = []
-    if (f.assignee) { conditions.push('assignee = ?'); params.push(f.assignee) }
-    if (f.status) { conditions.push('status = ?'); params.push(f.status) }
-    if (f.updatedSinceIso !== undefined) {
+    if (filters.assignee) { conditions.push('assignee = ?'); params.push(filters.assignee) }
+    if (filters.status) { conditions.push('status = ?'); params.push(filters.status) }
+    if (filters.updatedSinceIso !== undefined) {
       conditions.push('updated_at >= ?')
-      params.push(f.updatedSinceIso)
+      params.push(filters.updatedSinceIso)
     }
-    if (f.epicId !== undefined) {
+    if (filters.epicId !== undefined) {
       conditions.push('epic_id = ?')
-      params.push(f.epicId)
+      params.push(filters.epicId)
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
-    const limit = Math.max(0, Math.floor(f.limit))
+    const limit = Math.max(0, Math.floor(filters.limit))
     const rows = this.db.query(
       `SELECT * FROM tasks ${where} ORDER BY created_at DESC LIMIT ${limit}`
     ).all(...params as any[]) as Task[]
@@ -129,7 +129,7 @@ export class TaskRepo {
     ).all(nowIso) as Array<{ id: number; version: number; attempts: number; max_attempts: number }>
   }
 
-  reapSettle(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number {
+  reapTransition(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number {
     const result = this.db.run(
       'UPDATE tasks SET status = ?, lease_expires_at = NULL, assignee = CASE WHEN ? = \'queued\' THEN NULL ELSE assignee END, attempts = ?, version = version + 1, updated_at = ?, completed_at = CASE WHEN ? = ? THEN ? ELSE completed_at END WHERE id = ? AND status = \'in_progress\' AND version = ?',
       [status, status, attempts, now, status, 'failed', now, id, expectedVersion]
@@ -145,15 +145,11 @@ export class TaskRepo {
     return Number(result.lastInsertRowid)
   }
 
-  private _auditInsert(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void {
+  auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void {
     this.db.run(
       'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)',
       [taskId, agent, action, oldValue ?? null, newValue ?? null, this.monotonicIso()]
     )
-  }
-
-  auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void {
-    this._auditInsert(taskId, agent, action, oldValue, newValue)
   }
 
   timelineEntries(taskId: number, limit: number): Array<{ type: string; agent: string; text: string; created_at: string }> {
@@ -198,13 +194,13 @@ export class TaskRepo {
     const txn = this.db.transaction(() => {
       this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
       if (auditLog) {
-        this._auditInsert(id, agent, action, undefined, newValue)
+        this.auditAppend(id, agent, action, undefined, newValue)
       }
     })
     txn()
   }
 
   appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void {
-    this._auditInsert(taskId, agent, action, undefined, newValue)
+    this.auditAppend(taskId, agent, action, undefined, newValue)
   }
 }

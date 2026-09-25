@@ -8,7 +8,7 @@ import { TaskService } from './core/service'
 import { computeMetrics } from './core/metrics'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus,
-  handleAddComment, handleListQueue, handleGetTimeline
+  handleAddComment, handleListQueue, handleGetTimeline, handleListTasks
 } from './mcp/tools'
 import {
   createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, driveToDone,
@@ -107,7 +107,7 @@ describe('reap cooldown (#104)', () => {
       transitionStatus: () => 0,
       transaction: <T>(fn: () => T) => fn(),
       expiredLeases: () => { reapCb?.(); return [] },
-      reapSettle: () => 0,
+      reapTransition: () => 0,
       insertComment: () => 1,
       auditAppend: () => {},
        timelineEntries: () => [],
@@ -537,5 +537,103 @@ describe('length limits: agent and content (#795)', () => {
     const row = db.query('SELECT agent, content FROM comments WHERE id = ?').get(res.comment_id) as any
     expect(row.agent).toBe(OK_AGENT)
     expect(row.content).toBe(OK_CONTENT)
+  })
+})
+
+describe('empty/whitespace comment rejection in updateStatus (#810)', () => {
+  test('updateStatus rejects empty string comment', () => {
+    const id = json(handleCreateTask(svc, { title: 'EmptyComment', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const task = getTaskRow(db, id)
+    const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task!.version, comment: '' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: content required')
+  })
+
+  test('updateStatus rejects whitespace-only comment', () => {
+    const id = json(handleCreateTask(svc, { title: 'WsComment', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const task = getTaskRow(db, id)
+    const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task!.version, comment: '   ' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: content required')
+  })
+
+  test('updateStatus accepts non-empty comment', () => {
+    const id = json(handleCreateTask(svc, { title: 'OkComment', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const task = getTaskRow(db, id)
+    const res = json(handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task!.version, comment: 'valid note' }))
+    expect(res.status).toBe('review')
+  })
+
+  test('updateStatus without comment (undefined) still succeeds', () => {
+    const id = json(handleCreateTask(svc, { title: 'NoComment', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    const task = getTaskRow(db, id)
+    const res = json(handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task!.version }))
+    expect(res.status).toBe('review')
+    const comments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }
+    expect(comments.n).toBe(0)
+  })
+})
+
+describe('reporter/assignee length guards in createTask (#811)', () => {
+  const LONG_AGENT = 'a'.repeat(MAX_AGENT_LENGTH + 1)
+  const OK_AGENT = 'a'.repeat(MAX_AGENT_LENGTH)
+
+  test('createTask rejects reporter > MAX_AGENT_LENGTH', () => {
+    const res = handleCreateTask(svc, { title: 'LongReporter', reporter: LONG_AGENT })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: reporter too long')
+  })
+
+  test('createTask accepts reporter == MAX_AGENT_LENGTH', () => {
+    const id = json(handleCreateTask(svc, { title: 'OkReporter', reporter: OK_AGENT })).id
+    const row = getTaskRow(db, id)
+    expect(row.reporter).toBe(OK_AGENT)
+  })
+
+  test('createTask rejects assignee > MAX_AGENT_LENGTH', () => {
+    const res = handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: LONG_AGENT })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: assignee too long')
+  })
+
+  test('createTask accepts assignee == MAX_AGENT_LENGTH', () => {
+    const id = json(handleCreateTask(svc, { title: 'OkAssignee', reporter: 'dev', assignee: OK_AGENT })).id
+    const row = getTaskRow(db, id)
+    expect(row.assignee).toBe(OK_AGENT)
+  })
+})
+
+describe('claimTask whitespace agent (#811)', () => {
+  test('claimTask rejects whitespace-only agent via zod schema', () => {
+    const id = json(handleCreateTask(svc, { title: 'WsAgent', reporter: 'dev' })).id
+    const res = handleClaimTask(svc, { agent: '   ', task_id: id })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: agent required')
+  })
+
+  test('claimTask rejects empty agent via zod schema', () => {
+    const id = json(handleCreateTask(svc, { title: 'EmptyAgent', reporter: 'dev' })).id
+    const res = handleClaimTask(svc, { agent: '', task_id: id })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: agent required')
+  })
+})
+
+describe('listTasks invalid status filter (#811)', () => {
+  test('listTasks with invalid status returns error', () => {
+    const res = handleListTasks(svc, { status: 'invalid_status' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: status')
+  })
+
+  test('listTasks with valid status filter works', () => {
+    const id = json(handleCreateTask(svc, { title: 'ValidStatus', reporter: 'dev' })).id
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: 1 })
+    const res = json(handleListTasks(svc, { status: 'blocked' }))
+    expect(res.tasks.some((t: any) => t.id === id)).toBe(true)
   })
 })

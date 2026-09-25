@@ -1,7 +1,7 @@
 import type { Task, TaskStatus } from './tasks'
 import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './tasks'
 import type { TaskStore, TimelineRow, CommentRow, SvcResult } from './types'
-import { parseDeps, checkCycles, depsSatisfied } from './deps'
+import { parseDeps, createsCycle, depsSatisfied } from './deps'
 import {
   SECOND_MS, MINUTE_MS, CANDIDATES_PAGE_SIZE, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
   DEFAULT_AUDIT_LOG, DEFAULT_REAP_COOLDOWN_SEC, DEFAULT_AUTO_CLAIM_CEILING, DEFAULT_PRIORITY,
@@ -45,12 +45,16 @@ export class TaskService {
     return new Date(Date.now() + this.leaseTtlMin * MINUTE_MS).toISOString()
   }
 
-  private _required(value: string, field: string): string | null {
+  private _requiredError(value: string, field: string): string | null {
     return value.trim() ? null : `INVALID: ${field} required`
   }
 
-  private _maxLength(value: string, max: number, field: string): string | null {
+  private _tooLongError(value: string, max: number, field: string): string | null {
     return value.length > max ? `INVALID: ${field} too long` : null
+  }
+
+  private _contentError(content: string): string | null {
+    return this._requiredError(content, 'content') ?? this._tooLongError(content, MAX_CONTENT_LENGTH, 'content')
   }
 
   private _atomic<T>(fn: () => T): T {
@@ -69,27 +73,33 @@ export class TaskService {
     for (const task of expired) {
       const newAttempts = task.attempts + 1
       const newStatus: TaskStatus = newAttempts > task.max_attempts ? 'failed' : 'queued'
-      const changes = this.store.reapSettle(task.id, task.version, newStatus, newAttempts, now)
+      const changes = this.store.reapTransition(task.id, task.version, newStatus, newAttempts, now)
       if (changes === 1 && this.auditLog) this.store.auditAppend(task.id, 'system', 'lease_expired', 'in_progress', newStatus)
     }
     this.lastReapAt = Date.now()
   }
 
-  createTask(a: {
+  createTask(args: {
     title: string; description?: string; priority?: string; assignee?: string
     depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
   }): SvcResult<{ id: number; status: 'queued' }> {
-    if (!a.title.trim()) return { ok: false, error: 'INVALID: title required' }
-    if (a.title.length > MAX_TITLE_LENGTH) return { ok: false, error: 'INVALID: title too long' }
-    const deps = a.depends_on ?? []
-    const reporter = a.reporter ?? this.defaultReporter
+    if (!args.title.trim()) return { ok: false, error: 'INVALID: title required' }
+    if (args.title.length > MAX_TITLE_LENGTH) return { ok: false, error: 'INVALID: title too long' }
+    const deps = args.depends_on ?? []
+    const reporter = args.reporter ?? this.defaultReporter
+    const reporterErr = this._tooLongError(reporter, MAX_AGENT_LENGTH, 'reporter')
+    if (reporterErr) return { ok: false, error: reporterErr }
+    if (args.assignee !== undefined) {
+      const assigneeErr = this._tooLongError(args.assignee, MAX_AGENT_LENGTH, 'assignee')
+      if (assigneeErr) return { ok: false, error: assigneeErr }
+    }
     const now = nowIso()
 
     // D5: epic cannot coexist with epic_id or depends_on
-    if (a.epic && a.epic_id !== undefined) {
+    if (args.epic && args.epic_id !== undefined) {
       return { ok: false, error: 'INVALID: epic cannot have a parent epic' }
     }
-    if (a.epic && deps.length > 0) {
+    if (args.epic && deps.length > 0) {
       return { ok: false, error: 'INVALID: epic cannot have depends_on' }
     }
     // D5: rejects depends_on pointing at an epic
@@ -102,8 +112,8 @@ export class TaskService {
       }
     }
     // D5: epic_id target must exist, be non-terminal, and have epic_id IS NULL
-    if (a.epic_id !== undefined) {
-      const target = this.store.getTaskRow(a.epic_id)
+    if (args.epic_id !== undefined) {
+      const target = this.store.getTaskRow(args.epic_id)
       if (!target) return { ok: false, error: 'NOT_FOUND' }
       if (TERMINAL_STATUSES.includes(target.status)) {
         return { ok: false, error: 'INVALID: cannot attach to a terminal task' }
@@ -113,14 +123,14 @@ export class TaskService {
       }
     }
 
-    const isEpic = a.epic ? 1 : 0
-    const epicId = a.epic_id ?? null
+    const isEpic = args.epic ? 1 : 0
+    const epicId = args.epic_id ?? null
     return this._atomic((): SvcResult<{ id: number; status: 'queued' }> => {
       const id = this.store.insertTask({
-        title: a.title,
-        description: a.description ?? null,
-        priority: a.priority ?? this.defaultPriority,
-        assignee: a.assignee ?? null,
+        title: args.title,
+        description: args.description ?? null,
+        priority: args.priority ?? this.defaultPriority,
+        assignee: args.assignee ?? null,
         reporter,
         depends_on: JSON.stringify(deps),
         now,
@@ -128,7 +138,7 @@ export class TaskService {
         epicId: epicId ?? undefined,
         isEpic
       })
-      if (checkCycles((depId) => this.store.depsOf(depId), id, deps)) {
+      if (createsCycle((depId) => this.store.depsOf(depId), id, deps)) {
         this.store.deleteTask(id)
         return { ok: false, error: 'CYCLE: dependency graph contains a cycle' }
       }
@@ -137,7 +147,7 @@ export class TaskService {
       // D2: auto-promote target epic and D6: mirror subtask_add (same transaction)
       if (epicId !== null) {
         this.store.promoteEpicWithMirror(epicId, reporter, 'subtask_add',
-          `#${id} ${sanitizePipe(a.title)}`, now, this.auditLog)
+          `#${id} ${sanitizePipe(args.title)}`, now, this.auditLog)
       }
 
       return { ok: true, data: { id, status: 'queued' } }
@@ -164,21 +174,21 @@ export class TaskService {
     return { ok: true, data: { task, blockedBy } }
   }
 
-  listTasks(a: { assignee?: string; status?: string; updated_since?: number; epic_id?: number; limit?: number; ids?: number[] }): { tasks: Task[]; total: number } | { items: Array<{ id: number; task: Task | null }>; total: number } {
+  listTasks(args: { assignee?: string; status?: string; updated_since?: number; epic_id?: number; limit?: number; ids?: number[] }): { tasks: Task[]; total: number } | { items: Array<{ id: number; task: Task | null }>; total: number } {
     this._reapIfStale()
-    if (a.ids !== undefined && a.ids.length > 0) {
-      const batch = this.store.batchTasks(a.ids)
+    if (args.ids !== undefined && args.ids.length > 0) {
+      const batch = this.store.batchTasks(args.ids)
       return {
-        items: a.ids.map(id => ({ id, task: batch.get(id) ?? null })),
-        total: a.ids.length
+        items: args.ids.map(id => ({ id, task: batch.get(id) ?? null })),
+        total: args.ids.length
       }
     }
     const { rows, total } = this.store.listTasks({
-      assignee: a.assignee,
-      status: a.status,
-      updatedSinceIso: a.updated_since !== undefined ? new Date(a.updated_since).toISOString() : undefined,
-      epicId: a.epic_id,
-      limit: clampLimit(a.limit, this.listLimit)
+      assignee: args.assignee,
+      status: args.status,
+      updatedSinceIso: args.updated_since !== undefined ? new Date(args.updated_since).toISOString() : undefined,
+      epicId: args.epic_id,
+      limit: clampLimit(args.limit, this.listLimit)
     })
     return { tasks: rows, total }
   }
@@ -207,14 +217,14 @@ export class TaskService {
     return ready
   }
 
-  claimTask(a: { agent: string; task_id?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Task }> {
-    const agentErr = this._required(a.agent, 'agent') ?? this._maxLength(a.agent, MAX_AGENT_LENGTH, 'agent')
+  claimTask(args: { agent: string; task_id?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Task }> {
+    const agentErr = this._requiredError(args.agent, 'agent') ?? this._tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent')
     if (agentErr) return { ok: false, error: agentErr }
     this._doReap()
     let task: Task | null = null
 
-    if (a.task_id) {
-      task = this.store.getTaskRow(a.task_id)
+    if (args.task_id) {
+      task = this.store.getTaskRow(args.task_id)
       if (!task) return { ok: false, error: 'NOT_FOUND' }
       if (task.status !== 'queued' && task.status !== 'blocked') return { ok: false, error: `CONFLICT: status=${task.status}` }
       if (task.is_epic === 1) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }
@@ -228,80 +238,79 @@ export class TaskService {
 
     const now = nowIso()
     const leaseUntil = this._leaseUntil()
-    const changes = this.store.markClaimed(task.id, task.version, a.agent, leaseUntil, now)
+    const changes = this.store.markClaimed(task.id, task.version, args.agent, leaseUntil, now)
     const updated = this.store.getTaskRow(task.id)
     if (changes !== 1 || updated?.status !== 'in_progress') return { ok: false, error: 'CONFLICT: version mismatch' }
-    if (this.auditLog) this.store.auditAppend(task.id, a.agent, 'claim', task.status, 'in_progress')
+    if (this.auditLog) this.store.auditAppend(task.id, args.agent, 'claim', task.status, 'in_progress')
     return { ok: true, data: { id: task.id, leaseTtlMin: this.leaseTtlMin, task: updated } }
   }
 
-  updateStatus(a: { id: number; agent: string; status: TaskStatus; version: number; comment?: string }): SvcResult<{ id: number; status: TaskStatus; version: number }> {
-    const agentErr = this._required(a.agent, 'agent') ?? this._maxLength(a.agent, MAX_AGENT_LENGTH, 'agent')
+  updateStatus(args: { id: number; agent: string; status: TaskStatus; version: number; comment?: string }): SvcResult<{ id: number; status: TaskStatus; version: number }> {
+    const agentErr = this._requiredError(args.agent, 'agent') ?? this._tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent')
     if (agentErr) return { ok: false, error: agentErr }
-    if (a.comment !== undefined) {
-      const commentErr = this._maxLength(a.comment, MAX_CONTENT_LENGTH, 'content')
+    if (args.comment !== undefined) {
+      const commentErr = this._contentError(args.comment)
       if (commentErr) return { ok: false, error: commentErr }
     }
     this._doReap()
-    const task = this.store.getTaskRow(a.id)
+    const task = this.store.getTaskRow(args.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
-    if (task.version !== a.version) return { ok: false, error: `CONFLICT: expected version ${task.version}, got ${a.version}` }
-    if (!isValidTransition(task.status, a.status)) return { ok: false, error: `INVALID: ${task.status} → ${a.status}` }
+    if (task.version !== args.version) return { ok: false, error: `CONFLICT: expected version ${task.version}, got ${args.version}` }
+    if (!isValidTransition(task.status, args.status)) return { ok: false, error: `INVALID: ${task.status} → ${args.status}` }
 
     // D3: epic terminal guard — reject done/failed while non-terminal children exist
-    if (task.is_epic === 1 && TERMINAL_STATUSES.includes(a.status)) {
-      const open = this.store.nonTerminalChildCount(a.id)
+    if (task.is_epic === 1 && TERMINAL_STATUSES.includes(args.status)) {
+      const open = this.store.nonTerminalChildCount(args.id)
       if (open > 0) {
         return { ok: false, error: `CHILDREN: ${open} sub-tasks not terminal` }
       }
     }
 
     const now = nowIso()
-    const completedAt = TERMINAL_STATUSES.includes(a.status) ? now : null
-    const leaseUntil = a.status === 'in_progress' ? this._leaseUntil() : null
+    const completedAt = TERMINAL_STATUSES.includes(args.status) ? now : null
+    const leaseUntil = args.status === 'in_progress' ? this._leaseUntil() : null
     // D6: mirror subtask_done/subtask_failed onto the parent epic
-    const subtaskMirror = a.status === 'done' ? 'subtask_done' : a.status === 'failed' ? 'subtask_failed' : null
+    const subtaskMirror = args.status === 'done' ? 'subtask_done' : args.status === 'failed' ? 'subtask_failed' : null
 
     return this._atomic((): SvcResult<{ id: number; status: TaskStatus; version: number }> => {
-      const changes = this.store.transitionStatus(a.id, a.version, a.status, now, completedAt, leaseUntil)
+      const changes = this.store.transitionStatus(args.id, args.version, args.status, now, completedAt, leaseUntil)
       if (changes !== 1) return { ok: false, error: 'CONFLICT: concurrent modification' }
-      const updated = this.store.getTaskRow(a.id)
+      const updated = this.store.getTaskRow(args.id)
       if (!updated) return { ok: false, error: 'CONFLICT: concurrent modification' }
-      if (this.auditLog) this.store.auditAppend(a.id, a.agent, 'update_status', task.status, a.status)
-      if (a.comment) {
-        const type: 'comment' | 'resolution' = TERMINAL_STATUSES.includes(a.status) ? 'resolution' : 'comment'
-        this.store.insertComment(a.id, a.agent, a.comment, type)
+      if (this.auditLog) this.store.auditAppend(args.id, args.agent, 'update_status', task.status, args.status)
+      if (args.comment) {
+        const type: 'comment' | 'resolution' = TERMINAL_STATUSES.includes(args.status) ? 'resolution' : 'comment'
+        this.store.insertComment(args.id, args.agent, args.comment, type)
       }
 
       if (task.epic_id !== null && subtaskMirror !== null && this.auditLog) {
         const epicTask = this.store.getTaskRow(task.epic_id)
         if (epicTask) {
-          this.store.appendEpicAuditMirror(task.epic_id, a.agent, subtaskMirror,
+          this.store.appendEpicAuditMirror(task.epic_id, args.agent, subtaskMirror,
             `#${task.id} ${sanitizePipe(task.title)}`)
         }
       }
 
-      return { ok: true, data: { id: a.id, status: a.status, version: updated.version } }
+      return { ok: true, data: { id: args.id, status: args.status, version: updated.version } }
     })
   }
 
-  listQueue(a: { limit?: number }): Task[] {
+  listQueue(args: { limit?: number }): Task[] {
     this._reapIfStale()
-    const limit = clampLimit(a.limit, this.queueLimit)
+    const limit = clampLimit(args.limit, this.queueLimit)
     return this._readyCandidates(limit)
   }
 
-  addComment(a: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
+  addComment(args: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
     this._reapIfStale()
-    const task = this.store.getTaskRow(a.id)
+    const task = this.store.getTaskRow(args.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     const validationErr =
-      this._required(a.agent, 'agent') ??
-      this._required(a.content, 'content') ??
-      this._maxLength(a.agent, MAX_AGENT_LENGTH, 'agent') ??
-      this._maxLength(a.content, MAX_CONTENT_LENGTH, 'content')
+      this._requiredError(args.agent, 'agent') ??
+      this._tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent') ??
+      this._contentError(args.content)
     if (validationErr) return { ok: false, error: validationErr }
-    const comment_id = this.store.insertComment(a.id, a.agent, a.content)
+    const comment_id = this.store.insertComment(args.id, args.agent, args.content)
     return { ok: true, data: { comment_id } }
   }
 
