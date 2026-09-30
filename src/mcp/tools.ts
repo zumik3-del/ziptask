@@ -257,7 +257,8 @@ export function handleClaimTask(svc: TaskService, args: {
   if (args.task_id !== undefined && args.id !== undefined && args.task_id !== args.id) {
     return errorResult(`INVALID: claim_task id/task_id conflict (id=${args.id} task_id=${args.task_id}); task_id is canonical`)
   }
-  const r = svc.claimTask({ agent: args.agent, taskId: args.task_id ?? args.id })
+  const taskId = args.task_id !== undefined ? args.task_id : args.id
+  const r = svc.claimTask({ agent: args.agent, taskId })
   if (!r.ok) return errorResult(r.error)
   const { id, leaseTtlMin, task } = r.data
   const result: Record<string, unknown> = { id, lease_ttl_min: leaseTtlMin, version: task.version }
