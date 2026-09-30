@@ -194,10 +194,18 @@ info "Downloading ${ASSET} ${VERSION} ..."
 DL_TMP="${BIN}/.ziptask.$$.tmp"
 trap 'rm -f "$DL_TMP"' EXIT
 
+# Binary fetch: keep the progress meter (no -s/-q), bound the runtime with a
+# connect timeout + stall guard, and retry with resume (-C -/-c) so a flaky link
+# does not restart an 80 MB transfer from zero.
 if command -v curl >/dev/null 2>&1; then
-  curl -fLsS -o "$DL_TMP" "$URL"
+  if ! curl -fL -S --connect-timeout 15 --speed-limit 1024 --speed-time 30 \
+       --retry 3 --retry-delay 2 -C - -o "$DL_TMP" "$URL"; then
+    error "download failed: ${URL}"
+  fi
 elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$DL_TMP" "$URL"
+  if ! wget -c -O "$DL_TMP" --tries=3 --waitretry=2 --timeout=30 "$URL"; then
+    error "download failed: ${URL}"
+  fi
 else
   error "need curl or wget"
 fi
