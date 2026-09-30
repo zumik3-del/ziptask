@@ -280,8 +280,22 @@ export class TaskService {
       if (task.is_epic === 1) return { ok: false, error: `INVALID: #${task.id} is an epic` }
       if (task.assignee !== args.agent) return { ok: false, error: `CONFLICT: lease held by ${task.assignee}` }
     }
-    // attempts is always 0 on an epic, so a refund there is a no-op write with a misleading audit row.
-    // Terminal statuses need no guard: they have no outgoing edge, so isValidTransition refuses them all.
+    // acquiring a lease is a claim-verb concern: update_status must not stay a second, unguarded
+    // door to in_progress. The claimTask precondition set (service.ts:228-233) maps 1:1 — NOT_FOUND
+    // is covered by the row read, the status window by isValidTransition, so is_epic and deps are
+    // the only two missing checks. review -> in_progress is a deliberate superset (work sent back):
+    // its deps are provably still satisfied, because deps are immutable after create and terminal
+    // statuses have no outgoing edge (tasks.ts:58-61).
+    if (args.status === 'in_progress' && !selfEdge) {
+      if (task.is_epic === 1) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }
+      if (task.status === 'queued' || task.status === 'blocked') {
+        const deps = parseDeps(task.depends_on)
+        if (!depsSatisfied(this.store.statusesOf(deps), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
+      }
+    }
+    // an epic is never leased (the in_progress acquisition guard above), so its attempts is always 0 and
+    // a refund here would be a no-op write with a misleading audit row. Terminal statuses need no guard:
+    // they have no outgoing edge, so isValidTransition refuses them all.
     if (refund && task.is_epic === 1) return { ok: false, error: `INVALID: cannot reset attempts on epic #${task.id}` }
 
     // D3: epic terminal guard — reject done/failed while non-terminal children exist
