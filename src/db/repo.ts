@@ -111,21 +111,22 @@ export class TaskRepo implements TaskStore {
     return Number(result.changes)
   }
 
-  transitionStatus(id: number, expectedVersion: number, status: TaskStatus, now: string, completedAt: string | null, leaseUntilIso: string | null): number {
+  transitionStatus(id: number, expectedVersion: number, status: TaskStatus, now: string, completedAt: string | null, leaseUntilIso: string | null, holder: string | null = null, resetAttempts: 0 | 1 = 0): number {
     const result = this.db.run(
       `UPDATE tasks SET status = ?, version = version + 1, updated_at = ?,
          completed_at = COALESCE(?, completed_at),
          lease_expires_at = CASE WHEN ? = 'in_progress' THEN ? ELSE NULL END,
-         assignee = CASE WHEN ? = 'canceled' THEN NULL ELSE assignee END
+         assignee = CASE WHEN ? = 'in_progress' THEN ? WHEN ? = 'canceled' THEN NULL ELSE assignee END,
+         attempts = CASE WHEN ? = 1 THEN 0 ELSE attempts END
        WHERE id = ? AND version = ?`,
-      [status, now, completedAt, status, leaseUntilIso, status, id, expectedVersion]
+      [status, now, completedAt, status, leaseUntilIso, status, holder, status, resetAttempts, id, expectedVersion]
     )
     return Number(result.changes)
   }
 
   expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>> {
     return this.db.query(
-      "SELECT id, version, attempts, max_attempts FROM tasks WHERE status = 'in_progress' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?"
+      "SELECT id, version, attempts, max_attempts FROM tasks WHERE status = 'in_progress' AND is_epic = 0 AND lease_expires_at IS NOT NULL AND lease_expires_at < ?"
     ).all(nowIso) as Array<{ id: number; version: number; attempts: number; max_attempts: number }>
   }
 

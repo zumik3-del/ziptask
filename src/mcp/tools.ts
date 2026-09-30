@@ -100,7 +100,9 @@ const UPDATE_STATUS_SHAPE = {
   agent: z.string(),
   status: z.enum(TASK_STATUSES),
   version: z.number(),
-  comment: z.string().optional().describe('typed resolution when done/failed/canceled')
+  comment: z.string().optional().describe('typed resolution when done/failed/canceled'),
+  renew: z.boolean().optional().describe('with status=in_progress on an in_progress task: re-arm your own lease (heartbeat, ~lease_ttl_min/3)'),
+  reset_attempts: z.boolean().optional().describe('with any legal transition: zero attempts (refund a budget spent on accidents); requires comment, max_attempts untouched, echoes attempts in the response; not on epics, not on terminal tasks')
 }
 
 const LIST_QUEUE_SHAPE = {
@@ -156,7 +158,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleClaimTask(svc, args))
 
   server.registerTool('update_status', {
-    description: 'Transition status. Optimistic lock via version — read current version via get_task fields:["version"] (or from your claim response); on CONFLICT re-read version and retry. canceled is terminal and withdraws any non-terminal task',
+    description: 'Transition status. Optimistic lock via version — read current version via get_task fields:["version"] (or from your claim response); on CONFLICT re-read version and retry, except CONFLICT: lease held by <other>, which means hand the task back to that agent. canceled is terminal and withdraws any non-terminal task. A non-renewal status=in_progress needs claim-grade eligibility: refused for an epic (INVALID: #N is an epic, not claimable) and for unsatisfied dependencies when entering from queued/blocked (BLOCKED: dependencies not satisfied) — an epic is never leased, and claim_task is the door to a lease. renew:true with status=in_progress extends your own in_progress lease (heartbeat ~lease_ttl_min/3); the holder must match assignee and the version bumps. reset_attempts:true rides on any legal transition: zeroes attempts (budget refund, max_attempts untouched), requires a comment, and echoes attempts in the response; rejected on epics and on terminal tasks (a failed task is recovered by recreating it)',
     inputSchema: z.object(UPDATE_STATUS_SHAPE).catchall(z.unknown())
   }, async (args) => handleUpdateStatus(svc, args))
 
@@ -257,7 +259,8 @@ export function handleClaimTask(svc: TaskService, args: {
   if (args.task_id !== undefined && args.id !== undefined && args.task_id !== args.id) {
     return errorResult(`INVALID: claim_task id/task_id conflict (id=${args.id} task_id=${args.task_id}); task_id is canonical`)
   }
-  const r = svc.claimTask({ agent: args.agent, taskId: args.task_id ?? args.id })
+  const taskId = args.task_id !== undefined ? args.task_id : args.id
+  const r = svc.claimTask({ agent: args.agent, taskId })
   if (!r.ok) return errorResult(r.error)
   const { id, leaseTtlMin, task } = r.data
   const result: Record<string, unknown> = { id, lease_ttl_min: leaseTtlMin, version: task.version }
@@ -271,6 +274,8 @@ export function handleUpdateStatus(svc: TaskService, args: {
   status: TaskStatus
   version: number
   comment?: string
+  renew?: boolean
+  reset_attempts?: boolean
 }): ToolResult {
   const unknown = rejectUnknownArgs('update_status', UPDATE_STATUS_SHAPE, args)
   if (unknown) return unknown

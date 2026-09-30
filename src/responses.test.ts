@@ -259,3 +259,47 @@ describe('get_timeline', () => {
     expect(lines[0].split('|')[1]).toBe('action')
   })
 })
+
+describe('update_status response shape (F2 #1065 + F3 #1066)', () => {
+  function claimed(agent = 'agent-1'): number {
+    const id = json(handleCreateTask(svc, { title: 'Resp', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent, task_id: id })
+    return id
+  }
+  const version = (id: number) => json(handleGetTask(svc, { id, fields: ['version'] })).version
+
+  test('a plain transition keeps the {id, status, version} shape and adds no attempts', () => {
+    const id = claimed()
+    const res = json(handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: version(id) }))
+    expect(Object.keys(res).sort()).toEqual(['id', 'status', 'version'])
+    expect('attempts' in res).toBe(false)
+  })
+
+  test('a renewal keeps the {id, status, version} shape too (no lease field, token economy)', () => {
+    const id = claimed()
+    const res = json(handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'in_progress', renew: true, version: version(id) }))
+    expect(Object.keys(res).sort()).toEqual(['id', 'status', 'version'])
+    expect('lease_expires_at' in res).toBe(false)
+    expect('lease_until' in res).toBe(false)
+  })
+
+  test('a refund adds attempts — the in-band signal that the flag reached the server', () => {
+    const id = claimed()
+    db.run('UPDATE tasks SET attempts = 2 WHERE id = ?', [id])
+    const res = json(handleUpdateStatus(svc, {
+      id, agent: 'agent-1', status: 'blocked', version: version(id), reset_attempts: true, comment: 'spent on accidents'
+    }))
+    expect(Object.keys(res).sort()).toEqual(['attempts', 'id', 'status', 'version'])
+    expect(res.attempts).toBe(0)
+  })
+
+  test('reset_attempts: false keeps the plain shape (the echo keys off the request, not the value)', () => {
+    const id = claimed()
+    db.run('UPDATE tasks SET attempts = 2 WHERE id = ?', [id])
+    const res = json(handleUpdateStatus(svc, {
+      id, agent: 'agent-1', status: 'blocked', version: version(id), reset_attempts: false, comment: 'parking'
+    }))
+    expect(Object.keys(res).sort()).toEqual(['id', 'status', 'version'])
+    expect(getTaskRow(db, id).attempts).toBe(2)
+  })
+})

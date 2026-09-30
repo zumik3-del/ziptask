@@ -2,6 +2,7 @@ import type { Task, TaskStatus } from './tasks'
 import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './tasks'
 import type { TaskStore, TimelineRow, CommentRow, SvcResult } from './types'
 import { parseDeps, createsCycle, depsSatisfied } from './deps'
+import type { UpdateStatusData } from './types'
 import {
   SECOND_MS, MINUTE_MS, CANDIDATES_PAGE_SIZE, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
   DEFAULT_AUDIT_LOG, DEFAULT_REAP_COOLDOWN_SEC, DEFAULT_AUTO_CLAIM_CEILING, DEFAULT_PRIORITY,
@@ -245,18 +246,57 @@ export class TaskService {
     return { ok: true, data: { id: task.id, leaseTtlMin: this.leaseTtlMin, task: updated } }
   }
 
-  updateStatus(args: { id: number; agent: string; status: TaskStatus; version: number; comment?: string }): SvcResult<{ id: number; status: TaskStatus; version: number }> {
+  updateStatus(args: { id: number; agent: string; status: TaskStatus; version: number; comment?: string; renew?: boolean; reset_attempts?: boolean }): SvcResult<UpdateStatusData> {
     const agentErr = this._requiredError(args.agent, 'agent') ?? this._tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent')
     if (agentErr) return { ok: false, error: agentErr }
     if (args.comment !== undefined) {
       const commentErr = this._contentError(args.comment)
       if (commentErr) return { ok: false, error: commentErr }
     }
+    // an audited escape hatch without a stated reason is what hides the next accidents
+    const refund = args.reset_attempts === true
+    if (refund && !args.comment?.trim()) return { ok: false, error: 'INVALID: reset_attempts requires a comment' }
     this._doReap()
     const task = this.store.getTaskRow(args.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     if (task.version !== args.version) return { ok: false, error: `CONFLICT: expected version ${task.version}, got ${args.version}` }
-    if (!isValidTransition(task.status, args.status)) return { ok: false, error: `INVALID: ${task.status} → ${args.status}` }
+
+    // Lease heartbeat: only the holder re-arms its own in_progress lease. The reap above is the fence,
+    // so a late heartbeat sees a requeued task and fails here instead of resurrecting the lease.
+    const selfEdge = task.status === 'in_progress' && args.status === 'in_progress'
+    const renewal = selfEdge && args.renew === true
+    if (args.renew === true && !selfEdge) {
+      return { ok: false, error: 'INVALID: renew requires status=in_progress on an in_progress task' }
+    }
+    // the self-edge exists in VALID_TRANSITIONS; without the flag it stays unreachable so a
+    // typo'd in_progress cannot silently become a lease bump
+    if (selfEdge && !renewal) {
+      return { ok: false, error: 'INVALID: in_progress → in_progress requires renew: true' }
+    }
+    if (!isValidTransition(task.status, args.status)) {
+      return { ok: false, error: `INVALID: ${task.status} → ${args.status}` }
+    }
+    if (renewal) {
+      if (task.is_epic === 1) return { ok: false, error: `INVALID: #${task.id} is an epic` }
+      if (task.assignee !== args.agent) return { ok: false, error: `CONFLICT: lease held by ${task.assignee}` }
+    }
+    // acquiring a lease is a claim-verb concern: update_status must not stay a second, unguarded
+    // door to in_progress. The claimTask precondition set (service.ts:228-233) maps 1:1 — NOT_FOUND
+    // is covered by the row read, the status window by isValidTransition, so is_epic and deps are
+    // the only two missing checks. review -> in_progress is a deliberate superset (work sent back):
+    // its deps are provably still satisfied, because deps are immutable after create and terminal
+    // statuses have no outgoing edge (tasks.ts:58-61).
+    if (args.status === 'in_progress' && !selfEdge) {
+      if (task.is_epic === 1) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }
+      if (task.status === 'queued' || task.status === 'blocked') {
+        const deps = parseDeps(task.depends_on)
+        if (!depsSatisfied(this.store.statusesOf(deps), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
+      }
+    }
+    // an epic is never leased (the in_progress acquisition guard above), so its attempts is always 0 and
+    // a refund here would be a no-op write with a misleading audit row. Terminal statuses need no guard:
+    // they have no outgoing edge, so isValidTransition refuses them all.
+    if (refund && task.is_epic === 1) return { ok: false, error: `INVALID: cannot reset attempts on epic #${task.id}` }
 
     // D3: epic terminal guard — reject done/failed while non-terminal children exist
     if (task.is_epic === 1 && TERMINAL_STATUSES.includes(args.status)) {
@@ -272,12 +312,21 @@ export class TaskService {
     // D6: mirror subtask_done/subtask_failed onto the parent epic
     const subtaskMirror = args.status === 'done' ? 'subtask_done' : args.status === 'failed' ? 'subtask_failed' : null
 
-    return this._atomic((): SvcResult<{ id: number; status: TaskStatus; version: number }> => {
-      const changes = this.store.transitionStatus(args.id, args.version, args.status, now, completedAt, leaseUntil)
+    return this._atomic((): SvcResult<UpdateStatusData> => {
+      const changes = this.store.transitionStatus(args.id, args.version, args.status, now, completedAt, leaseUntil, args.agent, refund ? 1 : 0)
       if (changes !== 1) return { ok: false, error: 'CONFLICT: concurrent modification' }
       const updated = this.store.getTaskRow(args.id)
       if (!updated) return { ok: false, error: 'CONFLICT: concurrent modification' }
-      if (this.auditLog) this.store.auditAppend(args.id, args.agent, 'update_status', task.status, args.status)
+      if (this.auditLog) {
+        // a pure renewal audits as lease_renewed: an update_status row would cut the in_progress
+        // segment in statusDurations (metrics-repo.ts:35) at every heartbeat
+        if (renewal) {
+          this.store.auditAppend(args.id, args.agent, 'lease_renewed', task.lease_expires_at ?? undefined, updated.lease_expires_at ?? undefined)
+        } else {
+          this.store.auditAppend(args.id, args.agent, 'update_status', task.status, args.status)
+        }
+        if (refund) this.store.auditAppend(args.id, args.agent, 'attempts_reset', String(task.attempts), '0')
+      }
       if (args.comment) {
         const type: 'comment' | 'resolution' = TERMINAL_STATUSES.includes(args.status) ? 'resolution' : 'comment'
         this.store.insertComment(args.id, args.agent, args.comment, type)
@@ -291,7 +340,9 @@ export class TaskService {
         }
       }
 
-      return { ok: true, data: { id: args.id, status: args.status, version: updated.version } }
+      // attempts is echoed only on a refund: its absence is the in-band signal that the flag was
+      // silently dropped by an older build (R1)
+      return { ok: true, data: { id: args.id, status: args.status, version: updated.version, ...(refund ? { attempts: updated.attempts } : {}) } }
     })
   }
 

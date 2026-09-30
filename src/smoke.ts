@@ -24,6 +24,14 @@ function assert(cond: boolean, msg: string) {
   console.log(`[smoke] ok: ${msg}`)
 }
 
+function getVersion(id: number): number {
+  return (db.query('SELECT version FROM tasks WHERE id = ?').get(id) as { version: number }).version
+}
+
+function attemptsRow(id: number): { attempts: number; max_attempts: number } {
+  return db.query('SELECT attempts, max_attempts FROM tasks WHERE id = ?').get(id) as { attempts: number; max_attempts: number }
+}
+
 const host = '127.0.0.1'
 const server = startHttp({
   svc,
@@ -83,6 +91,92 @@ try {
     claim.id === idA && claim.lease_ttl_min === 15 && claim.description === 'Smoke description' && !('lease_until' in claim),
     `claim_task include → {id, lease_ttl_min, description}: ${JSON.stringify(claim)}`
   )
+
+  // ── F2 lease heartbeat + F3 attempts recovery (F2 #1065 / F3 #1066) ─────────
+  // Runs while idA is still in_progress and held by smoke-agent: the heartbeat is the
+  // in_progress → in_progress self-edge and it re-arms only the caller's own lease.
+  const leaseField = async (id: number) =>
+    parseToolResult(await client.callTool({ name: 'get_task', arguments: { id, fields: ['lease_expires_at'] } })).lease_expires_at as string
+
+  const leaseBefore = await leaseField(idA)
+  const beatRes: any = await client.callTool({
+    name: 'update_status',
+    arguments: { id: idA, agent: 'smoke-agent', status: 'in_progress', renew: true, version: claim.version }
+  })
+  assert(beatRes.isError !== true, `update_status renew:true is accepted: ${textOf(beatRes)}`)
+  const beat = parseToolResult(beatRes)
+  assert(
+    beat.status === 'in_progress' && beat.version === claim.version + 1 && !('attempts' in beat),
+    `update_status renew:true → heartbeat {id, status, version} with no attempts echo: ${JSON.stringify(beat)}`
+  )
+  const leaseAfter = await leaseField(idA)
+  assert(
+    new Date(leaseAfter).getTime() > new Date(leaseBefore).getTime(),
+    `heartbeat moved lease_expires_at: ${leaseBefore} → ${leaseAfter}`
+  )
+  const beatTimeline = textOf(await client.callTool({ name: 'get_timeline', arguments: { id: idA } }))
+  assert(
+    beatTimeline.includes(`lease_renewed: ${leaseBefore}->${leaseAfter}`),
+    `get_timeline shows lease_renewed ${leaseBefore}->${leaseAfter}`
+  )
+
+  const noFlag = await client.callTool({
+    name: 'update_status',
+    arguments: { id: idA, agent: 'smoke-agent', status: 'in_progress', version: beat.version }
+  })
+  assert(
+    noFlag.isError === true && textOf(noFlag) === 'INVALID: in_progress → in_progress requires renew: true',
+    `in_progress → in_progress without renew → exact refusal: ${textOf(noFlag)}`
+  )
+  const foreign = await client.callTool({
+    name: 'update_status',
+    arguments: { id: idA, agent: 'intruder', status: 'in_progress', renew: true, version: beat.version }
+  })
+  assert(
+    foreign.isError === true && textOf(foreign) === 'CONFLICT: lease held by smoke-agent',
+    `a non-holder heartbeat → CONFLICT: ${textOf(foreign)}`
+  )
+
+  // The refund needs a spent budget; the setup is direct SQL (a 15-minute lease cannot be
+  // waited out in a smoke run), every assertion below goes over the wire.
+  const refundCreate = parseToolResult(await client.callTool({
+    name: 'create_task',
+    arguments: { title: 'Refund smoke task', reporter: 'smoke' }
+  }))
+  const refundId = refundCreate.id
+  await client.callTool({ name: 'claim_task', arguments: { agent: 'smoke-agent', task_id: refundId } })
+  db.run('UPDATE tasks SET attempts = 3 WHERE id = ?', [refundId])
+
+  const noComment = await client.callTool({
+    name: 'update_status',
+    arguments: { id: refundId, agent: 'orchestrator', status: 'blocked', version: getVersion(refundId), reset_attempts: true }
+  })
+  assert(
+    noComment.isError === true && textOf(noComment) === 'INVALID: reset_attempts requires a comment',
+    `reset_attempts without a comment → exact refusal: ${textOf(noComment)}`
+  )
+
+  const refundRes: any = await client.callTool({
+    name: 'update_status',
+    arguments: {
+      id: refundId, agent: 'orchestrator', status: 'blocked', version: getVersion(refundId),
+      reset_attempts: true, comment: 'attempts spent on accidental claims, not on work'
+    }
+  })
+  assert(refundRes.isError !== true, `update_status reset_attempts:true is accepted: ${textOf(refundRes)}`)
+  const refund = parseToolResult(refundRes)
+  assert(
+    refund.status === 'blocked' && refund.attempts === 0,
+    `update_status reset_attempts:true → attempts echoed as 0: ${JSON.stringify(refund)}`
+  )
+  const refundRow = attemptsRow(refundId)
+  assert(
+    refundRow.attempts === 0 && refundRow.max_attempts === 3,
+    `refund zeroed attempts and left max_attempts alone: ${JSON.stringify(refundRow)}`
+  )
+  const refundTimeline = textOf(await client.callTool({ name: 'get_timeline', arguments: { id: refundId } }))
+  const resetLine = refundTimeline.split('\n').find(l => l.includes('|attempts_reset: 3->0'))
+  assert(resetLine !== undefined, `get_timeline shows attempts_reset: 3->0: "${resetLine}"`)
 
   const g1 = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: idA, fields: ['version'] } }))
   const review = parseToolResult(await client.callTool({
@@ -221,9 +315,50 @@ try {
     name: 'create_task',
     arguments: { title: 'Guard sub', reporter: 'smoke', epic_id: epic2Id }
   }))
-  // Drive epic2 to review (queued→in_progress→review)
+  // ── lease acquisition guard: in_progress needs claim-grade eligibility (#1075) ─
+  // An epic holds no work, so it is never leased: update_status must refuse the acquisition, and the
+  // sanctioned lease-free on-ramp to review is queued → blocked → review. Both refusal strings are
+  // wire-visible, and on a pre-redeploy build the failure mode is a silent success, so they are
+  // asserted over MCP rather than left to the unit suite.
   const e2v1 = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epic2Id, fields: ['version'] } }))
-  parseToolResult(await client.callTool({ name: 'update_status', arguments: { id: epic2Id, agent: 'smoke', status: 'in_progress', version: e2v1.version } }))
+  const epicLease = await client.callTool({
+    name: 'update_status',
+    arguments: { id: epic2Id, agent: 'smoke', status: 'in_progress', version: e2v1.version }
+  })
+  assert(epicLease.isError === true, 'epic update_status → in_progress is refused (an epic is never leased)')
+  assert(
+    textOf(epicLease) === `INVALID: #${epic2Id} is an epic, not claimable`,
+    `epic acquisition refusal is the contract text: ${textOf(epicLease)}`
+  )
+  const epicAfterRefusal = parseToolResult(await client.callTool({
+    name: 'get_task', arguments: { id: epic2Id, fields: ['status', 'version', 'lease_expires_at'] }
+  }))
+  assert(
+    epicAfterRefusal.status === 'queued' && epicAfterRefusal.version === e2v1.version && epicAfterRefusal.lease_expires_at === undefined,
+    `refused epic acquisition left the row untouched: ${JSON.stringify(epicAfterRefusal)}`
+  )
+
+  const depA = parseToolResult(await client.callTool({ name: 'create_task', arguments: { title: 'Lease dep', reporter: 'smoke' } }))
+  const depB = parseToolResult(await client.callTool({
+    name: 'create_task', arguments: { title: 'Lease dependent', reporter: 'smoke', depends_on: [depA.id] }
+  }))
+  const depLease = await client.callTool({
+    name: 'update_status',
+    arguments: { id: depB.id, agent: 'smoke', status: 'in_progress', version: 1 }
+  })
+  assert(depLease.isError === true, 'update_status → in_progress with unmet deps is refused')
+  assert(
+    textOf(depLease) === 'BLOCKED: dependencies not satisfied',
+    `dep acquisition refusal is the contract text: ${textOf(depLease)}`
+  )
+  const depAfter = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: depB.id, fields: ['status', 'version'] } }))
+  assert(
+    depAfter.status === 'queued' && depAfter.version === 1,
+    `refused dep acquisition left the row untouched: ${JSON.stringify(depAfter)}`
+  )
+
+  // Drive epic2 to review the legal way (queued→blocked→review)
+  parseToolResult(await client.callTool({ name: 'update_status', arguments: { id: epic2Id, agent: 'smoke', status: 'blocked', version: e2v1.version } }))
   const e2v2 = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epic2Id, fields: ['version'] } }))
   const guardReview = parseToolResult(await client.callTool({ name: 'update_status', arguments: { id: epic2Id, agent: 'smoke', status: 'review', version: e2v2.version } }))
   assert(guardReview.status === 'review', `epic can transition to review (non-terminal)`)
