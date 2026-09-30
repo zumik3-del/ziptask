@@ -38,9 +38,13 @@ export function trackStreamActivity(response: Response, session: Session): Respo
 
 export class InMemoryEventStore implements EventStore {
   private events = new Map<string, { streamId: string; message: JSONRPCMessage }>()
+  private seq = 0
 
+  // Event ids must order the same way events were stored: the timestamp prefix alone is
+  // ambiguous because bursts land in the same millisecond, so it is paired with a
+  // fixed-width monotonic counter. Ids are unique and lexicographically ordered.
   private generateEventId(streamId: string): string {
-    return `${streamId}_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`
+    return `${streamId}_${Date.now()}_${String(++this.seq).padStart(10, '0')}`
   }
 
   async storeEvent(streamId: string, message: JSONRPCMessage): Promise<string> {
@@ -62,9 +66,10 @@ export class InMemoryEventStore implements EventStore {
   async replayEventsAfter(lastEventId: string, { send }: { send: (eventId: string, message: JSONRPCMessage) => Promise<void> }): Promise<string> {
     if (!lastEventId || !this.events.has(lastEventId)) return ''
     const streamId = this.events.get(lastEventId)!.streamId
-    const sorted = [...this.events.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    // Snapshot then iterate in insertion order, which is the store order; no id sort needed.
+    const snapshot = [...this.events.entries()]
     let found = false
-    for (const [id, { streamId: sId, message }] of sorted) {
+    for (const [id, { streamId: sId, message }] of snapshot) {
       if (sId !== streamId) continue
       if (id === lastEventId) { found = true; continue }
       if (found) await send(id, message)
