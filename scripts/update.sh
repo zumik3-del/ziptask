@@ -215,10 +215,20 @@ mkdir -p "$BIN"
 
 trap 'rm -f "$TMP_BINARY"' EXIT
 
+# Binary fetch: keep the progress meter (no -s/-q), bound the runtime with a
+# connect timeout + stall guard, and retry with resume (-C -/-c) so a flaky link
+# does not restart an 80 MB transfer from zero.
 if command -v curl >/dev/null 2>&1; then
-  curl -fLsS -o "$TMP_BINARY" "$URL"
+  if ! curl -fL -S --connect-timeout 15 --speed-limit 1024 --speed-time 30 \
+       --retry 3 --retry-delay 2 -C - -o "$TMP_BINARY" "$URL"; then
+    echo "[ziptask] error: download failed: ${URL}" >&2
+    exit 1
+  fi
 elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$TMP_BINARY" "$URL"
+  if ! wget -c -O "$TMP_BINARY" --tries=3 --waitretry=2 --timeout=30 "$URL"; then
+    echo "[ziptask] error: download failed: ${URL}" >&2
+    exit 1
+  fi
 else
   echo "error: need curl or wget" >&2
   exit 1
