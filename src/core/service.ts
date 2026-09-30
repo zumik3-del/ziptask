@@ -217,14 +217,14 @@ export class TaskService {
     return ready
   }
 
-  claimTask(args: { agent: string; task_id?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Task }> {
+  claimTask(args: { agent: string; taskId?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Task }> {
     const agentErr = this._requiredError(args.agent, 'agent') ?? this._tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent')
     if (agentErr) return { ok: false, error: agentErr }
     this._doReap()
     let task: Task | null = null
 
-    if (args.task_id) {
-      task = this.store.getTaskRow(args.task_id)
+    if (args.taskId !== undefined) {
+      task = this.store.getTaskRow(args.taskId)
       if (!task) return { ok: false, error: 'NOT_FOUND' }
       if (task.status !== 'queued' && task.status !== 'blocked') return { ok: false, error: `CONFLICT: status=${task.status}` }
       if (task.is_epic === 1) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }

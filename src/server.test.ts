@@ -80,7 +80,7 @@ describe('GET /api/task/:id HTTP endpoint', () => {
   test('resolution comment type is preserved', async () => {
     const id = getId(srv.svc.createTask({ title: 'Resolution task', reporter: 'dev' }))
     // drive through claim + review to done
-    const claimOk = srv.svc.claimTask({ agent: 'tester', task_id: id })
+    const claimOk = srv.svc.claimTask({ agent: 'tester', taskId: id })
     expect(claimOk.ok).toBe(true)
     const v1 = getVersion(srv.db, id)
     const reviewOk = srv.svc.updateStatus({ id, agent: 'tester', status: 'review', version: v1 })
@@ -147,7 +147,7 @@ describe('GET /api/task/:id HTTP endpoint', () => {
   test('blocked_by empty when all deps satisfied', async () => {
     const depId = getId(srv.svc.createTask({ title: 'Done dep', reporter: 'dev' }))
     // drive dep to done via claim + two status transitions
-    const claimOk = srv.svc.claimTask({ agent: 'dev', task_id: depId })
+    const claimOk = srv.svc.claimTask({ agent: 'dev', taskId: depId })
     expect(claimOk.ok).toBe(true)
     const v1 = getVersion(srv.db, depId)
     const reviewOk = srv.svc.updateStatus({ id: depId, agent: 'dev', status: 'review', version: v1 })
@@ -645,4 +645,176 @@ describe('bounded event store (#812)', () => {
     expect(sent.some(s => s.method === 'c')).toBe(true)
   })
 })
+
+describe('argument contract over MCP (F1 #1040)', () => {
+  let srv: ReturnType<typeof makeServer>
+  let client: Client
+
+  beforeEach(async () => {
+    srv = makeServer()
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${srv.port}/mcp`))
+    client = new Client({ name: 'arg-contract-test', version: '1.0.0' })
+    await client.connect(transport)
+  })
+
+  afterEach(async () => {
+    try { await client.close() } catch {}
+    srv.stop()
+  })
+
+  const textOf = (r: any): string => (r.content as any[])[0].text
+
+  function storeSnapshot() {
+    return {
+      tasks: srv.db.query('SELECT id, status, version, assignee, attempts, lease_expires_at FROM tasks ORDER BY id').all(),
+      audit: srv.db.query('SELECT id, task_id, agent, action FROM audit_log ORDER BY id').all(),
+      comments: srv.db.query('SELECT id, task_id, content FROM comments ORDER BY id').all()
+    }
+  }
+
+  describe('claim_task id alias', () => {
+    test('id alone claims exactly that task over the wire (alias survives parsing)', async () => {
+      const bait = getId(srv.svc.createTask({ title: 'Bait', reporter: 'dev', priority: 'p0' }))
+      const target = getId(srv.svc.createTask({ title: 'Alias target', reporter: 'dev', priority: 'p3' }))
+
+      const res: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', id: target } })
+      expect(res.isError).toBeUndefined()
+      expect(JSON.parse(textOf(res)).id).toBe(target)
+      expect((srv.db.query('SELECT status FROM tasks WHERE id = ?').get(target) as any).status).toBe('in_progress')
+      // The p0 bait is what auto-pick would have taken: it must be untouched.
+      expect((srv.db.query('SELECT status FROM tasks WHERE id = ?').get(bait) as any).status).toBe('queued')
+    })
+
+    test('task_id alone still claims that task (canonical name byte-identical)', async () => {
+      const target = getId(srv.svc.createTask({ title: 'Canonical', reporter: 'dev', priority: 'p0' }))
+      const res: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: target } })
+      expect(JSON.parse(textOf(res)).id).toBe(target)
+    })
+
+    test('id and task_id equal → claims without error', async () => {
+      const target = getId(srv.svc.createTask({ title: 'BothEqual', reporter: 'dev' }))
+      const res: any = await client.callTool({
+        name: 'claim_task', arguments: { agent: 'tester', id: target, task_id: target }
+      })
+      expect(res.isError).toBeUndefined()
+      expect(JSON.parse(textOf(res)).id).toBe(target)
+    })
+
+    test('id and task_id disagree → isError, nothing claimed', async () => {
+      const a = getId(srv.svc.createTask({ title: 'A', reporter: 'dev' }))
+      const b = getId(srv.svc.createTask({ title: 'B', reporter: 'dev' }))
+      const before = storeSnapshot()
+
+      const res: any = await client.callTool({
+        name: 'claim_task', arguments: { agent: 'tester', id: a, task_id: b }
+      })
+      expect(res.isError).toBe(true)
+      expect(textOf(res)).toBe(`INVALID: claim_task id/task_id conflict (id=${a} task_id=${b}); task_id is canonical`)
+      expect(storeSnapshot()).toEqual(before)
+    })
+  })
+
+  describe('unknown-argument rejection', () => {
+    test('claim_task with a bogus key is rejected and the task stays claimable', async () => {
+      const target = getId(srv.svc.createTask({ title: 'Intended', reporter: 'dev', priority: 'p0' }))
+
+      const res: any = await client.callTool({
+        name: 'claim_task', arguments: { agent: 'tester', id: target, bogus: 1 }
+      })
+      expect(res.isError).toBe(true)
+      expect(textOf(res)).toContain('INVALID: unknown argument bogus')
+
+      const queue = textOf(await client.callTool({ name: 'list_queue', arguments: {} }))
+      expect(queue).toContain(`${target}|p0|Intended`)
+
+      // Still genuinely claimable afterwards — no lease, no attempts bump.
+      const claim: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', id: target } })
+      expect(JSON.parse(textOf(claim)).id).toBe(target)
+    })
+
+    test('get_task with a bogus key is rejected (rejection is global, not claim_task-specific)', async () => {
+      const id = getId(srv.svc.createTask({ title: 'Read', reporter: 'dev' }))
+      const res: any = await client.callTool({ name: 'get_task', arguments: { id, field: 'x' } })
+      expect(res.isError).toBe(true)
+      expect(textOf(res)).toBe('INVALID: unknown argument field on get_task (accepted: fields, id)')
+    })
+
+    test('every one of the 9 tools rejects an unknown key, and the accepted list matches tools/list', async () => {
+      const id = getId(srv.svc.createTask({ title: 'Base', reporter: 'dev', priority: 'p0' }))
+      const version = getVersion(srv.db, id)
+      const listed = await client.listTools()
+      const schemas = new Map<string, any>(
+        (listed.tools as any[]).map(t => [t.name, t.inputSchema as any])
+      )
+      expect(schemas.size).toBe(9)
+
+      const calls: Array<[string, Record<string, unknown>]> = [
+        ['create_task', { title: 'Nope', reporter: 'dev', bogus: 1 }],
+        ['get_task', { id, bogus: 1 }],
+        ['list_tasks', { bogus: 1 }],
+        ['claim_task', { agent: 'tester', bogus: 1 }],
+        ['update_status', { id, agent: 'tester', status: 'review', version, bogus: 1 }],
+        ['list_queue', { bogus: 1 }],
+        ['add_comment', { id, agent: 'tester', content: 'nope', bogus: 1 }],
+        ['get_timeline', { id, bogus: 1 }],
+        ['get_template', { name: 'task', bogus: 1 }]
+      ]
+      expect(calls.length).toBe(9)
+
+      const before = storeSnapshot()
+      for (const [tool, args] of calls) {
+        const schema = schemas.get(tool)!
+        const accepted = Object.keys(schema.properties ?? {}).sort().join(', ')
+        const res: any = await client.callTool({ name: tool, arguments: args })
+        expect(`${tool}: ${res.isError}`).toBe(`${tool}: true`)
+        expect(`${tool}: ${textOf(res)}`).toBe(
+          `${tool}: INVALID: unknown argument bogus on ${tool} (accepted: ${accepted})`
+        )
+      }
+      expect(storeSnapshot()).toEqual(before)
+    })
+  })
+
+  describe('advertised schema (R7 guard against a later .strict() "fix")', () => {
+    test('no tool advertises additionalProperties: false, all 9 advertise it', async () => {
+      const listed = await client.listTools()
+      const tools = listed.tools as any[]
+      expect(tools.length).toBe(9)
+      for (const t of tools) {
+        expect(`${t.name}:${JSON.stringify(t.inputSchema.additionalProperties)}`)
+          .toBe(`${t.name}:{}`)
+        expect(`${t.name}:${t.inputSchema.additionalProperties}`).not.toBe(`${t.name}:false`)
+      }
+    })
+
+    test('claim_task advertises the id alias and keeps task_id', async () => {
+      const listed = await client.listTools()
+      const claim = (listed.tools as any[]).find(t => t.name === 'claim_task')!
+      const props = claim.inputSchema.properties
+      expect(Object.keys(props).sort()).toEqual(['agent', 'id', 'include', 'task_id'])
+      expect(props.id.description).toContain('alias of task_id')
+    })
+  })
+
+  describe('task_id 0 must not auto-pick', () => {
+    test('claim_task with task_id 0 is a range error and claims nothing', async () => {
+      const bait = getId(srv.svc.createTask({ title: 'Bait', reporter: 'dev', priority: 'p0' }))
+      const before = storeSnapshot()
+
+      const res: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: 0 } })
+      expect(res.isError).toBe(true)
+      expect(textOf(res)).not.toContain('INTERNAL')
+      expect(storeSnapshot()).toEqual(before)
+      expect((srv.db.query('SELECT status FROM tasks WHERE id = ?').get(bait) as any).status).toBe('queued')
+    })
+
+    test('claim_task with id 0 is rejected and claims nothing', async () => {
+      const bait = getId(srv.svc.createTask({ title: 'Bait', reporter: 'dev', priority: 'p0' }))
+      const res: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', id: 0 } })
+      expect(res.isError).toBe(true)
+      expect((srv.db.query('SELECT status FROM tasks WHERE id = ?').get(bait) as any).status).toBe('queued')
+    })
+  })
+})
+
 
