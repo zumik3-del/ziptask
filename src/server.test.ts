@@ -891,6 +891,82 @@ describe('argument contract over MCP (F1 #1040)', () => {
       expect(Object.keys(props).sort()).toEqual(['agent', 'id', 'include', 'task_id'])
       expect(props.id.description).toContain('alias of task_id')
     })
+
+    test('update_status advertises renew and reset_attempts as booleans', async () => {
+      const listed = await client.listTools()
+      const update = (listed.tools as any[]).find(t => t.name === 'update_status')!
+      const props = update.inputSchema.properties
+      expect(Object.keys(props).sort()).toEqual(['agent', 'comment', 'id', 'renew', 'reset_attempts', 'status', 'version'])
+      expect(props.renew.type).toBe('boolean')
+      expect(props.reset_attempts.type).toBe('boolean')
+    })
+  })
+
+  describe('renew / reset_attempts over the wire (F2 #1065 + F3 #1066)', () => {
+    async function claimOverWire(title: string): Promise<number> {
+      const id = getId(srv.svc.createTask({ title, reporter: 'dev', priority: 'p0' }))
+      const claim = JSON.parse(textOf(await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: id } })))
+      expect(claim.id).toBe(id)
+      return id
+    }
+
+    test('a heartbeat over MCP re-arms the lease and bumps the version', async () => {
+      const id = await claimOverWire('Wire')
+      const version = getVersion(srv.db, id)
+
+      const res = JSON.parse(textOf(await client.callTool({
+        name: 'update_status',
+        arguments: { id, agent: 'tester', status: 'in_progress', renew: true, version }
+      })))
+      expect(res).toEqual({ id, status: 'in_progress', version: version + 1 })
+      const row = srv.db.query('SELECT lease_expires_at, attempts, assignee FROM tasks WHERE id = ?').get(id) as any
+      expect(row.lease_expires_at).not.toBeNull()
+      expect(row.attempts).toBe(0)
+      expect(row.assignee).toBe('tester')
+    })
+
+    test('a refund over MCP echoes attempts and refunds the row', async () => {
+      const id = getId(srv.svc.createTask({ title: 'Wire refund', reporter: 'dev', priority: 'p0' }))
+      await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: id } })
+      srv.db.run('UPDATE tasks SET attempts = 3 WHERE id = ?', [id])
+
+      const res = JSON.parse(textOf(await client.callTool({
+        name: 'update_status',
+        arguments: { id, agent: 'tester', status: 'blocked', version: getVersion(srv.db, id), reset_attempts: true, comment: 'spent on accidental claims' }
+      })))
+      expect(res.attempts).toBe(0)
+      const row = srv.db.query('SELECT attempts, max_attempts FROM tasks WHERE id = ?').get(id) as any
+      expect(row.attempts).toBe(0)
+      expect(row.max_attempts).toBe(3)
+    })
+
+    test('a non-boolean renew is a schema validation error and changes nothing', async () => {
+      const id = getId(srv.svc.createTask({ title: 'Type', reporter: 'dev', priority: 'p0' }))
+      await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: id } })
+      const before = storeSnapshot()
+
+      const res: any = await client.callTool({
+        name: 'update_status',
+        arguments: { id, agent: 'tester', status: 'in_progress', version: getVersion(srv.db, id), renew: 'yes' }
+      })
+      expect(res.isError).toBe(true)
+      expect(textOf(res)).toContain('expected boolean, received string at renew')
+      expect(storeSnapshot()).toEqual(before)
+    })
+
+    test('a non-boolean reset_attempts is a schema validation error and changes nothing', async () => {
+      const id = getId(srv.svc.createTask({ title: 'Type2', reporter: 'dev', priority: 'p0' }))
+      await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: id } })
+      const before = storeSnapshot()
+
+      const res: any = await client.callTool({
+        name: 'update_status',
+        arguments: { id, agent: 'tester', status: 'blocked', version: getVersion(srv.db, id), reset_attempts: 1, comment: 'x' }
+      })
+      expect(res.isError).toBe(true)
+      expect(textOf(res)).toContain('expected boolean, received number at reset_attempts')
+      expect(storeSnapshot()).toEqual(before)
+    })
   })
 
   describe('task_id 0 must not auto-pick', () => {
