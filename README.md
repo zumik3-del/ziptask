@@ -114,7 +114,7 @@ bun run changelog      # rebuild CHANGELOG.md from git tags (maintainers; clean 
 
 - [Configuration](docs/configuration.md) — `settings.json`, environment variables, the upgrade path, and backups.
 - [HTTP endpoints](docs/http-endpoints.md) — `/mcp`, `/health`, and the experimental `GET /api/task/:id` integration endpoint.
-- [MCP tools](docs/mcp-tools.md) — tool reference, task statuses, and lease-reap semantics.
+- [MCP tools](docs/mcp-tools.md) — tool reference, task statuses, lease-reap semantics, and lease recovery paths.
 - [Epic → sub-task workflow](docs/epics.md) — declaring epics, attaching sub-tasks, roll-up and closure.
 - [Subagent setup](docs/subagents.md) — install and configure the example orchestrator + subagent agents.
 
