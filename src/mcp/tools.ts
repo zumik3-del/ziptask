@@ -100,7 +100,9 @@ const UPDATE_STATUS_SHAPE = {
   agent: z.string(),
   status: z.enum(TASK_STATUSES),
   version: z.number(),
-  comment: z.string().optional().describe('typed resolution when done/failed/canceled')
+  comment: z.string().optional().describe('typed resolution when done/failed/canceled'),
+  renew: z.boolean().optional().describe('with status=in_progress on an in_progress task: re-arm your own lease (heartbeat, ~lease_ttl_min/3)'),
+  reset_attempts: z.boolean().optional().describe('with any legal transition: zero attempts (refund a budget spent on accidents); requires comment, max_attempts untouched, echoes attempts in the response; not on epics, not on terminal tasks')
 }
 
 const LIST_QUEUE_SHAPE = {
@@ -156,7 +158,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleClaimTask(svc, args))
 
   server.registerTool('update_status', {
-    description: 'Transition status. Optimistic lock via version — read current version via get_task fields:["version"] (or from your claim response); on CONFLICT re-read version and retry. canceled is terminal and withdraws any non-terminal task',
+    description: 'Transition status. Optimistic lock via version — read current version via get_task fields:["version"] (or from your claim response); on CONFLICT re-read version and retry. canceled is terminal and withdraws any non-terminal task. renew:true with status=in_progress extends your own in_progress lease (heartbeat ~lease_ttl_min/3); the holder must match assignee and the version bumps. reset_attempts:true rides on any legal transition: zeroes attempts (budget refund, max_attempts untouched), requires a comment, and echoes attempts in the response; rejected on epics and on terminal tasks (a failed task is recovered by recreating it)',
     inputSchema: z.object(UPDATE_STATUS_SHAPE).catchall(z.unknown())
   }, async (args) => handleUpdateStatus(svc, args))
 
@@ -272,6 +274,8 @@ export function handleUpdateStatus(svc: TaskService, args: {
   status: TaskStatus
   version: number
   comment?: string
+  renew?: boolean
+  reset_attempts?: boolean
 }): ToolResult {
   const unknown = rejectUnknownArgs('update_status', UPDATE_STATUS_SHAPE, args)
   if (unknown) return unknown

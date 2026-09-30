@@ -53,7 +53,7 @@ export const TERMINAL_STATUSES: TaskStatus[] = ['done', 'failed', 'canceled']
 
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   queued: ['in_progress', 'blocked', 'canceled'],
-  in_progress: ['review', 'failed', 'blocked', 'canceled'],
+  in_progress: ['in_progress', 'review', 'failed', 'blocked', 'canceled'],
   review: ['done', 'in_progress', 'failed', 'canceled'],
   done: [],
   failed: [],

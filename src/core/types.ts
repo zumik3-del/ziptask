@@ -14,7 +14,8 @@ export interface TaskStore {
   batchTasks(ids: number[]): Map<number, Task | null>
   markClaimed(id: number, expectedVersion: number, agent: string, leaseUntil: string, now: string): number
   transitionStatus(id: number, expectedVersion: number, status: TaskStatus,
-    now: string, completedAt: string | null, leaseUntilIso: string | null): number
+    now: string, completedAt: string | null, leaseUntilIso: string | null,
+    holder?: string | null, resetAttempts?: 0 | 1): number
   transaction<T>(fn: () => T): T
   expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>>
   reapTransition(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number
@@ -33,3 +34,6 @@ export type TimelineRow = { type: string; agent: string; text: string; created_a
 export type CommentRow = { id: number; agent: string; content: string; type: CommentType; created_at: string }
 
 export type SvcResult<T> = { ok: true; data: T } | { ok: false; error: string }
+
+// attempts is present only when update_status was called with reset_attempts
+export type UpdateStatusData = { id: number; status: TaskStatus; version: number; attempts?: number }

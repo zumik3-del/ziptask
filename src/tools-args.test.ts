@@ -215,7 +215,7 @@ describe('unknown-argument rejection on the other handlers (F1 #1040)', () => {
         call: () => handleListTasks(svc, { status: 'queued', limit: 5, sort: 'id' } as any)
       },
       {
-        expected: 'INVALID: unknown argument task on update_status (accepted: agent, comment, id, status, version)',
+        expected: 'INVALID: unknown argument task on update_status (accepted: agent, comment, id, renew, reset_attempts, status, version)',
         call: (id: number) => handleUpdateStatus(svc, { id, agent: 'dev', status: 'review', version: 1, task: 'review' } as any)
       },
       {
@@ -267,5 +267,69 @@ describe('unknown-argument rejection on the other handlers (F1 #1040)', () => {
     expect(res.isError).toBe(true)
     const comments = db.query('SELECT COUNT(*) AS n FROM comments').get() as { n: number }
     expect(comments.n).toBe(0)
+  })
+})
+
+describe('renew / reset_attempts argument contract (F2 #1065 + F3 #1066)', () => {
+  // Both flags hang off update_status and nowhere else: no 11th tool (D-F2-1/D-F3-1), so the
+  // F1 guard must accept them there and still reject them on every other handler.
+  function claimed(): number {
+    const id = createTask('Working', 'p0')
+    const res = handleClaimTask(svc, { agent: 'dev', task_id: id })
+    expect(res.isError).toBeUndefined()
+    return id
+  }
+  const version = (id: number) => getTaskRow(db, id).version as number
+
+  test('renew: true is accepted on update_status and reaches the service', () => {
+    const id = claimed()
+    const before = getTaskRow(db, id)
+    const res = handleUpdateStatus(svc, { id, agent: 'dev', status: 'in_progress', renew: true, version: before.version })
+    expect(res.isError).toBeUndefined()
+    expect(json(res)).toEqual({ id, status: 'in_progress', version: before.version + 1 })
+    expect(getTaskRow(db, id).lease_expires_at).not.toBe(before.lease_expires_at)
+    const renewed = db.query("SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = 'lease_renewed'").get(id) as { n: number }
+    expect(renewed.n).toBe(1)
+  })
+
+  test('renew: false is an accepted no-op argument, not an unknown key', () => {
+    const id = claimed()
+    const res = handleUpdateStatus(svc, { id, agent: 'dev', status: 'review', renew: false, version: version(id) })
+    expect(res.isError).toBeUndefined()
+    expect(json(res).status).toBe('review')
+  })
+
+  test('reset_attempts: true is accepted on update_status and echoes attempts', () => {
+    const id = claimed()
+    db.run('UPDATE tasks SET attempts = 2 WHERE id = ?', [id])
+    const res = handleUpdateStatus(svc, {
+      id, agent: 'dev', status: 'blocked', version: version(id), reset_attempts: true, comment: 'spent on a typo'
+    })
+    expect(res.isError).toBeUndefined()
+    expect(json(res).attempts).toBe(0)
+    expect(getTaskRow(db, id).attempts).toBe(0)
+    expect(getTaskRow(db, id).max_attempts).toBe(3)
+  })
+
+  test('renew: true on claim_task → exact unknown-argument text, nothing claimed', () => {
+    const id = createTask('Untouched', 'p0')
+    const res = handleClaimTask(svc, { agent: 'dev', task_id: id, renew: true } as any)
+    expect(text(res)).toBe('INVALID: unknown argument renew on claim_task (accepted: agent, id, include, task_id)')
+    expect(getTaskRow(db, id).status).toBe('queued')
+    expect(getTaskRow(db, id).lease_expires_at).toBeNull()
+  })
+
+  test('reset_attempts: true on add_comment → exact unknown-argument text, no comment row', () => {
+    const id = createTask('Untouched', 'p0')
+    const res = handleAddComment(svc, { id, agent: 'dev', content: 'hi', reset_attempts: true } as any)
+    expect(text(res)).toBe('INVALID: unknown argument reset_attempts on add_comment (accepted: agent, content, id)')
+    const comments = db.query('SELECT COUNT(*) AS n FROM comments').get() as { n: number }
+    expect(comments.n).toBe(0)
+  })
+
+  test('the flags are additive: the accepted list is exactly the seven update_status keys', () => {
+    const id = claimed()
+    const res = handleUpdateStatus(svc, { id, agent: 'dev', status: 'review', version: version(id), extra_key: 1 } as any)
+    expect(text(res)).toBe('INVALID: unknown argument extra_key on update_status (accepted: agent, comment, id, renew, reset_attempts, status, version)')
   })
 })
