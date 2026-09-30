@@ -298,13 +298,16 @@ describe('service defaults from config (#6)', () => {
 })
 
 describe('metrics exclude epics (#2)', () => {
+  // lease-free on-ramp: an epic is never in_progress, so closed = queued → blocked → review → done.
+  // Each result is asserted: the helper used to ignore them, so a refused hop left the epic open and
+  // the exclusion assertion below still passed — for the wrong reason.
   function driveEpicToDone(id: number) {
-    let v = json(handleGetTask(svc, { id, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id, agent: 'dev', status: 'in_progress', version: v })
-    v = json(handleGetTask(svc, { id, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id, agent: 'dev', status: 'review', version: v })
-    v = json(handleGetTask(svc, { id, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id, agent: 'dev', status: 'done', version: v })
+    for (const status of ['blocked', 'review', 'done'] as const) {
+      const v = json(handleGetTask(svc, { id, fields: ['version'] })).version
+      const res = handleUpdateStatus(svc, { id, agent: 'dev', status, version: v })
+      expect(res.isError).toBeUndefined()
+      expect(json(res)).toEqual({ id, status, version: v + 1 })
+    }
   }
 
   test('done_count excludes closed epics', () => {
@@ -314,6 +317,7 @@ describe('metrics exclude epics (#2)', () => {
     driveToDone(svc, subId, 'dev')
     driveToDone(svc, plainId, 'dev')
     driveEpicToDone(epicId)
+    expect(getTaskRow(db, epicId).status).toBe('done')
 
     expect(metrics.doneCount('0001-01-01T00:00:00.000Z')).toBe(2)
     expect(computeMetrics(metrics, 'all').doneCount).toBe(2)

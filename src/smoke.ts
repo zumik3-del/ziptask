@@ -315,9 +315,50 @@ try {
     name: 'create_task',
     arguments: { title: 'Guard sub', reporter: 'smoke', epic_id: epic2Id }
   }))
-  // Drive epic2 to review (queued→in_progress→review)
+  // ── lease acquisition guard: in_progress needs claim-grade eligibility (#1075) ─
+  // An epic holds no work, so it is never leased: update_status must refuse the acquisition, and the
+  // sanctioned lease-free on-ramp to review is queued → blocked → review. Both refusal strings are
+  // wire-visible, and on a pre-redeploy build the failure mode is a silent success, so they are
+  // asserted over MCP rather than left to the unit suite.
   const e2v1 = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epic2Id, fields: ['version'] } }))
-  parseToolResult(await client.callTool({ name: 'update_status', arguments: { id: epic2Id, agent: 'smoke', status: 'in_progress', version: e2v1.version } }))
+  const epicLease = await client.callTool({
+    name: 'update_status',
+    arguments: { id: epic2Id, agent: 'smoke', status: 'in_progress', version: e2v1.version }
+  })
+  assert(epicLease.isError === true, 'epic update_status → in_progress is refused (an epic is never leased)')
+  assert(
+    textOf(epicLease) === `INVALID: #${epic2Id} is an epic, not claimable`,
+    `epic acquisition refusal is the contract text: ${textOf(epicLease)}`
+  )
+  const epicAfterRefusal = parseToolResult(await client.callTool({
+    name: 'get_task', arguments: { id: epic2Id, fields: ['status', 'version', 'lease_expires_at'] }
+  }))
+  assert(
+    epicAfterRefusal.status === 'queued' && epicAfterRefusal.version === e2v1.version && epicAfterRefusal.lease_expires_at === undefined,
+    `refused epic acquisition left the row untouched: ${JSON.stringify(epicAfterRefusal)}`
+  )
+
+  const depA = parseToolResult(await client.callTool({ name: 'create_task', arguments: { title: 'Lease dep', reporter: 'smoke' } }))
+  const depB = parseToolResult(await client.callTool({
+    name: 'create_task', arguments: { title: 'Lease dependent', reporter: 'smoke', depends_on: [depA.id] }
+  }))
+  const depLease = await client.callTool({
+    name: 'update_status',
+    arguments: { id: depB.id, agent: 'smoke', status: 'in_progress', version: 1 }
+  })
+  assert(depLease.isError === true, 'update_status → in_progress with unmet deps is refused')
+  assert(
+    textOf(depLease) === 'BLOCKED: dependencies not satisfied',
+    `dep acquisition refusal is the contract text: ${textOf(depLease)}`
+  )
+  const depAfter = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: depB.id, fields: ['status', 'version'] } }))
+  assert(
+    depAfter.status === 'queued' && depAfter.version === 1,
+    `refused dep acquisition left the row untouched: ${JSON.stringify(depAfter)}`
+  )
+
+  // Drive epic2 to review the legal way (queued→blocked→review)
+  parseToolResult(await client.callTool({ name: 'update_status', arguments: { id: epic2Id, agent: 'smoke', status: 'blocked', version: e2v1.version } }))
   const e2v2 = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epic2Id, fields: ['version'] } }))
   const guardReview = parseToolResult(await client.callTool({ name: 'update_status', arguments: { id: epic2Id, agent: 'smoke', status: 'review', version: e2v2.version } }))
   assert(guardReview.status === 'review', `epic can transition to review (non-terminal)`)

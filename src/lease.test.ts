@@ -5,9 +5,9 @@ import { TaskRepo } from './db/repo'
 import { MetricsRepo } from './db/metrics-repo'
 import { TaskService } from './core/service'
 import {
-  handleCreateTask, handleGetTask, handleUpdateStatus, handleGetTimeline
+  handleCreateTask, handleGetTask, handleUpdateStatus, handleGetTimeline, handleListTasks
 } from './mcp/tools'
-import { createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text } from './test-context'
+import { createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, driveToDone } from './test-context'
 
 // F2 (#1065) lease heartbeat + F3 (#1066) attempts recovery, against the production symbols
 // (isValidTransition, TaskService, TaskRepo — never a local double) and through the real reap seam
@@ -55,12 +55,33 @@ const claimOrThrow = (id: number, agent: string) => {
   if (!res.ok) throw new Error(`claimTask(${id}) failed: ${res.error}`)
   return res.data
 }
+// the refusal text from the claim verb itself — the guard reuses it, so the two doors must agree
+const claimError = (id: number, agent: string): string | undefined => {
+  const res = svc.claimTask({ agent, taskId: id })
+  return res.ok ? undefined : res.error
+}
 // one #1013 round: a claim that is never finished costs exactly one attempt on the next sweep
 const burnAttempt = (id: number, agent = 'developer') => {
   claimOrThrow(id, agent)
   expireLease(id)
   svc.reapExpiredLeases()
 }
+// A leased row the service can no longer produce: legacy, hand-edited, or rolled back. Written with
+// the production statement shape (transitionStatus sets status/assignee/lease_expires_at in one UPDATE),
+// so the sweep and the renewal guard meet a row the database could really hold.
+const seedLease = (id: number, holder: string, msFromNow: number) => {
+  db.run("UPDATE tasks SET status = 'in_progress', assignee = ?, lease_expires_at = ?, version = version + 1 WHERE id = ?",
+    [holder, new Date(Date.now() + msFromNow).toISOString(), id])
+  return id
+}
+const seedLeasedEpic = (title: string, holder: string, msFromNow = 15 * 60_000) =>
+  seedLease(json(handleCreateTask(svc, { title, reporter: 'dev', epic: true })).id as number, holder, msFromNow)
+const seedReview = (id: number) => {
+  db.run("UPDATE tasks SET status = 'review', version = version + 1 WHERE id = ?", [id])
+  return id
+}
+const createDepTask = (title: string, depends_on: number[]) =>
+  insertTaskRow(repo, { title, reporter: 'dev', depends_on })
 
 describe('lease heartbeat: update_status renew (F2 #1065)', () => {
   test('a heartbeat re-arms the lease and moves nothing but the version', () => {
@@ -230,15 +251,19 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
   })
 
   test('a heartbeat on an epic is refused (epics have no lease semantics)', () => {
-    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
-    const moved = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'in_progress', version: versionOf(epic) })
-    expect(json(moved).status).toBe('in_progress')
+    // The in_progress acquisition guard makes a leased epic unreachable through the service, so the
+    // renewal-path epic refusal is only reachable from a legacy or hand-edited in_progress epic row.
+    // Seeded through the store fixture (the production write), never through update_status.
+    const epic = seedLeasedEpic('Epic', HOLDER)
     const before = row(epic)
+    expect(before.is_epic).toBe(1)
+    expect(before.status).toBe('in_progress')
 
-    const res = leaseField(epic, 'orchestrator', before.version)
+    const res = leaseField(epic, HOLDER, before.version)
     expect(text(res)).toBe(`INVALID: #${epic} is an epic`)
     expect(row(epic).version).toBe(before.version)
     expect(row(epic).lease_expires_at).toBe(before.lease_expires_at)
+    expect(countAudit(epic, 'lease_renewed')).toBe(0)
   })
 
   test('blocked → in_progress makes the mover the holder, so the new holder can renew', () => {
@@ -369,12 +394,15 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
 
   test('reset_attempts on an epic is refused (its attempts are always 0)', () => {
     const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
-    handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'in_progress', version: versionOf(epic) })
+    // no in_progress on-ramp (an epic is never leased): refund the epic from queued through blocked
     const before = row(epic)
+    expect(before.status).toBe('queued')
+    expect(before.attempts).toBe(0)
 
-    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'review', version: before.version, reset_attempts: true, comment: 'why' })
+    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'blocked', version: before.version, reset_attempts: true, comment: 'why' })
     expect(text(res)).toBe(`INVALID: cannot reset attempts on epic #${epic}`)
-    expect(row(epic).status).toBe('in_progress')
+    expect(row(epic).status).toBe('queued')
+    expect(row(epic).attempts).toBe(0)
     expect(row(epic).version).toBe(before.version)
     expect(countAudit(epic, 'attempts_reset')).toBe(0)
   })
@@ -582,6 +610,25 @@ describe('metrics: a heartbeat must not cut the in_progress segment (D-F2-3)', (
     // 30 minutes up to the (real-now) clamp — never a heartbeat-shaped extra segment.
     expect(Math.round(rows.find(r => r.status === 'in_progress')!.minutes)).toBeGreaterThanOrEqual(30)
   })
+
+  test('a refused acquisition contributes no in_progress minutes', () => {
+    // The metrics window is a parameter, so the in_progress segment a *successful* acquisition would
+    // have opened is exactly one hour wide: the control's 30 are all a refusal can leave behind.
+    const control = createTaskRow('Control')
+    driveToDone(control, 0)
+    expect(durations()).toEqual(SYNTHETIC)
+
+    const dep = createTaskRow('Dep')
+    const subject = createDepTask('Subject', [dep])
+    db.run("UPDATE tasks SET created_at = ?, updated_at = ? WHERE id = ?", [`${DAY}00:00:00.000Z`, `${DAY}00:00:00.000Z`, subject])
+
+    const refused = handleUpdateStatus(svc, { id: subject, agent: HOLDER, status: 'in_progress', version: versionOf(subject) })
+    expect(text(refused)).toBe('BLOCKED: dependencies not satisfied')
+    expect(countAudit(subject, 'update_status')).toBe(0)
+
+    const rows = metrics.statusDurations('0000-01-01T00:00:00.000Z', new Date(Date.now() + 3600_000).toISOString())
+    expect(Math.round(rows.find(r => r.status === 'in_progress')!.minutes)).toBe(30)
+  })
 })
 
 describe('reap invariants untouched by F2/F3 (D-F3-5: zero diff in _doReap)', () => {
@@ -629,5 +676,323 @@ describe('reap invariants untouched by F2/F3 (D-F3-5: zero diff in _doReap)', ()
     expect(json(res).version).toBe(before.version + 1)
     expect(row(id).updated_at >= before.updated_at).toBe(true)
     expect(nowIso() > row(id).created_at).toBe(true)
+  })
+})
+
+// Lease acquisition through update_status is claim-verb work: for a non-self-edge entry into
+// in_progress the guard demands claim-grade eligibility (not an epic; deps satisfied from
+// queued/blocked), reusing claimTask's two error strings verbatim. review → in_progress is a
+// deliberate superset: work sent back is exactly the sanctioned case, and its deps are provably
+// still satisfied (depends_on is immutable after create, terminals have no outgoing edge).
+describe('acquiring a lease: update_status → in_progress needs claim-grade eligibility', () => {
+  const HOUR = 3600_000
+
+  // A dep-blocked pair: the dep is queued, so the dependant is invisible to list_queue and
+  // un-claimable, yet still queued/blocked — the exact shape the door used to exploit.
+  const depBlockedPair = () => {
+    const dep = createTaskRow('Dep')
+    const blocked = createDepTask('Dependent', [dep])
+    expect(json(handleGetTask(svc, { id: blocked, fields: ['blocked_by'] })).blocked_by).toEqual([dep])
+    return { dep, blocked }
+  }
+
+  test('an epic is refused on queued → in_progress, and the row does not move', () => {
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    const before = row(epic)
+
+    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'in_progress', version: before.version })
+    expect(text(res)).toBe(`INVALID: #${epic} is an epic, not claimable`)
+
+    const after = row(epic)
+    expect(after.status).toBe('queued')
+    expect(after.version).toBe(before.version)
+    expect(after.lease_expires_at).toBeNull()
+    expect(after.assignee).toBeNull()
+    expect(countAudit(epic, 'update_status')).toBe(0)
+    // one wording, two call sites: identical to what claim_task says about the same row
+    expect(claimError(epic, 'orchestrator')).toBe(`INVALID: #${epic} is an epic, not claimable`)
+  })
+
+  test('an epic is refused on blocked → in_progress too (the guard is not queued-only)', () => {
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    const parked = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'blocked', version: versionOf(epic) })
+    expect(json(parked).status).toBe('blocked')
+    const before = row(epic)
+    // the park is a real transition, so the baseline is what it wrote — the refusal must add nothing
+    const auditBefore = auditActions(epic)
+    expect(auditBefore).toEqual(['create', 'update_status'])
+
+    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'in_progress', version: before.version })
+    expect(text(res)).toBe(`INVALID: #${epic} is an epic, not claimable`)
+    expect(row(epic).status).toBe('blocked')
+    expect(row(epic).version).toBe(before.version)
+    expect(row(epic).lease_expires_at).toBeNull()
+    expect(auditActions(epic)).toEqual(auditBefore)
+    expect(countAudit(epic, 'lease_renewed')).toBe(0)
+  })
+
+  test('unsatisfied deps are refused on queued → in_progress, and the row does not move', () => {
+    const { blocked } = depBlockedPair()
+    const before = row(blocked)
+
+    const res = handleUpdateStatus(svc, { id: blocked, agent: HOLDER, status: 'in_progress', version: before.version })
+    expect(text(res)).toBe('BLOCKED: dependencies not satisfied')
+
+    const after = row(blocked)
+    expect(after.status).toBe('queued')
+    expect(after.version).toBe(before.version)
+    expect(after.lease_expires_at).toBeNull()
+    expect(after.assignee).toBeNull()
+    expect(after.attempts).toBe(0)
+    expect(countAudit(blocked, 'update_status')).toBe(0)
+    // the claim-verb agrees, word for word
+    expect(claimError(blocked, HOLDER)).toBe('BLOCKED: dependencies not satisfied')
+  })
+
+  test('unsatisfied deps are refused on blocked → in_progress as well', () => {
+    const { blocked } = depBlockedPair()
+    const parked = handleUpdateStatus(svc, { id: blocked, agent: HOLDER, status: 'blocked', version: versionOf(blocked) })
+    expect(json(parked).status).toBe('blocked')
+    const before = row(blocked)
+    const auditBefore = auditActions(blocked)
+
+    const res = handleUpdateStatus(svc, { id: blocked, agent: HOLDER, status: 'in_progress', version: before.version })
+    expect(text(res)).toBe('BLOCKED: dependencies not satisfied')
+    expect(row(blocked).status).toBe('blocked')
+    expect(row(blocked).version).toBe(before.version)
+    expect(row(blocked).lease_expires_at).toBeNull()
+    expect(auditActions(blocked)).toEqual(auditBefore)
+    expect(countAudit(blocked, 'lease_renewed')).toBe(0)
+  })
+
+  test('a dep-blocked task refused at acquisition stays in list_queue terms: still un-claimable, still no attempt', () => {
+    const { dep, blocked } = depBlockedPair()
+    handleUpdateStatus(svc, { id: blocked, agent: HOLDER, status: 'in_progress', version: versionOf(blocked) })
+
+    expect(claimError(blocked, HOLDER)).toBe('BLOCKED: dependencies not satisfied')
+    svc.reapExpiredLeases()
+    expect(row(blocked).status).toBe('queued')
+    expect(row(blocked).attempts).toBe(0)
+    expect(row(blocked).lease_expires_at).toBeNull()
+    // and it is claimable the moment the dep closes — the door is closed, not the task
+    driveToDone(svc, dep, HOLDER)
+    expect(claimOrThrow(blocked, HOLDER).id).toBe(blocked)
+  })
+
+  test('a claim-eligible dependant still acquires the lease: satisfied deps, no epic, lease granted', () => {
+    const dep = createTaskRow('Dep')
+    driveToDone(svc, dep, HOLDER)
+    const ready = createDepTask('Ready', [dep])
+
+    const res = handleUpdateStatus(svc, { id: ready, agent: HOLDER, status: 'in_progress', version: versionOf(ready) })
+    expect(res.isError).toBeUndefined()
+    expect(json(res).status).toBe('in_progress')
+    expect(row(ready).lease_expires_at).not.toBeNull()
+    expect(row(ready).assignee).toBe(HOLDER)
+    expect(leaseMs(ready)).toBeGreaterThan(fullWindowFromNow())
+    expect(countAudit(ready, 'update_status')).toBe(1)
+  })
+
+  test('a dep-free task still acquires the lease (the common case: no deps to ask about)', () => {
+    const id = createTaskRow('Plain')
+    const res = handleUpdateStatus(svc, { id, agent: HOLDER, status: 'in_progress', version: versionOf(id) })
+    expect(res.isError).toBeUndefined()
+    expect(json(res).status).toBe('in_progress')
+    expect(row(id).lease_expires_at).not.toBeNull()
+    expect(row(id).assignee).toBe(HOLDER)
+    expect(leaseMs(id)).toBeGreaterThan(fullWindowFromNow())
+  })
+
+  test('the sweep ignores a legacy leased epic row: stranded in in_progress, never charged, never killed', () => {
+    // Defence in depth (expiredLeases carries is_epic = 0). A leased epic is unreachable through the
+    // service now, so this row is seeded directly — the case a rolled-back deploy or a hand-edit makes.
+    const epic = seedLeasedEpic('LegacyEpic', 'orchestrator', -HOUR)
+    const before = row(epic)
+    // Control: a real task in the same state, so the sweep below is provably live, not inert.
+    const control = seedLease(createTaskRow('Control'), HOLDER, -HOUR)
+
+    svc.reapExpiredLeases()
+
+    expect(row(control).status).toBe('queued')
+    expect(row(control).attempts).toBe(1)
+    const after = row(epic)
+    expect(after.status).toBe('in_progress')
+    expect(after.attempts).toBe(before.attempts)
+    expect(after.lease_expires_at).toBe(before.lease_expires_at)
+    expect(after.assignee).toBe('orchestrator')
+    expect(countAudit(epic, 'lease_expired')).toBe(0)
+  })
+
+  test('renewal on that legacy epic row is still refused, and it never renews into a longer life', () => {
+    const epic = seedLeasedEpic('LegacyEpic', 'orchestrator', -HOUR)
+    const before = row(epic)
+
+    for (let beat = 0; beat < 2; beat++) {
+      const res = leaseField(epic, 'orchestrator', versionOf(epic))
+      expect(text(res)).toBe(`INVALID: #${epic} is an epic`)
+    }
+    expect(row(epic).version).toBe(before.version)
+    expect(row(epic).lease_expires_at).toBe(before.lease_expires_at)
+    expect(countAudit(epic, 'lease_renewed')).toBe(0)
+
+    // the honest cost of the belt: stranded-and-visible, not terminal. It is listed, and a single
+    // non-leased hop releases it.
+    expect(json(handleListTasks(svc, { status: 'in_progress' })).tasks.map((t: any) => t.id)).toContain(epic)
+    const freed = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'blocked', version: versionOf(epic) })
+    expect(json(freed).status).toBe('blocked')
+  })
+
+  test('a refused acquisition writes no audit row at all — no update_status, no lease_renewed, no attempts_reset', () => {
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    const { blocked } = depBlockedPair()
+    const auditSnapshot = (id: number) => auditActions(id)
+
+    const epicBefore = auditSnapshot(epic)
+    const blockedBefore = auditSnapshot(blocked)
+    handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'in_progress', version: versionOf(epic) })
+    handleUpdateStatus(svc, { id: blocked, agent: HOLDER, status: 'in_progress', version: versionOf(blocked) })
+
+    for (const id of [epic, blocked]) {
+      expect(auditActions(id)).toEqual(id === epic ? epicBefore : blockedBefore)
+      expect(countAudit(id, 'update_status')).toBe(0)
+      expect(countAudit(id, 'lease_renewed')).toBe(0)
+      expect(countAudit(id, 'attempts_reset')).toBe(0)
+    }
+    // the timeline is the free detection surface for "acquired without claim": no claim row, no
+    // update_status row, and the row is not in_progress
+    expect(text(handleGetTimeline(svc, { id: epic }))).not.toContain('update_status: queued->in_progress')
+    expect(row(epic).status).toBe('queued')
+  })
+
+  test('refund on an epic stays refused with no state change, and there is no in-progress on-ramp left', () => {
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    const before = row(epic)
+
+    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'blocked', version: before.version, reset_attempts: true, comment: 'why' })
+    expect(text(res)).toBe(`INVALID: cannot reset attempts on epic #${epic}`)
+    expect(row(epic).status).toBe('queued')
+    expect(row(epic).attempts).toBe(0)
+    expect(row(epic).version).toBe(before.version)
+    expect(countAudit(epic, 'attempts_reset')).toBe(0)
+    expect(auditActions(epic)).toEqual(['create'])
+  })
+
+  test('the acquisition guard sits above the refund branch, so the combined shape reports the acquisition', () => {
+    // update_status(epic, in_progress, reset_attempts) is two requests in one call and the
+    // acquisition is the stronger claim: it is refused for not being claimable, not for the refund.
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    const before = row(epic)
+
+    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'in_progress', version: before.version, reset_attempts: true, comment: 'why' })
+    expect(text(res)).toBe(`INVALID: #${epic} is an epic, not claimable`)
+    expect(row(epic).status).toBe('queued')
+    expect(row(epic).version).toBe(before.version)
+    expect(countAudit(epic, 'attempts_reset')).toBe(0)
+    // the refund refusal is still reachable on its own, from a status that is not an acquisition
+    expect(text(handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'blocked', version: before.version, reset_attempts: true, comment: 'why' })))
+      .toBe(`INVALID: cannot reset attempts on epic #${epic}`)
+  })
+
+  test('the acquisition guard is scoped to !selfEdge: a lease holder with deps still renews', () => {
+    // A dependant that legitimately holds a lease must keep heartbeating — the guard reads deps only
+    // on an acquisition, so a renewal on a dep-carrying row is untouched.
+    const dep = createTaskRow('Dep')
+    driveToDone(svc, dep, HOLDER)
+    const id = createDepTask('Leased', [dep])
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'in_progress', version: versionOf(id) })
+    pinLease(id, 1000)
+
+    const res = leaseField(id, HOLDER, versionOf(id))
+    expect(res.isError).toBeUndefined()
+    expect(json(res).status).toBe('in_progress')
+    expect(leaseMs(id)).toBeGreaterThan(fullWindowFromNow())
+    expect(countAudit(id, 'lease_renewed')).toBe(1)
+    expect(countAudit(id, 'update_status')).toBe(1)
+  })
+
+  test('combined renew + reset_attempts on a dep-carrying lease still works (both flags bypass the guard)', () => {
+    const dep = createTaskRow('Dep')
+    driveToDone(svc, dep, HOLDER)
+    const id = createDepTask('Leased', [dep])
+    for (let round = 0; round < 2; round++) burnAttempt(id)
+    claimOrThrow(id, HOLDER)
+    expect(row(id).attempts).toBe(2)
+    pinLease(id, 1000)
+
+    const res = leaseField(id, HOLDER, versionOf(id), { reset_attempts: true, comment: 'the budget went on accidents' })
+    expect(res.isError).toBeUndefined()
+    expect(json(res)).toEqual({ id, status: 'in_progress', version: versionOf(id), attempts: 0 })
+    expect(row(id).assignee).toBe(HOLDER)
+    expect(leaseMs(id)).toBeGreaterThan(fullWindowFromNow())
+  })
+})
+
+// AC3: review → in_progress is the one sanctioned acquisition edge, and the guard deliberately skips
+// the deps question on it (rejected alternative #6 in the spec). Cancelled task #1073's scope.
+describe('review → in_progress: work sent back takes the lease', () => {
+  const sentBack = () => {
+    const id = createTaskRow('SentBack')
+    claimOrThrow(id, 'developer')
+    handleUpdateStatus(svc, { id, agent: 'developer', status: 'review', version: versionOf(id) })
+    return id
+  }
+
+  test('a reviewer sending work back acquires the lease; the mover becomes the holder', () => {
+    const id = sentBack()
+
+    const res = handleUpdateStatus(svc, { id, agent: 'reviewer', status: 'in_progress', version: versionOf(id) })
+    expect(res.isError).toBeUndefined()
+    expect(json(res).status).toBe('in_progress')
+    expect(row(id).assignee).toBe('reviewer')
+    expect(row(id).lease_expires_at).not.toBeNull()
+    expect(leaseMs(id)).toBeGreaterThan(fullWindowFromNow())
+    expect(countAudit(id, 'update_status')).toBe(2)
+  })
+
+  test('renew: true rides on the new lease for the holder, and only for the holder', () => {
+    const id = sentBack()
+    handleUpdateStatus(svc, { id, agent: 'reviewer', status: 'in_progress', version: versionOf(id) })
+
+    const foreign = leaseField(id, 'developer', versionOf(id))
+    expect(text(foreign)).toBe('CONFLICT: lease held by reviewer')
+    expect(row(id).version).toBe(versionOf(id))
+    expect(countAudit(id, 'lease_renewed')).toBe(0)
+
+    const own = leaseField(id, 'reviewer', versionOf(id))
+    expect(own.isError).toBeUndefined()
+    expect(json(own).status).toBe('in_progress')
+    expect(leaseMs(id)).toBeGreaterThan(fullWindowFromNow())
+    expect(countAudit(id, 'lease_renewed')).toBe(1)
+  })
+
+  test('review → in_progress with renew: true in the same call is refused: renew needs the self-edge', () => {
+    const id = sentBack()
+    const before = row(id)
+    expect(before.status).toBe('review')
+
+    const res = handleUpdateStatus(svc, { id, agent: 'reviewer', status: 'in_progress', renew: true, version: before.version })
+    expect(text(res)).toBe('INVALID: renew requires status=in_progress on an in_progress task')
+    expect(row(id).status).toBe('review')
+    expect(row(id).lease_expires_at).toBeNull()
+    expect(countAudit(id, 'lease_renewed')).toBe(0)
+  })
+
+  test('the review edge asks no deps question, even on a row whose dep is open', () => {
+    // Provably unnecessary rather than unchecked: depends_on is immutable after create and terminal
+    // statuses have no outgoing edge, so a satisfied dep stays satisfied. The seeded row is the only
+    // way to observe it, and it shows the edge makes no query — the entry succeeds with an open dep.
+    const dep = createTaskRow('Open')
+    const id = createDepTask('InReview', [dep])
+    seedReview(id)
+
+    const res = handleUpdateStatus(svc, { id, agent: 'reviewer', status: 'in_progress', version: versionOf(id) })
+    expect(res.isError).toBeUndefined()
+    expect(json(res).status).toBe('in_progress')
+    expect(row(id).assignee).toBe('reviewer')
+    expect(row(id).lease_expires_at).not.toBeNull()
+    // same agent and same call, from queued: refused by the same guard
+    const queued = createDepTask('StillQueued', [dep])
+    expect(text(handleUpdateStatus(svc, { id: queued, agent: 'reviewer', status: 'in_progress', version: versionOf(queued) })))
+      .toBe('BLOCKED: dependencies not satisfied')
   })
 })

@@ -144,14 +144,20 @@ describe('subtask_add mirror', () => {
 })
 
 describe('epic terminal guard', () => {
-  // Epics are not claimable, but updateStatus allows non-terminal transitions.
-  // We drive the epic: queued → in_progress → review → attempt terminal.
+  // An epic holds no work, so it is never leased: update_status refuses epic → in_progress
+  // ("INVALID: #N is an epic, not claimable"). The lease-free on-ramp to review is
+  // queued → blocked → review, and neither hop grants a lease.
   function driveEpicToReview(svc: TaskService, epicId: number, agent: string) {
     const t1 = getTaskRow(db, epicId)
-    handleUpdateStatus(svc, { id: epicId, agent, status: 'in_progress', version: t1.version })
+    handleUpdateStatus(svc, { id: epicId, agent, status: 'blocked', version: t1.version })
     const t2 = getTaskRow(db, epicId)
     handleUpdateStatus(svc, { id: epicId, agent, status: 'review', version: t2.version })
-    return getTaskRow(db, epicId)
+    const t3 = getTaskRow(db, epicId)
+    // asserted, not assumed: a swallowed refusal here would leave the epic in `blocked` and every
+    // CHILDREN: test below would then pass for the wrong reason (INVALID: blocked → done)
+    expect(t3.status).toBe('review')
+    expect(t3.lease_expires_at).toBeNull()
+    return t3
   }
 
   test('epic with open children cannot go done', () => {
@@ -319,11 +325,13 @@ describe('canceled children do not block epic closure (#112)', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
     const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
     cancelChild(subId)
+    // lease-free on-ramp (an epic is never in_progress): queued → blocked → review → done
     const t1 = getTaskRow(db, epicId)
-    handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'in_progress', version: t1.version })
+    handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'blocked', version: t1.version })
     const t2 = getTaskRow(db, epicId)
     handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'review', version: t2.version })
     const t3 = getTaskRow(db, epicId)
+    expect(t3.status).toBe('review')
     const done = json(handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'done', version: t3.version }))
     expect(done.status).toBe('done')
   })
