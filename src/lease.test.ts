@@ -35,7 +35,7 @@ const fullWindowFromNow = () => Date.now() + 14 * 60_000
 // Simulates an elapsed TTL without a clock seam: only lease_expires_at moves, so version and
 // attempts stay exactly where the production write left them.
 const expireLease = (id: number) => { db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [new Date(Date.now() - HOUR_MS).toISOString(), id]) }
-const pinLease = (id: number, msFromNow: number) => { db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [new Date(Date.now() + msFromNow).toISOString(), id]) }
+const pinLease = (id: number, msFromNow: number): string => { const iso = new Date(Date.now() + msFromNow).toISOString(); db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [iso, id]); return iso }
 const auditActions = (id: number): string[] =>
   (db.query('SELECT action FROM audit_log WHERE task_id = ? ORDER BY id').all(id) as Array<{ action: string }>).map(r => r.action)
 const countAudit = (id: number, action: string): number =>
@@ -89,8 +89,10 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     claimOrThrow(id, HOLDER)
     const before = row(id)
     // The stored deadline is one second out: a renewal that nudged or kept it could not reach a
-    // full window, so the post-condition below cannot be met by any clock coincidence.
-    pinLease(id, 1000)
+    // full window, so the post-condition below cannot be met by any clock coincidence. The
+    // not-equal is checked against the pinned value, not the claim's — the claim and the renewal
+    // share the now + lease_ttl_min formula and would agree to the millisecond.
+    const pinned = pinLease(id, 1000)
 
     const res = handleUpdateStatus(svc, { id, agent: HOLDER, status: 'in_progress', renew: true, version: before.version })
     expect(res.isError).toBeUndefined()
@@ -101,7 +103,7 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     expect(after.attempts).toBe(0)
     expect(after.assignee).toBe(HOLDER)
     expect(leaseMs(id)).toBeGreaterThan(fullWindowFromNow())
-    expect(after.lease_expires_at).not.toBe(before.lease_expires_at)
+    expect(after.lease_expires_at).not.toBe(pinned)
   })
 
   test('the renewal window is recomputed from now, never added to the stored deadline', () => {

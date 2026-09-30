@@ -284,10 +284,23 @@ describe('renew / reset_attempts argument contract (F2 #1065 + F3 #1066)', () =>
   test('renew: true is accepted on update_status and reaches the service', () => {
     const id = claimed()
     const before = getTaskRow(db, id)
+    // The claim and the renewal both stamp now + lease_ttl_min, so an un-pinned pre-state collides
+    // with the post-state whenever both land in the same millisecond and "changed" would be asserting
+    // on the clock (that is what turned run 36742457188 red). A deadline one second out leaves 14
+    // minutes between the pre-state and anything a renewal can write, so the post-conditions below
+    // hold by construction instead of by luck.
+    const pinned = new Date(Date.now() + 1000).toISOString()
+    db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [pinned, id])
+
     const res = handleUpdateStatus(svc, { id, agent: 'dev', status: 'in_progress', renew: true, version: before.version })
     expect(res.isError).toBeUndefined()
     expect(json(res)).toEqual({ id, status: 'in_progress', version: before.version + 1 })
-    expect(getTaskRow(db, id).lease_expires_at).not.toBe(before.lease_expires_at)
+
+    const after = getTaskRow(db, id)
+    expect(after.lease_expires_at).not.toBe(pinned)
+    // 14 min of slack under the 15 min lease_ttl_min. Strictly stronger than "changed": a deadline
+    // one second out can only reach a full window if the renewal recomputed it from now.
+    expect(new Date(after.lease_expires_at).getTime()).toBeGreaterThan(Date.now() + 14 * 60_000)
     const renewed = db.query("SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = 'lease_renewed'").get(id) as { n: number }
     expect(renewed.n).toBe(1)
   })

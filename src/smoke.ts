@@ -99,6 +99,17 @@ try {
     parseToolResult(await client.callTool({ name: 'get_task', arguments: { id, fields: ['lease_expires_at'] } })).lease_expires_at as string
 
   const leaseBefore = await leaseField(idA)
+  assert(
+    new Date(leaseBefore).getTime() > Date.now() + 14 * 60_000,
+    `claim_task armed lease_expires_at a full window out: ${leaseBefore}`
+  )
+  // The claim and the heartbeat both stamp now + lease_ttl_min, so comparing the two deadlines
+  // directly is a millisecond race. The stored deadline is pinned one second out: a heartbeat that
+  // only nudged or kept it could not reach a full window, so the post-conditions below hold by
+  // construction instead of by luck.
+  const pinned = new Date(Date.now() + 1000).toISOString()
+  db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [pinned, idA])
+
   const beatRes: any = await client.callTool({
     name: 'update_status',
     arguments: { id: idA, agent: 'smoke-agent', status: 'in_progress', renew: true, version: claim.version }
@@ -111,13 +122,13 @@ try {
   )
   const leaseAfter = await leaseField(idA)
   assert(
-    new Date(leaseAfter).getTime() > new Date(leaseBefore).getTime(),
-    `heartbeat moved lease_expires_at: ${leaseBefore} → ${leaseAfter}`
+    new Date(leaseAfter).getTime() > Date.now() + 14 * 60_000,
+    `heartbeat re-armed lease_expires_at past a full window: ${pinned} → ${leaseAfter}`
   )
   const beatTimeline = textOf(await client.callTool({ name: 'get_timeline', arguments: { id: idA } }))
   assert(
-    beatTimeline.includes(`lease_renewed: ${leaseBefore}->${leaseAfter}`),
-    `get_timeline shows lease_renewed ${leaseBefore}->${leaseAfter}`
+    beatTimeline.includes(`lease_renewed: ${pinned}->${leaseAfter}`),
+    `get_timeline shows lease_renewed ${pinned}->${leaseAfter}`
   )
 
   const noFlag = await client.callTool({
