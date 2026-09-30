@@ -234,6 +234,52 @@ try {
   assert(guardDone.isError === true, 'epic with open children → done rejected')
   assert(textOf(guardDone).toLowerCase().includes('children'), `rejection mentions children: ${textOf(guardDone)}`)
 
+  // ── argument contract: claim_task id alias + unknown-key rejection (F1 #1040) ─
+  // Order-independent: the rejection probes run on a still-queued task, and the
+  // conflict probe claims nothing, so it can sit at the end of the flow.
+  const aliasCreate = parseToolResult(await client.callTool({
+    name: 'create_task',
+    arguments: { title: 'Alias smoke task', reporter: 'smoke' }
+  }))
+  const aliasId = aliasCreate.id
+
+  const aliasTypo = await client.callTool({
+    name: 'claim_task',
+    arguments: { agent: 'smoke', id_typo: aliasId }
+  })
+  assert(aliasTypo.isError === true, 'claim_task with an unknown key → error')
+  assert(
+    textOf(aliasTypo).includes('INVALID: unknown argument id_typo on claim_task'),
+    `unknown-key error is our contract text: ${textOf(aliasTypo)}`
+  )
+  const aliasQueue = textOf(await client.callTool({ name: 'list_queue', arguments: {} }))
+  assert(
+    aliasQueue.includes(`${aliasId}|p2|Alias smoke task`),
+    `rejected claim left no side effect: still in list_queue ("${aliasQueue.split('\n').join(' / ')}")`
+  )
+
+  const aliasConflict = await client.callTool({
+    name: 'claim_task',
+    arguments: { agent: 'smoke', id: aliasId, task_id: idB }
+  })
+  assert(aliasConflict.isError === true, 'claim_task id/task_id disagreement → error')
+  assert(
+    textOf(aliasConflict) === `INVALID: claim_task id/task_id conflict (id=${aliasId} task_id=${idB}); task_id is canonical`,
+    `conflict error text: ${textOf(aliasConflict)}`
+  )
+
+  const aliasClaim = parseToolResult(await client.callTool({
+    name: 'claim_task',
+    arguments: { agent: 'smoke', id: aliasId }
+  }))
+  assert(aliasClaim.id === aliasId, `claim_task {agent, id} claims exactly that task, id=${aliasId}`)
+
+  const canonicalClaim = parseToolResult(await client.callTool({
+    name: 'claim_task',
+    arguments: { agent: 'smoke', task_id: idB }
+  }))
+  assert(canonicalClaim.id === idB, `claim_task {agent, task_id} unchanged, id=${idB}`)
+
   await client.close()
   console.log('[smoke] ALL CHECKS PASSED')
   process.exit(0)

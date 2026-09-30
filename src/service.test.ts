@@ -623,6 +623,46 @@ describe('claimTask whitespace agent (#811)', () => {
   })
 })
 
+describe('claimTask taskId branch (F1 #1040)', () => {
+  test('claimTask with an explicit taskId claims that task, not the queue head', () => {
+    const bait = json(handleCreateTask(svc, { title: 'Bait', reporter: 'dev', priority: 'p0' })).id
+    const target = json(handleCreateTask(svc, { title: 'Target', reporter: 'dev', priority: 'p3' })).id
+    const res = svc.claimTask({ agent: 'test', taskId: target })
+    expect(res.ok).toBe(true)
+    if (!res.ok) throw new Error('unreachable')
+    expect(res.data.id).toBe(target)
+    expect(getTaskRow(db, bait).status).toBe('queued')
+  })
+
+  test('claimTask with taskId 0 → NOT_FOUND, never an auto-claim', () => {
+    const bait = json(handleCreateTask(svc, { title: 'Bait', reporter: 'dev', priority: 'p0' })).id
+    const res = svc.claimTask({ agent: 'test', taskId: 0 })
+    expect(res).toEqual({ ok: false, error: 'NOT_FOUND' })
+    expect(getTaskRow(db, bait).status).toBe('queued')
+    expect(getTaskRow(db, bait).lease_expires_at).toBeNull()
+  })
+
+  test('claimTask with an omitted taskId still auto-picks (unchanged behaviour)', () => {
+    const bait = json(handleCreateTask(svc, { title: 'Bait', reporter: 'dev', priority: 'p0' })).id
+    const res = svc.claimTask({ agent: 'test' })
+    expect(res.ok).toBe(true)
+    if (!res.ok) throw new Error('unreachable')
+    expect(res.data.id).toBe(bait)
+  })
+
+  test('the wire name task_id is not a core parameter: only taskId is honoured', () => {
+    const bait = json(handleCreateTask(svc, { title: 'Bait', reporter: 'dev', priority: 'p0' })).id
+    const target = json(handleCreateTask(svc, { title: 'Target', reporter: 'dev', priority: 'p3' })).id
+    // The wire-shaped {task_id} leaves core's taskId undefined, so the auto-pick branch
+    // runs and takes the p0 bait. Proof the id/task_id resolution lives at the MCP edge.
+    const res = svc.claimTask({ agent: 'test', task_id: target } as any)
+    expect(res.ok).toBe(true)
+    if (!res.ok) throw new Error('unreachable')
+    expect(res.data.id).toBe(bait)
+    expect(getTaskRow(db, target).status).toBe('queued')
+  })
+})
+
 describe('listTasks invalid status filter (#811)', () => {
   test('listTasks with invalid status returns error', () => {
     const res = handleListTasks(svc, { status: 'invalid_status' })

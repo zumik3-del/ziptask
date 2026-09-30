@@ -7,12 +7,16 @@ ziptask exposes 9 tools:
 | `create_task` | Enqueue a task; always `queued` — `blocked` is a manual flag only. Fields: `epic?` (declare as epic, not claimable), `epic_id?` (attach as sub-task to an existing epic) |
 | `get_task` | Read a task; `description` only via explicit `fields`. Epics: `subtasks` roll-up (`{total,open,done,failed,canceled}`) via `fields:["subtasks"]`; `epic_id` via `fields` when reading a sub-task |
 | `list_tasks` | JSON mode: filter by `assignee`/`status`/`updated_since`/`epic_id`; `description` only via explicit `fields`. Pipe mode (batch): pass `ids` (array of ints) — implicit pipe `id|code`, no `format` param; `fields:["assignee"]` → `id|code|assignee`, null assignee → `-`; request order is preserved, unknown id → `0`. All other filters ignored when `ids` is set. Merges the former `batch_statuses` tool — rationale: the separate "ask about tasks" was an ambiguous duplicate of `list_tasks`-by-ids; unified under one tool with two output shapes. |
-| `claim_task` | Claim a task; auto-pick selects among `queued`, explicit `task_id` also accepts a manually `blocked` task. Returns `{id, lease_ttl_min, version}`. Epics are excluded from auto-pick and explicit claim returns `INVALID: #N is an epic, not claimable` |
+| `claim_task` | Claim a task; auto-pick selects among `queued`, explicit `task_id` also accepts a manually `blocked` task. `id` is an accepted alias of `task_id` (`id` alone claims that task; both present and equal is fine; both present and different is rejected with `INVALID: claim_task id/task_id conflict (id=… task_id=…); task_id is canonical` and nothing is claimed). Returns `{id, lease_ttl_min, version}`. Epics are excluded from auto-pick and explicit claim returns `INVALID: #N is an epic, not claimable` |
 | `update_status` | Transition status with optimistic version lock. `canceled` is terminal and withdraws any non-terminal task (`queued`/`in_progress`/`review`/`blocked`); `done`/`failed` cannot be canceled. Optional `comment` is stored as a `resolution` when the target status is terminal (`done`/`failed`/`canceled`), otherwise as a `comment`. Epic close-guard: `done`/`failed`/`canceled` rejected while non-terminal children exist → `CHILDREN: N sub-tasks not terminal` |
 | `list_queue` | Pipe lines of dep-satisfied queued tasks (epics excluded) |
 | `add_comment` | Append a comment to a task |
 | `get_timeline` | Merged audit log + comments feed. Epics show `subtask_add`/`subtask_done`/`subtask_failed` mirror rows — history reads as `create → subtask_add… → subtask_done… → resolution` |
 | `get_template` | Fetch a markdown template (task description, comments) |
+
+## Argument contract
+
+Every tool rejects unknown argument keys with `INVALID: unknown argument(s) <names> on <tool> (accepted: ...)` before any state change — the accepted-key list is part of the error, so a wrong key is a self-correcting one-round-trip failure instead of a silently ignored argument. Shape/type errors (wrong type, out-of-range, bad enum) stay SDK-side. `claim_task` is the only tool with an alias: `id` ≡ `task_id`. The contract covers argument *keys* only: unknown field *names* inside `include`/`fields` are still dropped silently.
 
 ## Statuses
 
