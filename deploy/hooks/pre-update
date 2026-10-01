@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+
+# ════════════════════════════════════════════════════════════════════════════
+#  pre-update — WAL-safe SQLite backups before code swap
+#
+#  Called by deploy/update.sh as a hook (see run_hook in update.sh).
+#  Backs up every configured SQLite database via sqlite3 .backup so a failed
+#  upgrade is always recoverable.  Skips cleanly when the DB does not exist
+#  yet; aborts non-zero when an existing DB cannot be backed up.
+# ════════════════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)" || SCRIPT_DIR=""
+
+load_common() {
+  local cand
+  # Hooks live in ${RUN_DIR}/hooks; common.sh lives in ${RUN_DIR}/scripts/lib/.
+  for cand in "${SCRIPT_DIR}/../scripts/lib/common.sh" "${SCRIPT_DIR}/../scripts/common.sh" \
+              "${SCRIPT_DIR}/../lib/common.sh" "${SCRIPT_DIR}/../common.sh"; do
+    if [ -f "$cand" ]; then
+      # shellcheck source=../lib/common.sh
+      . "$cand"
+      return 0
+    fi
+  done
+  echo "[app] ERROR: cannot find lib/common.sh next to $0" >&2
+  exit 1
+}
+load_common
+
+# ── Resolve configured DB paths from settings.json ─────────────────────────
+# ziptask reads its config from settings.json (--settings / ZIPTASK_SETTINGS,
+# src/config.ts) and the database is the single "dbPath" key; there is no
+# second/log database.  This mirrors the retired scripts/update.sh
+# resolve_db_paths.  A relative dbPath resolves against INSTALL_DIR (the
+# systemd WorkingDirectory); an absolute one is used as-is.
+#
+# The settings file is looked up where the SERVICE reads it first — the
+# EXEC_START path under RUN_DIR — and then under INSTALL_DIR, so the hook backs
+# up the database this install actually opens rather than a second copy.
+#
+# STDOUT IS THE RETURN VALUE: main() reads this function's output line by line
+# and treats each line as a database path, so nothing else may be written here —
+# info() goes to stdout, and one diagnostic line inside this function is read
+# back as a path (which is what turned a resolved backup into a bogus
+# "$INSTALL_DIR/<message>" lookup that silently skipped). The caller already
+# reports the path it acted on ("Database backed up: …" / "No database at …").
+resolve_db_paths() {
+  local main="" cfg="" cand
+  for cand in \
+    "${RUN_DIR:-}/scripts/settings.json" \
+    "${INSTALL_DIR:-}/settings.json" \
+    "${SCRIPT_DIR}/../scripts/settings.json" \
+    "${SCRIPT_DIR}/../settings.json"; do
+    if [ -f "$cand" ]; then cfg="$cand"; break; fi
+  done
+  if [ -n "$cfg" ]; then
+    main="$(grep -o '"dbPath"[[:space:]]*:[[:space:]]*"[^"]*"' "$cfg" 2>/dev/null \
+            | head -1 | sed 's/.*: *"//;s/"$//' || true)"
+  fi
+  # No settings.json, or none carrying a dbPath: DATA_DIR is where the canonical
+  # layout puts the database, and it is what app.env declares.
+  [ -n "$main" ] || main="${DATA_DIR:-${INSTALL_DIR:-.}/data}/ziptask.db"
+  printf '%s\n' "$main"
+}
+
+# ── Back up a single DB ────────────────────────────────────────────────────
+backup_one_db() {
+  local rel="$1" ts db backup_dir out
+  ts="$(date +%Y%m%d-%H%M%S)"
+
+  case "$rel" in
+    /*) db="$rel" ;;
+    *)  db="${INSTALL_DIR}/${rel}" ;;
+  esac
+
+  # No DB yet — skip silently.
+  if [ ! -f "$db" ]; then
+    info "No database at ${db} — skipping backup."
+    return 0
+  fi
+
+  # sqlite3 is required whenever a DB exists; abort so code is never swapped
+  # without a copy.
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    error "sqlite3 not found — cannot back up ${db}; aborting before switching code"
+  fi
+
+  # Place backups next to the database (mirrors the retired script).
+  backup_dir="${db}.backup"
+  if ! mkdir -p "$backup_dir"; then
+    error "cannot create backup directory ${backup_dir}; aborting before switching code"
+  fi
+  out="${backup_dir}/$(basename "$db").${ts}.bak"
+
+  if sqlite3 "$db" ".backup '${out}'"; then
+    info "Database backed up: ${out}"
+  else
+    error "failed to back up ${db} — aborting before switching code"
+  fi
+}
+
+# ── Main ───────────────────────────────────────────────────────────────────
+# Load app.env so INSTALL_DIR is known.  If app.env is missing we still exit
+# 0 with a warning — a bare checkout without an installed app is not an error.
+#
+# Installed layout: hooks live in ${RUN_DIR}/hooks, scripts (including app.env)
+# in ${RUN_DIR}/scripts/.  Fall back to the deploy/ tree layout when running
+# from source.  INSTALL_DIR must have a sensible default before it is referenced
+# in any error() call (APP_NAME may also be unset at this point).
+if [ -n "${SCRIPT_DIR}" ]; then
+  # Derive RUN_DIR from SCRIPT_DIR when the caller did not export it.
+  # Installed layout: SCRIPT_DIR = ${RUN_DIR}/hooks → RUN_DIR = ${SCRIPT_DIR}/..
+  : "${RUN_DIR:=$(cd -- "${SCRIPT_DIR}/.." 2>/dev/null && pwd -P || true)}"
+  for f in "${RUN_DIR}/scripts/app.env" "${SCRIPT_DIR}/../app.env" "${SCRIPT_DIR}/app.env"; do
+    if [ -f "$f" ]; then
+      # shellcheck source=/dev/null
+      . "$f"
+      break
+    fi
+  done
+fi
+
+# Fall back to a sensible default when not installed yet.  Guard APP_NAME to
+# avoid "unbound variable" under set -u when neither app.env nor the env
+# provides it.
+INSTALL_DIR="${INSTALL_DIR:-/opt/${APP_NAME:-app}}"
+
+info "pre-update: backing up databases..."
+while IFS= read -r rel; do
+  [ -n "$rel" ] || continue
+  backup_one_db "$rel"
+done < <(resolve_db_paths)
+
+info "pre-update: done."
+exit 0

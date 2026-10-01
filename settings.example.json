@@ -1,8 +1,8 @@
 {
-  "dbPath": "./data/ziptask.db",
+  "dbPath": "/var/lib/ziptask/ziptask.db",
   "host": "127.0.0.1",
-  "port": 0,
-  "leaseTtlMin": 15,
+  "port": 3005,
+  "leaseTtlMin": 45,
   "maxAttempts": 3,
   "reapCooldownSec": 60,
   "autoClaimCeiling": 10000,
