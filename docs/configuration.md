@@ -4,7 +4,7 @@ Layered: built-in defaults → `settings.json` → environment variables (env wi
 
 ## `settings.json`
 
-An optional JSON file; `settings.example.json` shows the full shape. Every key is optional and merged over the defaults, so a partial file is valid. The installer writes `~/.ziptask/settings.json` and passes `--settings` in the systemd unit and the printed stdio config, so it is always read. Select a file with `--settings <path>` or the `ZIPTASK_SETTINGS` env var (`--settings` wins). The installer sets `dbPath` to an absolute path so stdio clients don't create the DB under their own cwd. Keys mirror the environment variables below: `dbPath`, `host`, `port`, `leaseTtlMin`, `maxAttempts`, `reapCooldownSec`, `autoClaimCeiling`, `http.maxSessions`, `http.sessionTtlMs`, `defaults.priority`, `defaults.reporter`, `defaults.listLimit`, `defaults.timelineLimit`, `defaults.queueLimit`, `logging.level`, `auditLog`.
+An optional JSON file; `settings.example.json` shows the full shape. Every key is optional and merged over the defaults, so a partial file is valid. The framework installer seeds `~/.ziptask/scripts/settings.json` from that example (only when the file is absent) and passes `--settings` in the systemd unit and the printed stdio config, so it is always read. Select a file with `--settings <path>` or the `ZIPTASK_SETTINGS` env var (`--settings` wins). The shipped example sets `dbPath` to an absolute path (`/var/lib/ziptask/ziptask.db`) so stdio clients don't create the DB under their own cwd. Keys mirror the environment variables below: `dbPath`, `host`, `port`, `leaseTtlMin`, `maxAttempts`, `reapCooldownSec`, `autoClaimCeiling`, `http.maxSessions`, `http.sessionTtlMs`, `defaults.priority`, `defaults.reporter`, `defaults.listLimit`, `defaults.timelineLimit`, `defaults.queueLimit`, `logging.level`, `auditLog`.
 
 ## Environment variables
 
@@ -30,16 +30,16 @@ An optional JSON file; `settings.example.json` shows the full shape. Every key i
 
 ## Upgrade path
 
-Upgrade path is via `bash ~/.ziptask/scripts/update.sh` — it fetches the latest release, downloads the matching binary, and restarts the systemd service when active. To pin a version, pass `--version <tag>` (the script accepts tags with or without a `v` prefix):
+Upgrades go through the `deploy/` framework. `bash ~/.ziptask/scripts/updater.sh` is the entry point: it resolves the newest stable release tag, stages that release's own `deploy/update.sh` + `deploy/lib/common.sh` + the installed `app.env`, and runs it. To pin a version, pass `--version <tag>`; `--yes` skips the menu in a non-interactive shell:
 
 ```bash
-bash ~/.ziptask/scripts/update.sh
-bash ~/.ziptask/scripts/update.sh --version v0.2.0
+bash ~/.ziptask/scripts/updater.sh
+bash ~/.ziptask/scripts/updater.sh --version v0.2.0
 ```
 
-The script prompts y/N before overwriting. **Before swapping the binary it creates an online SQLite backup** of `ZIPTASK_DB` (resolved from env → `settings.json` dbPath → `~/.ziptask/data/ziptask.db`) into `~/.ziptask/backups/ziptask-<timestamp>.db` via `sqlite3 .backup`; missing sqlite3 or a missing DB are handled as warnings and the update continues. The backup path is printed so a failed upgrade is reversible. After the binary swap (and service restart when applicable), `update.sh` best-effort refreshes `update.sh` and `uninstall.sh` in `~/.ziptask/scripts/` from the same release tag; a fetch/validation failure warns but does not abort the update. On non-systemd systems the binary is replaced but you must restart manually.
+`update.sh` (staged by the updater, also usable directly) downloads the release tarball, verifies it, keeps the previous payload as `<file>.prev` for a no-git rollback, swaps it in, re-renders the systemd unit and waits for `/health`. **Before the swap, the `pre-update` hook creates an online SQLite backup** of the database named by `settings.json` `dbPath` via `sqlite3 .backup`, next to the database in `<db>.backup/`; an existing database that cannot be backed up aborts the update, so code is never swapped without a copy. The printed backup path is the restore point. On a health-check failure the update prints the exact `.prev` move-back and `sqlite3` restore commands — restoring the database is mandatory, because migrations are append-only. A health check that never gets an answer is reported UNVERIFIED rather than failed, and nothing is rolled back for a silence.
 
-**Schema guard on startup:** a fresh DB auto-initialises; an older DB (V < L) auto-migrates forward; a DB newer than the binary (V > L, i.e. you downgraded) refuses to start with `SCHEMA: database schema version <V> is newer than this binary supports (<L>); upgrade ziptask or restore the database from backup`, exit 1. Fix by re-upgrading to the newer binary or restoring the backup that `update.sh` wrote. `--version` does not touch the DB.
+**Schema guard on startup:** a fresh DB auto-initialises; an older DB (V < L) auto-migrates forward; a DB newer than the binary (V > L, i.e. you downgraded) refuses to start with `SCHEMA: database schema version <V> is newer than this binary supports (<L>); upgrade ziptask or restore the database from backup`, exit 1. Fix by re-upgrading to the newer binary or restoring the backup the pre-update hook wrote. `--version` does not touch the DB.
 
 ## Backups
 

@@ -46,6 +46,55 @@ jobs:
       - run: cp dist/ziptask dist/ziptask-linux-x86_64
         if: steps.tag.outputs.exists != 'true'
 
+      - name: Pack release tarball
+        id: pack
+        if: steps.tag.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          PLATFORM="linux-x86_64"
+          # ASSET_PATTERN in the deploy framework is
+          # '${APP_NAME}-${TAG}-${OS}-${ARCH}.tar.gz' with TAG=v<version>.
+          ROOT_DIR="ziptask-${VERSION}-${PLATFORM}"
+          ASSET="ziptask-v${VERSION}-${PLATFORM}.tar.gz"
+
+          rm -rf "dist/${ROOT_DIR}"
+          mkdir -p "dist/${ROOT_DIR}"
+          install -m 0755 dist/ziptask "dist/${ROOT_DIR}/ziptask"
+
+          MTIME=$(git log -1 --format=%ct)
+          tar --sort=name --owner=0 --group=0 --numeric-owner "--mtime=@${MTIME}" \
+            -czf "dist/${ASSET}" -C dist "${ROOT_DIR}"
+          rm -rf "dist/${ROOT_DIR}"
+
+          echo "ASSET_NAME=${ASSET}" >> "$GITHUB_OUTPUT"
+          echo "ROOT_DIR=${ROOT_DIR}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the tarball unpacks cleanly
+        if: steps.tag.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          ASSET="dist/${{ steps.pack.outputs.ASSET_NAME }}"
+          ROOT_DIR="${{ steps.pack.outputs.ROOT_DIR }}"
+
+          tar -tzvf "$ASSET"
+
+          TOPS=$(tar -tzf "$ASSET" | cut -d/ -f1 | sort -u)
+          [ "$TOPS" = "$ROOT_DIR" ] \
+            || { echo "expected exactly one top-level directory ${ROOT_DIR}/, got: ${TOPS}" >&2; exit 1; }
+
+          DEST="$RUNNER_TEMP/unpack"
+          rm -rf "$DEST"; mkdir -p "$DEST"
+          tar -xzf "$ASSET" -C "$DEST" --no-same-owner
+          chmod +x "${DEST}/${ROOT_DIR}/ziptask"
+          GOT=$("${DEST}/${ROOT_DIR}/ziptask" --version)
+          [ "$GOT" = "ziptask ${VERSION}" ] \
+            || { echo "version check failed: got '${GOT}', expected 'ziptask ${VERSION}'" >&2; exit 1; }
+          echo "verified: ${ROOT_DIR}/ziptask --version -> ${GOT}"
+
       - name: Build Release Notes
         if: steps.tag.outputs.exists != 'true'
         shell: bash
@@ -98,6 +147,7 @@ jobs:
             --target "${{ github.sha }}" \
             --title "v${{ steps.ver.outputs.version }}" \
             --notes-file RELEASE_NOTES.md \
-            dist/ziptask-linux-x86_64
+            dist/ziptask-linux-x86_64 \
+            "dist/${{ steps.pack.outputs.ASSET_NAME }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

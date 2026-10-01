@@ -12,23 +12,33 @@ MCP task tracker for AI agents — pure state layer (statuses, deps, leases, ver
 
 ## Install
 
-One-liner — downloads a compiled binary, writes default config, prints client setup:
+One-liner — installs the published binary via the `deploy/` framework (see
+[`deploy/app.env`](deploy/app.env) for every knob), seeds a default
+`settings.json` and provisions the service:
 
 ```bash
 # latest release
-curl -LsS https://raw.githubusercontent.com/zumik3-del/ziptask/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zumik3-del/ziptask/main/deploy/install.sh | bash
 
-# pin a version (set the variable on the sh side of the pipe)
-curl -LsS https://raw.githubusercontent.com/zumik3-del/ziptask/main/scripts/install.sh | ZIPTASK_VERSION=v0.1.3 sh
+# from a checkout, or pinned to a version
+sudo bash deploy/install.sh --version v0.1.3
 ```
 
-Default install dir: `~/.ziptask/`. Override with `ZIPTASK_HOME=/some/path` (also on the `sh` side of the pipe). On systemd systems the installer provisions a background service on port 3005 (override with `--port`), using `sudo` to write the unit and start the service; if root access is unavailable it skips the service and prints the manual start command. Skip it explicitly with `--no-service`. `update.sh` and `uninstall.sh` are installed into `~/.ziptask/scripts/`.
+Canonical layout: binary in `/opt/ziptask`, database in `/var/lib/ziptask`,
+state (settings, helpers, `app.env`) in `~/.ziptask/`. Override with `--dir`,
+`--port`, `--version` and `--no-service`; `bash deploy/install.sh --help` lists
+them all. `updater.sh` and `uninstall.sh` are installed into
+`~/.ziptask/scripts/` alongside the app configuration.
 
 Prebuilt release binaries target Linux x86_64 only. On other platforms (macOS, arm64 Linux) build from source with `bun run build:bin`.
 
 ### Service mode
 
-When systemd is detected and running, `install.sh` creates `/etc/systemd/system/ziptask.service` (Type=simple, `Restart=on-failure`, port 3005) and starts it. The unit runs as the user that invoked the installer — even under `sudo`, `SUDO_USER` is honoured, so the binary, DB and service stay under that user's home rather than root's. Manage it with:
+When systemd is detected and running, the installer renders
+`/etc/systemd/system/ziptask.service` from the framework's unit template
+(`Restart=always`, a bounded `TimeoutStopSec`, and the usual hardening) and
+starts it. The unit runs as the user that invoked the installer — even under
+`sudo`, `SUDO_USER` is honoured. Manage it with:
 
 ```bash
 sudo systemctl start ziptask
@@ -37,7 +47,8 @@ sudo systemctl enable ziptask     # auto-start on boot
 journalctl -u ziptask -f         # live logs
 ```
 
-Remove with `bash ~/.ziptask/scripts/uninstall.sh` (use `--keep-data` to preserve the DB and settings).
+Remove with `bash ~/.ziptask/scripts/uninstall.sh`. It keeps the binary, the
+database and the state directory by default; add `--purge` to delete them.
 
 ### MCP client config (stdio)
 
@@ -46,8 +57,8 @@ Remove with `bash ~/.ziptask/scripts/uninstall.sh` (use `--keep-data` to preserv
 {
   "mcpServers": {
     "ziptask": {
-      "command": "/home/you/.ziptask/bin/ziptask",
-      "args": ["--stdio", "--settings", "/home/you/.ziptask/settings.json"]
+      "command": "/opt/ziptask/ziptask",
+      "args": ["--stdio", "--settings", "/home/you/.ziptask/scripts/settings.json"]
     }
   }
 }
