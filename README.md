@@ -24,11 +24,15 @@ curl -fsSL https://raw.githubusercontent.com/zumik3-del/ziptask/main/deploy/inst
 sudo bash deploy/install.sh --version v0.1.3
 ```
 
-Canonical layout: binary in `/opt/ziptask`, database in `/var/lib/ziptask`,
-state (settings, helpers, `app.env`) in `~/.ziptask/`. Override with `--dir`,
-`--port`, `--version` and `--no-service`; `bash deploy/install.sh --help` lists
-them all. `updater.sh` and `uninstall.sh` are installed into
-`~/.ziptask/scripts/` alongside the app configuration.
+Canonical layout: binary in `/opt/ziptask`, database **and** `settings.json` in
+`/var/lib/ziptask/`, deploy state (helpers, hooks, `app.env`) in `~/.ziptask/`.
+Override with `--dir`, `--port`, `--version` and `--no-service`;
+`bash deploy/install.sh --help` lists them all. `updater.sh` and
+`uninstall.sh` are installed into `~/.ziptask/scripts/`.
+
+The layout, the unit policy and the per-app `app.env` keys are shared with
+synaptomind and subagentix and documented once, in
+[zumik3-del/synaptomind `docs/DEPLOY-LAYOUT.md`](https://github.com/zumik3-del/synaptomind/blob/main/docs/DEPLOY-LAYOUT.md).
 
 Prebuilt release binaries target Linux x86_64 only. On other platforms (macOS, arm64 Linux) build from source with `bun run build:bin`.
 
@@ -58,7 +62,7 @@ database and the state directory by default; add `--purge` to delete them.
   "mcpServers": {
     "ziptask": {
       "command": "/opt/ziptask/ziptask",
-      "args": ["--stdio", "--settings", "/home/you/.ziptask/scripts/settings.json"]
+      "args": ["--stdio", "--settings", "/var/lib/ziptask/settings.json"]
     }
   }
 }
