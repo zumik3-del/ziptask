@@ -9,9 +9,11 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { VERSION } from './version'
-import { createLogger } from './logger'
+import { createLogger, type Logger } from './logger'
 
 const TMP = '/tmp/opencode'
+
+type JsonRecord = Record<string, unknown>
 
 function makeServer() {
   mkdirSync(TMP, { recursive: true })
@@ -218,7 +220,35 @@ describe('observability logging', () => {
     return snap
   }
 
-  function makeCaptureLogger(): import('./logger').Logger {
+  // A non-JSON line (a stray stderr write from the runtime or the SDK) is skipped rather
+  // than thrown on: a regression that drops back to text logging then fails the lookup
+  // below instead of the parser. A `{`-line that does NOT parse is the opposite case —
+  // it is a broken or forged record, so it is reported instead of dropped.
+  function captureRecords(): JsonRecord[] {
+    const records: JsonRecord[] = []
+    const unparseable: string[] = []
+    for (const line of captureLines()) {
+      const trimmed = line.trim()
+      if (!trimmed.startsWith('{')) continue
+      try {
+        records.push(JSON.parse(trimmed) as JsonRecord)
+      } catch {
+        unparseable.push(trimmed)
+      }
+    }
+    if (unparseable.length > 0) {
+      throw new Error(`unparseable stderr record(s): ${unparseable.join(' | ')}`)
+    }
+    return records
+  }
+
+  function recordOf(records: JsonRecord[], msg: string): JsonRecord {
+    const found = records.find(r => r.msg === msg)
+    if (found === undefined) throw new Error(`no "${msg}" record in: ${JSON.stringify(records)}`)
+    return found
+  }
+
+  function makeCaptureLogger(): Logger {
     return createLogger('test', 'debug')
   }
 
@@ -234,7 +264,7 @@ describe('observability logging', () => {
     writeSpy.mockRestore()
   })
 
-  test('startup line contains version, host, port, dbPath', () => {
+  test('startup emits one JSON record carrying version, host, port and dbPath as fields', () => {
     const dbPath = join(TMP, `obs-startup-${Date.now()}.db`)
     const db = openDatabase(dbPath)
     const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
@@ -242,13 +272,17 @@ describe('observability logging', () => {
     const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
     const port = server.port
 
-    const startupLines = captureLines()
-    const startup = startupLines.find(l => l.includes('ziptask started'))
-    expect(startup).toBeDefined()
-    expect(startup).toContain(`version=${VERSION}`)
-    expect(startup).toContain('host=127.0.0.1')
-    expect(startup).toContain(`port=${port}`)
-    expect(startup).toContain(`dbPath=${dbPath}`)
+    const startup = recordOf(captureRecords(), 'ziptask started')
+    expect(Object.keys(startup).sort()).toEqual([
+      'dbPath', 'host', 'level', 'logger', 'msg', 'port', 'ts', 'version'
+    ])
+    expect(startup.version).toBe(VERSION)
+    expect(startup.host).toBe('127.0.0.1')
+    expect(startup.port).toBe(port)
+    expect(startup.dbPath).toBe(dbPath)
+    expect(startup.level).toBe('info')
+    expect(startup.logger).toBe('test')
+    expect(new Date(startup.ts as string).toISOString()).toBe(startup.ts as string)
 
     server.stop()
     db.close()
@@ -257,7 +291,7 @@ describe('observability logging', () => {
     try { rmSync(dbPath + '-shm') } catch {}
   })
 
-  test('session open logs id and agent name from clientInfo.name', async () => {
+  test('session open logs the session id and agent name from clientInfo.name', async () => {
     const dbPath = join(TMP, `obs-session-${Date.now()}.db`)
     const db = openDatabase(dbPath)
     const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
@@ -269,11 +303,12 @@ describe('observability logging', () => {
     const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`))
     await client.connect(transport)
 
-    const openLines = captureLines()
-    const openLine = openLines.find(l => l.includes('session open'))
-    expect(openLine).toBeDefined()
-    expect(openLine).toContain('agent=agent-verify')
-    expect(openLine).toMatch(/session open id=[a-f0-9-]+/)
+    const open = recordOf(captureRecords(), 'session open')
+    expect(open.agent).toBe('agent-verify')
+    expect(open.session).toBe(transport.sessionId)
+    expect(String(open.session)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    expect(open.level).toBe('info')
+    expect(open.logger).toBe('test')
 
     await client.close()
     server.stop()
@@ -283,7 +318,7 @@ describe('observability logging', () => {
     try { rmSync(dbPath + '-shm') } catch {}
   })
 
-  test('session close logs id and agent name on disconnect', async () => {
+  test('session close logs the same session id and agent on disconnect', async () => {
     const dbPath = join(TMP, `obs-close-${Date.now()}.db`)
     const db = openDatabase(dbPath)
     const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
@@ -294,13 +329,16 @@ describe('observability logging', () => {
     const client = new Client({ name: 'close-agent', version: '1.0.0' })
     const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`))
     await client.connect(transport)
+    const open = recordOf(captureRecords(), 'session open')
+    const sessionId = transport.sessionId
     await transport.terminateSession()
 
-    const closeLines = captureLines()
-    const closeLine = closeLines.find(l => l.includes('session close'))
-    expect(closeLine).toBeDefined()
-    expect(closeLine).toContain('agent=close-agent')
-    expect(closeLine).toMatch(/session close id=[a-f0-9-]+/)
+    const close = recordOf(captureRecords(), 'session close')
+    expect(close.agent).toBe('close-agent')
+    // the close must name the same session the open did, or the pair cannot be correlated
+    expect(close.session).toBe(open.session)
+    expect(close.session).toBe(sessionId)
+    expect(close.level).toBe('info')
 
     server.stop()
     db.close()
@@ -309,7 +347,7 @@ describe('observability logging', () => {
     try { rmSync(dbPath + '-shm') } catch {}
   })
 
-  test('fetch path throw logs error and returns 500', async () => {
+  test('fetch path throw logs an error record with err and stack, and returns 500', async () => {
     const dbPath = join(TMP, `obs-500-${Date.now()}.db`)
     const db = openDatabase(dbPath)
     const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
@@ -325,11 +363,106 @@ describe('observability logging', () => {
     const text = await res.text()
     expect(text).toBe('Internal Server Error')
 
-    const errLines = captureLines()
-    const errLine = errLines.find(l => l.includes('http handler error'))
-    expect(errLine).toBeDefined()
-    expect(errLine).toContain('boom')
+    const err = recordOf(captureRecords(), 'http handler error')
+    expect(err.level).toBe('error')
+    expect(err.err).toBe('boom')
+    expect(err.stack as string).toContain('boom')
+    expect(err.logger).toBe('test')
 
+    server.stop()
+    db.close()
+    try { rmSync(dbPath) } catch {}
+    try { rmSync(dbPath + '-wal') } catch {}
+    try { rmSync(dbPath + '-shm') } catch {}
+  })
+
+  test('a non-Error object throw is stringified away by the serializer fallback and still answers 500', async () => {
+    const dbPath = join(TMP, `obs-500-circular-${Date.now()}.db`)
+    const db = openDatabase(dbPath)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    const logger = makeCaptureLogger()
+    const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
+
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    ;(svc as any).getTaskView = () => { throw circular }
+
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/task/1`)
+    expect(res.status).toBe(500)
+    expect(await res.text()).toBe('Internal Server Error')
+
+    const err = recordOf(captureRecords(), 'http handler error')
+    expect(err.level).toBe('error')
+    expect(err.logger).toBe('test')
+    // normalizeError wraps the non-Error throw as { thrown }, so it lands in the fields
+    // slot, not the err one: the record carries no err key, and the circular reference
+    // is caught by the serializer, which drops the structured fields and reports why.
+    expect(Object.keys(err).includes('err')).toBe(false)
+    expect(typeof err.fieldsUnserializable).toBe('string')
+    expect(err.fieldsUnserializable as string).not.toBe('')
+    expect(Object.keys(err).includes('self')).toBe(false)
+    expect(Object.keys(err).includes('thrown')).toBe(false)
+
+    server.stop()
+    db.close()
+    try { rmSync(dbPath) } catch {}
+    try { rmSync(dbPath + '-wal') } catch {}
+    try { rmSync(dbPath + '-shm') } catch {}
+  })
+
+  test('a non-Error throw keeps its provenance in a thrown field and still answers 500', async () => {
+    const dbPath = join(TMP, `obs-500-thrown-${Date.now()}.db`)
+    const db = openDatabase(dbPath)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    const logger = makeCaptureLogger()
+    const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
+
+    // A serializable non-Error throw: the shape survives, so the record can be acted on
+    // instead of collapsing to the "[object Object]" the err slot would have produced.
+    ;(svc as any).getTaskView = () => { throw { code: 'E_CUSTOM', detail: 'not an Error' } }
+
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/task/1`)
+    expect(res.status).toBe(500)
+    expect(await res.text()).toBe('Internal Server Error')
+
+    const err = recordOf(captureRecords(), 'http handler error')
+    expect(err.level).toBe('error')
+    expect(err.logger).toBe('test')
+    expect(err.thrown).toEqual({ code: 'E_CUSTOM', detail: 'not an Error' })
+    // the err slot is reserved for Errors: no message/stack pair is invented here
+    expect(Object.keys(err).includes('err')).toBe(false)
+    expect(Object.keys(err).includes('stack')).toBe(false)
+
+    server.stop()
+    db.close()
+    try { rmSync(dbPath) } catch {}
+    try { rmSync(dbPath + '-wal') } catch {}
+    try { rmSync(dbPath + '-shm') } catch {}
+  })
+
+  test('a newline in the agent name stays inside one record and forges no session open', async () => {
+    const dbPath = join(TMP, `obs-agent-forge-${Date.now()}.db`)
+    const db = openDatabase(dbPath)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    const logger = makeCaptureLogger()
+    const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
+
+    // clientInfo.name is caller-controlled, so it is the one field a client can aim at
+    // the log stream with. captureRecords() throws on an unparseable { line, so the
+    // forged payload showing up as its own record is the other way this test fails.
+    const evilName = 'evil\n{"level":"error","logger":"forged","msg":"forged record"}'
+    const client = new Client({ name: evilName, version: '1.0.0' })
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${server.port}/mcp`))
+    await client.connect(transport)
+
+    const records = captureRecords()
+    const open = recordOf(records, 'session open')
+    expect(open.agent).toBe(evilName)
+    expect(open.session).toBe(transport.sessionId)
+    expect(records.filter(r => r.msg === 'forged record')).toEqual([])
+    expect(records.filter(r => r.logger === 'forged')).toEqual([])
+
+    await client.close()
     server.stop()
     db.close()
     try { rmSync(dbPath) } catch {}

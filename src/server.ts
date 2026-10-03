@@ -4,7 +4,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { TaskService } from './core/service'
 import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
-import { createLogger } from './logger'
+import { createLogger, normalizeError } from './logger'
 import { VERSION } from './version'
 import { DEFAULT_HTTP_MAX_SESSIONS, DEFAULT_HTTP_SESSION_TTL_MS, SESSION_CLEANUP_INTERVAL_MS } from './defaults'
 
@@ -118,7 +118,7 @@ export function startHttp(opts: StartHttpOptions) {
   const sessions = new Map<string, Session>()
   let reservedSessions = 0
   const logSessionClose = (id: string, agent: string) => {
-    svcLogger.info(`session close id=${id} agent=${agent}`)
+    svcLogger.child({ session: id, agent }).info('session close')
   }
 
   const cleanup = setInterval(() => {
@@ -197,7 +197,7 @@ export function startHttp(opts: StartHttpOptions) {
             eventStore,
             onsessioninitialized: (id) => {
               sessions.set(id, { transport, lastAccess: Date.now(), agent: agentName })
-              svcLogger.info(`session open id=${id} agent=${agentName}`)
+              svcLogger.child({ session: id, agent: agentName }).info('session open')
             },
             onsessionclosed: (id) => {
               const session = sessions.get(id)
@@ -220,7 +220,7 @@ export function startHttp(opts: StartHttpOptions) {
           reservedSessions--
         }
       } catch (err) {
-        svcLogger.error(`http handler error: ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
+        svcLogger.error('http handler error', normalizeError(err))
         return new Response('Internal Server Error', { status: 500 })
       }
     }
@@ -241,6 +241,6 @@ export function startHttp(opts: StartHttpOptions) {
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
 
-  svcLogger.info(`ziptask started version=${VERSION} host=${host} port=${server.port} dbPath=${dbPath ?? ''}`)
+  svcLogger.info('ziptask started', { version: VERSION, host, port: server.port, dbPath: dbPath ?? '' })
   return server
 }

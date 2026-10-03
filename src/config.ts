@@ -48,7 +48,7 @@ const SettingsSchema = z.object({
     queueLimit: z.number().int().positive().optional()
   }).optional(),
   logging: z.object({
-    level: z.enum(['off', 'error', 'info', 'debug']).optional()
+    level: z.enum(['off', 'error', 'warn', 'info', 'debug']).optional()
   }).optional(),
   auditLog: z.boolean().optional()
 })
@@ -67,6 +67,9 @@ export type Settings = z.infer<typeof SettingsSchema> & {
   auditLog: boolean
 }
 
+// Level parsing is the logger's job: the raw ZIPTASK_LOG_LEVEL string reaches createLogger
+// so it can warn about an unknown level. settings.json keeps the closed enum instead, so a
+// bad value in the file still fails startup loudly.
 export type EnvType = 'string' | 'int' | 'float' | 'bool'
 
 export interface EnvMapping {

@@ -1,10 +1,16 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { loadSettings, DEFAULTS } from './config'
+import { loadSettings, DEFAULTS, type Settings } from './config'
+import { createLogger } from './logger'
 import { TaskService } from './core/service'
 
 const TMP = '/tmp/opencode'
+
+// Settings['logging']['level'] is an intersection of the settings.json enum and `string`, so
+// it narrows to the five file levels in the type system while the runtime value handed over by
+// loadSettings is the raw env string. Read it through here to pin what production passes on.
+const rawLevel = (s: Settings): string => s.logging.level
 
 function writeSettingsJson(dir: string, content: object): string {
   const path = join(dir, 'settings.json')
@@ -96,6 +102,13 @@ describe('loadSettings settings.json', () => {
     expect(s.dbPath).toBe(DEFAULTS.dbPath)
     expect(s.leaseTtlMin).toBe(DEFAULTS.leaseTtlMin)
   })
+
+  test('accepts every logging.level, warn included', () => {
+    for (const level of ['off', 'error', 'warn', 'info', 'debug'] as const) {
+      const settingsPath = writeSettingsJson(testDir, { logging: { level } })
+      expect(loadSettings({ path: settingsPath, env: {}, argv: [] }).logging.level).toBe(level)
+    }
+  })
 })
 
 describe('loadSettings env overrides', () => {
@@ -155,10 +168,36 @@ describe('loadSettings env overrides', () => {
     expect(s.port).toBe(DEFAULTS.port)
   })
 
-  test('ZIPTASK_LOG_LEVEL overrides logging level (error/debug/off)', () => {
+  test('ZIPTASK_LOG_LEVEL overrides logging level (error/warn/debug/off)', () => {
     expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'error' }, argv: [] }).logging.level).toBe('error')
+    expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'warn' }, argv: [] }).logging.level).toBe('warn')
     expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'debug' }, argv: [] }).logging.level).toBe('debug')
     expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'off' }, argv: [] }).logging.level).toBe('off')
+  })
+
+  test('ZIPTASK_LOG_LEVEL is passed through raw, neither validated nor normalized', () => {
+    // Level parsing lives in the logger (parseLogLevel in src/logger.ts): config hands the
+    // env value over untouched, so an unknown level can reach createLogger and its warn,
+    // and case handling stays the logger's business (pinned in src/logger.test.ts).
+    expect(rawLevel(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'warn' }, argv: [] }))).toBe('warn')
+    expect(rawLevel(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'verbose' }, argv: [] }))).toBe('verbose')
+    expect(rawLevel(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'WARN' }, argv: [] }))).toBe('WARN')
+    // unset stays at the default, the only normalization left here
+    expect(rawLevel(loadSettings({ env: {}, argv: [] }))).toBe('info')
+  })
+
+  test('an unknown ZIPTASK_LOG_LEVEL still overrides settings.json rather than being skipped', () => {
+    // unlike an invalid int (skipped), any level string is applied as given — whether it
+    // is a level at all is decided by the logger, not by config
+    const settingsPath = writeSettingsJson(testDir, { logging: { level: 'debug' } })
+    const s = loadSettings({ path: settingsPath, env: { ZIPTASK_LOG_LEVEL: 'verbose' }, argv: [] })
+    expect(rawLevel(s)).toBe('verbose')
+  })
+
+  test('env overrides settings.json for logging.level', () => {
+    const settingsPath = writeSettingsJson(testDir, { logging: { level: 'debug' } })
+    const s = loadSettings({ path: settingsPath, env: { ZIPTASK_LOG_LEVEL: 'warn' }, argv: [] })
+    expect(s.logging.level).toBe('warn')
   })
 
   test('legacy ZIPTASK_LOGGING_LEVEL is ignored', () => {
@@ -183,6 +222,41 @@ describe('loadSettings env overrides', () => {
     expect(s.http.sessionTtlMs).toBe(600_000) // not overridden
     expect(s.defaults.priority).toBe('p1')
     expect(s.defaults.reporter).toBe('system') // not overridden
+  })
+})
+
+describe('ZIPTASK_LOG_LEVEL hand-off to the logger', () => {
+  test('the raw invalid value reaches createLogger, which warns once and then gates at info', () => {
+    const chunks: string[] = []
+    const writeSpy = spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      if (typeof chunk === 'string') chunks.push(chunk)
+      return true
+    })
+    const records = (): Record<string, unknown>[] =>
+      chunks.map(line => JSON.parse(line) as Record<string, unknown>)
+
+    try {
+      const settings = loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'verbose' }, argv: [] })
+      const log = createLogger('app', settings.logging.level)
+
+      // the warn about the unparsable level is emitted at construction, exactly once
+      expect(records().map(r => ({ level: r.level, logger: r.logger, msg: r.msg, requested: r.requested })))
+        .toEqual([{
+          level: 'warn',
+          logger: 'app',
+          msg: 'unknown log level requested, falling back to info',
+          requested: 'verbose'
+        }])
+
+      // ...and the fallback is the real info gate, not an open level
+      chunks.length = 0
+      log.info('kept')
+      log.debug('suppressed')
+      expect(records().map(r => ({ level: r.level, msg: r.msg })))
+        .toEqual([{ level: 'info', msg: 'kept' }])
+    } finally {
+      writeSpy.mockRestore()
+    }
   })
 })
 
@@ -230,6 +304,16 @@ describe('loadSettings error cases', () => {
     const badPath = writeSettingsJson(testDir, { defaults: { priority: 'p99' } })
     expect(() => loadSettings({ path: badPath, env: {}, argv: [] }))
       .toThrow(/Invalid settings.json/)
+  })
+
+  test('an unknown logging.level in settings.json is rejected (no silent info fallback)', () => {
+    // the file keeps the closed enum even though the env var is passed through raw:
+    // 'verbose' is accepted verbatim from the env and still fails startup from the file
+    for (const level of ['warning', 'verbose']) {
+      const badPath = writeSettingsJson(testDir, { logging: { level } })
+      expect(() => loadSettings({ path: badPath, env: {}, argv: [] }))
+        .toThrow(/Invalid settings.json/)
+    }
   })
 })
 
