@@ -73,10 +73,19 @@ export const MAX_TITLE_LENGTH = 200
 export const MAX_AGENT_LENGTH = 200
 export const MAX_CONTENT_LENGTH = 10000
 export const MAX_RESULT_LIMIT = 1000
+export const MAX_SAFE_TIMESTAMP_MS = 8_640_000_000_000_000
 
 export function clampLimit(value: number | undefined, fallback: number, max = MAX_RESULT_LIMIT): number {
   if (value === undefined) return fallback
   const n = Math.floor(value)
   if (!Number.isFinite(n) || n <= 0) return fallback
   return Math.min(n, max)
+}
+
+export function isEpic(task: { is_epic: number }): boolean {
+  return task.is_epic !== 0
+}
+
+export function toEpicFlag(epic?: boolean): number {
+  return epic ? 1 : 0
 }

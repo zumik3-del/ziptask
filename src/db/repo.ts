@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
 import type { CommentRow, TaskStore } from '../core/types'
-import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
+import { DEFAULT_MAX_ATTEMPTS, TERMINAL_STATUSES_SQL } from '../defaults'
 
 export class TaskRepo implements TaskStore {
   private lastTimestampMs = 0
@@ -31,11 +31,11 @@ export class TaskRepo implements TaskStore {
   }): number {
     const maxAttempts = task.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const epicId = task.epicId ?? null
-    const isEpic = task.isEpic ?? 0
+    const epicFlag = task.isEpic ?? 0
     const result = this.db.run(
       `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic)
        VALUES (?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
-      [task.title, task.description, task.priority, task.assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, isEpic]
+      [task.title, task.description, task.priority, task.assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, epicFlag]
     )
     return Number(result.lastInsertRowid)
   }
@@ -173,7 +173,7 @@ export class TaskRepo implements TaskStore {
 
   nonTerminalChildCount(epicId: number): number {
     const row = this.db.query(
-      "SELECT COUNT(*) as cnt FROM tasks WHERE epic_id = ? AND status NOT IN ('done', 'failed', 'canceled')"
+      `SELECT COUNT(*) as cnt FROM tasks WHERE epic_id = ? AND status NOT IN ${TERMINAL_STATUSES_SQL}`
     ).get(epicId) as { cnt: number }
     return row.cnt
   }
@@ -182,7 +182,7 @@ export class TaskRepo implements TaskStore {
     const rows = this.db.query(
       `SELECT
          COUNT(*) as total,
-         SUM(CASE WHEN status NOT IN ('done', 'failed', 'canceled') THEN 1 ELSE 0 END) as open,
+         SUM(CASE WHEN status NOT IN ${TERMINAL_STATUSES_SQL} THEN 1 ELSE 0 END) as open,
          SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done,
          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
          SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END) as canceled

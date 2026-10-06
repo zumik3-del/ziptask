@@ -100,14 +100,8 @@ export const ENV_MAPPINGS: EnvMapping[] = [
 function parseValue(raw: string, type: EnvType): string | number | boolean {
   switch (type) {
     case 'string': return raw
-    case 'int': {
-      const n = parseInt(raw, 10)
-      return Number.isFinite(n) ? n : NaN
-    }
-    case 'float': {
-      const n = parseFloat(raw)
-      return Number.isFinite(n) ? n : NaN
-    }
+    case 'int': return parseInt(raw, 10)
+    case 'float': return parseFloat(raw)
     case 'bool': return raw === 'true'
   }
 }

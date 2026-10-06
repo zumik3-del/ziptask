@@ -1,5 +1,5 @@
 import type { Task, TaskStatus } from './tasks'
-import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './tasks'
+import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, isEpic, toEpicFlag } from './tasks'
 import type { TaskStore, TimelineRow, CommentRow, SvcResult } from './types'
 import { parseDeps, createsCycle, depsSatisfied } from './deps'
 import type { UpdateStatusData } from './types'
@@ -107,7 +107,7 @@ export class TaskService {
     if (deps.length > 0) {
       const batch = this.store.batchTasks(deps)
       for (const [d, t] of batch) {
-        if (t && t.is_epic === 1) {
+    if (t && isEpic(t)) {
           return { ok: false, error: `INVALID: dependencies on epic tasks not allowed (#${d})` }
         }
       }
@@ -124,7 +124,7 @@ export class TaskService {
       }
     }
 
-    const isEpic = args.epic ? 1 : 0
+    const epicFlag = toEpicFlag(args.epic)
     const epicId = args.epic_id ?? null
     return this._atomic((): SvcResult<{ id: number; status: 'queued' }> => {
       const id = this.store.insertTask({
@@ -137,7 +137,7 @@ export class TaskService {
         now,
         maxAttempts: this.maxAttempts,
         epicId: epicId ?? undefined,
-        isEpic
+        isEpic: epicFlag
       })
       if (createsCycle((depId) => this.store.depsOf(depId), id, deps)) {
         this.store.deleteTask(id)
@@ -166,7 +166,7 @@ export class TaskService {
       return s === undefined || !TERMINAL_STATUSES.includes(s)
     })
     // D3: derived roll-up for epics
-    if (task.is_epic === 1) {
+    if (isEpic(task)) {
       const counts = this.store.childStatusCounts(id)
       if (counts.total > 0) {
         return { ok: true, data: { task, blockedBy, subtasks: counts } }
@@ -228,7 +228,7 @@ export class TaskService {
       task = this.store.getTaskRow(args.taskId)
       if (!task) return { ok: false, error: 'NOT_FOUND' }
       if (task.status !== 'queued' && task.status !== 'blocked') return { ok: false, error: `CONFLICT: status=${task.status}` }
-      if (task.is_epic === 1) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }
+      if (isEpic(task)) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }
       const deps = parseDeps(task.depends_on)
       if (!depsSatisfied(this.store.statusesOf(deps), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
     } else {
@@ -277,7 +277,7 @@ export class TaskService {
       return { ok: false, error: `INVALID: ${task.status} → ${args.status}` }
     }
     if (renewal) {
-      if (task.is_epic === 1) return { ok: false, error: `INVALID: #${task.id} is an epic` }
+      if (isEpic(task)) return { ok: false, error: `INVALID: #${task.id} is an epic` }
       if (task.assignee !== args.agent) return { ok: false, error: `CONFLICT: lease held by ${task.assignee}` }
     }
     // acquiring a lease is a claim-verb concern: update_status must not stay a second, unguarded
@@ -287,7 +287,7 @@ export class TaskService {
     // its deps are provably still satisfied, because deps are immutable after create and terminal
     // statuses have no outgoing edge (tasks.ts:58-61).
     if (args.status === 'in_progress' && !selfEdge) {
-      if (task.is_epic === 1) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }
+      if (isEpic(task)) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }
       if (task.status === 'queued' || task.status === 'blocked') {
         const deps = parseDeps(task.depends_on)
         if (!depsSatisfied(this.store.statusesOf(deps), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
@@ -296,10 +296,10 @@ export class TaskService {
     // an epic is never leased (the in_progress acquisition guard above), so its attempts is always 0 and
     // a refund here would be a no-op write with a misleading audit row. Terminal statuses need no guard:
     // they have no outgoing edge, so isValidTransition refuses them all.
-    if (refund && task.is_epic === 1) return { ok: false, error: `INVALID: cannot reset attempts on epic #${task.id}` }
+    if (refund && isEpic(task)) return { ok: false, error: `INVALID: cannot reset attempts on epic #${task.id}` }
 
     // D3: epic terminal guard — reject done/failed while non-terminal children exist
-    if (task.is_epic === 1 && TERMINAL_STATUSES.includes(args.status)) {
+    if (isEpic(task) && TERMINAL_STATUSES.includes(args.status)) {
       const open = this.store.nonTerminalChildCount(args.id)
       if (open > 0) {
         return { ok: false, error: `CHILDREN: ${open} sub-tasks not terminal` }
