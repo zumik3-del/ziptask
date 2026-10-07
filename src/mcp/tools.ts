@@ -80,7 +80,7 @@ const GET_TASK_SHAPE = {
 
 const LIST_TASKS_SHAPE = {
   assignee: z.string().optional(),
-  status: z.string().optional(),
+  status: z.enum(TASK_STATUSES).optional(),
   fields: z.array(z.string()).optional(),
   limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional(),
   updated_since: z.number().finite().min(-MAX_SAFE_TIMESTAMP_MS).max(MAX_SAFE_TIMESTAMP_MS).optional(),
@@ -227,9 +227,6 @@ export function handleListTasks(svc: TaskService, args: {
 }): ToolResult {
   const unknown = rejectUnknownArgs('list_tasks', LIST_TASKS_SHAPE, args)
   if (unknown) return unknown
-  if (args.status !== undefined && !TASK_STATUSES.includes(args.status as TaskStatus)) {
-    return errorResult('INVALID: status')
-  }
   if (args.ids !== undefined && args.ids.length > 0) {
     const withAssignee = args.fields?.includes('assignee') ?? false
     const batch = svc.listTasks({ ids: args.ids })

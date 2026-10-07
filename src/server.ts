@@ -93,7 +93,7 @@ export interface StartHttpOptions {
   onShutdown?: () => void
 }
 
-async function peekInitialize(req: Request): Promise<{ request: Request; agentName: string; isInitialize: boolean }> {
+async function peekInitialize(req: Request, logger: Logger): Promise<{ request: Request; agentName: string; isInitialize: boolean }> {
   if (req.method !== 'POST') return { request: req, agentName: 'unknown', isInitialize: false }
   const body = await req.text()
   const request = new Request(req.url, { method: req.method, headers: req.headers, body })
@@ -105,12 +105,21 @@ async function peekInitialize(req: Request): Promise<{ request: Request; agentNa
     isInitialize = init?.method === 'initialize'
     const name = init?.params?.clientInfo?.name
     if (typeof name === 'string' && name.length > 0) agentName = name
-  } catch {}
+  } catch (err) {
+    // A non-JSON body is a client error, not a server fault: log it for diagnosis and keep
+    // treating the request as a non-initialize one (the caller answers 400).
+    logger.debug('peekInitialize: failed to parse request body', { err: err instanceof Error ? err.message : String(err) })
+  }
   return { request, agentName, isInitialize }
 }
 
-const SESSION_NOT_FOUND = { jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null }
-const SESSION_REQUIRED = { jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request: Mcp-Session-Id header is required' }, id: null }
+// JSON-RPC server-error codes live in the -32000..-32099 range; name them so both transport
+// error responses stay consistent and the two magic numbers cannot drift apart.
+const JSONRPC_SESSION_NOT_FOUND = -32001
+const JSONRPC_BAD_REQUEST = -32000
+
+const SESSION_NOT_FOUND = { jsonrpc: '2.0', error: { code: JSONRPC_SESSION_NOT_FOUND, message: 'Session not found' }, id: null }
+const SESSION_REQUIRED = { jsonrpc: '2.0', error: { code: JSONRPC_BAD_REQUEST, message: 'Bad Request: Mcp-Session-Id header is required' }, id: null }
 
 export function startHttp(opts: StartHttpOptions) {
   const { svc, port, host, dbPath, maxSessions = DEFAULT_HTTP_MAX_SESSIONS, sessionTtlMs = DEFAULT_HTTP_SESSION_TTL_MS, logger, onShutdown } = opts
@@ -184,7 +193,7 @@ export function startHttp(opts: StartHttpOptions) {
         }
         reservedSessions++
         try {
-          const { request, agentName, isInitialize } = await peekInitialize(req)
+          const { request, agentName, isInitialize } = await peekInitialize(req, svcLogger)
           if (!isInitialize) {
             return Response.json(SESSION_REQUIRED, { status: 400 })
           }

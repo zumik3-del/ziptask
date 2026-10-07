@@ -1,4 +1,3 @@
-import type { Database } from 'bun:sqlite'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { openDatabase, closeDatabase } from './db/db'
 import { TaskRepo } from './db/repo'
@@ -64,7 +63,7 @@ try {
       maxSessions: settings.http.maxSessions,
       sessionTtlMs: settings.http.sessionTtlMs,
       logger,
-      onShutdown: () => closeDatabase(db as Database)
+      onShutdown: () => closeDatabase(db)
     })
   }
 } catch (err) {
