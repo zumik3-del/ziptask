@@ -1,10 +1,11 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { isValidTransition, STATUS_CODES, TASK_STATUSES, nowIso } from './core/tasks'
+import { isValidTransition, STATUS_CODES, TASK_STATUSES, TERMINAL_STATUSES, nowIso } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
+import { TERMINAL_STATUSES_SQL, TERMINAL_STATUS_VALUES } from './defaults'
 import {
-  handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus
+  handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus, handleListTasks
 } from './mcp/tools'
 import {
   createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, driveToDone,
@@ -354,6 +355,49 @@ describe('terminal status', () => {
     for (const to of TASK_STATUSES) {
       expect(isValidTransition('canceled', to)).toBe(false)
     }
+  })
+})
+
+describe('terminal-status single source (#1445)', () => {
+  test('TERMINAL_STATUSES (TS) and TERMINAL_STATUSES_SQL (SQL) describe the same set', () => {
+    const parsedSql = TERMINAL_STATUSES_SQL.replace(/[()']/g, '').split(', ')
+    expect(parsedSql).toEqual([...TERMINAL_STATUSES])
+    expect([...TERMINAL_STATUSES]).toEqual([...TERMINAL_STATUS_VALUES])
+  })
+
+  test('TERMINAL_STATUSES is exactly the set of statuses with no outgoing transition', () => {
+    for (const status of TASK_STATUSES) {
+      const isTerminalByTransitions = TASK_STATUSES.every(to => !isValidTransition(status, to))
+      expect(`${status}:${TERMINAL_STATUSES.includes(status)}`).toBe(`${status}:${isTerminalByTransitions}`)
+    }
+  })
+})
+
+describe('listTasks deterministic ordering (#1445)', () => {
+  const TIE_NOW = '2026-01-01T00:00:00.000Z'
+  const insertAt = (title: string, now: string) => repo.insertTask({
+    title, description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now
+  })
+
+  test('same-millisecond created_at ties break by id DESC, not by scan order', () => {
+    const ids = [insertAt('tie-1', TIE_NOW), insertAt('tie-2', TIE_NOW), insertAt('tie-3', TIE_NOW)]
+    const { rows, total } = repo.listTasks({ limit: 50 })
+    expect(total).toBe(3)
+    expect(rows.map(r => r.id)).toEqual([...ids].reverse())
+    expect(rows.map(r => r.created_at)).toEqual(ids.map(() => TIE_NOW))
+  })
+
+  test('created_at DESC dominates: an older row never precedes a newer one regardless of id', () => {
+    const older = insertAt('older', '2026-01-01T00:00:00.000Z')
+    const newer = insertAt('newer', '2026-01-01T00:00:01.000Z')
+    const { rows } = repo.listTasks({ limit: 50 })
+    expect(rows.map(r => r.id)).toEqual([newer, older])
+  })
+
+  test('the deterministic order surfaces through the list_tasks tool', () => {
+    const ids = [insertAt('a', TIE_NOW), insertAt('b', TIE_NOW), insertAt('c', TIE_NOW)]
+    const res = json(handleListTasks(svc, {}))
+    expect(res.tasks.map((t: { id: number }) => t.id)).toEqual([...ids].reverse())
   })
 })
 

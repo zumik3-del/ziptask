@@ -208,6 +208,14 @@ describe('MCP schema guards (#431)', () => {
     const future = await client.callTool({ name: 'list_tasks', arguments: { updated_since: Date.now() + 60_000 } })
     expect((future as any).content[0].text).toContain('0')
   })
+
+  test('list_tasks status enum rejects an unknown status and accepts a valid one', async () => {
+    const bad = await client.callTool({ name: 'list_tasks', arguments: { status: 'invalid_status' } })
+    expect(bad.isError).toBe(true)
+
+    const good = await client.callTool({ name: 'list_tasks', arguments: { status: 'queued' } })
+    expect(good.isError).toBeUndefined()
+  })
 })
 
 describe('observability logging', () => {
