@@ -5,6 +5,7 @@ import { openDatabase } from './db/db'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { startHttp } from './server'
+import { VERSION } from './version'
 
 const TMP_DB = `/tmp/opencode/ziptask-smoke-${Date.now()}.db`
 process.env.ZIPTASK_DB = TMP_DB
@@ -53,6 +54,10 @@ try {
   const healthRes = await fetch(`http://${host}:${port}/health`)
   const health = await healthRes.json() as any
   assert(health.ok === true, '/health')
+  assert(
+    typeof health.version === 'string' && health.version === VERSION,
+    `/health reports the app version: "${health.version}" (expected "${VERSION}")`
+  )
 
   const client = new Client({ name: 'smoke-test', version: '1.0.0' })
   const transport = new StreamableHTTPClientTransport(new URL(`http://${host}:${port}/mcp`))
