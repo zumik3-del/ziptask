@@ -35,9 +35,18 @@ load_common
 # resolve_db_paths.  A relative dbPath resolves against INSTALL_DIR (the
 # systemd WorkingDirectory); an absolute one is used as-is.
 #
-# The settings file is looked up where the SERVICE reads it first — the
-# EXEC_START path under RUN_DIR — and then under INSTALL_DIR, so the hook backs
-# up the database this install actually opens rather than a second copy.
+# The settings file is looked up where the SERVICE reads it first — DATA_DIR,
+# which is where app.env's EXEC_START points (--settings, ADR addendum R1) and
+# where SEED_FILES_DATA puts a fresh install's copy — and then under RUN_DIR and
+# INSTALL_DIR, the two places a pre-R1 install kept one, so the hook still backs
+# up the right database on a host that has not migrated yet.
+#
+# DATA_DIR is FIRST, and that ordering is load-bearing rather than cosmetic: a
+# migrated host keeps a pre-R1 copy under RUN_DIR until cleanup, and a dbPath
+# change by the operator would otherwise let that stale file — whose dbPath is
+# the pre-move path — win the lookup and send the backup to the wrong database,
+# silently and successfully. The default below cannot repair that, because it
+# only applies when NO settings.json was found at all.
 #
 # STDOUT IS THE RETURN VALUE: main() reads this function's output line by line
 # and treats each line as a database path, so nothing else may be written here —
@@ -47,11 +56,19 @@ load_common
 # reports the path it acted on ("Database backed up: …" / "No database at …").
 resolve_db_paths() {
   local main="" cfg="" cand
-  for cand in \
-    "${RUN_DIR:-}/scripts/settings.json" \
-    "${INSTALL_DIR:-}/settings.json" \
-    "${SCRIPT_DIR}/../scripts/settings.json" \
-    "${SCRIPT_DIR}/../settings.json"; do
+  # DATA_DIR first (R1), then the pre-R1 homes. "[ -n "$DATA_DIR" ] && cand=…"
+  # appends nothing when the key is unset, so a bare checkout without an
+  # app.env does not probe /settings.json — the leading-slash expansion
+  # "${DATA_DIR:-}/settings.json" would, harmlessly, on every host.
+  local -a candidates=()
+  [ -n "${DATA_DIR:-}" ] && candidates+=("${DATA_DIR}/settings.json")
+  candidates+=(
+    "${RUN_DIR:-}/scripts/settings.json"
+    "${INSTALL_DIR:-}/settings.json"
+    "${SCRIPT_DIR}/../scripts/settings.json"
+    "${SCRIPT_DIR}/../settings.json"
+  )
+  for cand in "${candidates[@]}"; do
     if [ -f "$cand" ]; then cfg="$cand"; break; fi
   done
   if [ -n "$cfg" ]; then

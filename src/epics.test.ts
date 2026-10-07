@@ -80,7 +80,7 @@ describe('epic constraints', () => {
   test('epic_id target not found → NOT_FOUND', () => {
     const res = handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: 9999 })
     expect(res.isError).toBe(true)
-    expect(text(res)).toContain('NOT_FOUND')
+    expect(text(res)).toContain('NOT_FOUND:')
   })
 
   test('epic_id on terminal task rejected', () => {

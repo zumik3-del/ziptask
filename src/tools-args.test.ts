@@ -183,14 +183,14 @@ describe('task_id 0 must not auto-pick (F1 #1040)', () => {
   test('service.claimTask with taskId 0 returns NOT_FOUND, never an auto-claim', () => {
     const bait = createTask('Bait', 'p0')
     const res = svc.claimTask({ agent: 'dev', taskId: 0 })
-    expect(res).toEqual({ ok: false, error: 'NOT_FOUND' })
+    expect(res).toEqual({ ok: false, error: 'NOT_FOUND:' })
     expect(getTaskRow(db, bait).status).toBe('queued')
   })
 
   test('service.claimTask with taskId -5 returns NOT_FOUND (pre-existing behaviour kept)', () => {
     const bait = createTask('Bait', 'p0')
     const res = svc.claimTask({ agent: 'dev', taskId: -5 })
-    expect(res).toEqual({ ok: false, error: 'NOT_FOUND' })
+    expect(res).toEqual({ ok: false, error: 'NOT_FOUND:' })
     expect(getTaskRow(db, bait).status).toBe('queued')
   })
 })

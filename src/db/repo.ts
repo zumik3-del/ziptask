@@ -1,7 +1,21 @@
-import type { Database } from 'bun:sqlite'
+import type { Database, SQLQueryBindings } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
 import type { CommentRow, TaskStore } from '../core/types'
-import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
+import { DEFAULT_MAX_ATTEMPTS, TERMINAL_STATUSES_SQL } from '../defaults'
+
+type SqlParam = string | number | null
+
+const TASK_PRIORITY_ORDER = ['p0', 'p1', 'p2', 'p3'] as const
+const PRIORITY_ORDER_SQL = `CASE priority ${TASK_PRIORITY_ORDER.map((p, i) => `WHEN '${p}' THEN ${i}`).join(' ')} END`
+
+// bun:sqlite's spread bindings need a typed array; keep the single cast here.
+function bindParams(params: SqlParam[]): SQLQueryBindings[] {
+  return params as SQLQueryBindings[]
+}
+
+function clampNonNegativeInt(value: number): number {
+  return Math.max(0, Math.floor(value))
+}
 
 export class TaskRepo implements TaskStore {
   private lastTimestampMs = 0
@@ -31,11 +45,11 @@ export class TaskRepo implements TaskStore {
   }): number {
     const maxAttempts = task.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const epicId = task.epicId ?? null
-    const isEpic = task.isEpic ?? 0
+    const epicFlag = task.isEpic ?? 0
     const result = this.db.run(
       `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic)
        VALUES (?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
-      [task.title, task.description, task.priority, task.assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, isEpic]
+      [task.title, task.description, task.priority, task.assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, epicFlag]
     )
     return Number(result.lastInsertRowid)
   }
@@ -62,20 +76,20 @@ export class TaskRepo implements TaskStore {
       params.push(filters.epicId)
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
-    const limit = Math.max(0, Math.floor(filters.limit))
+    const limit = clampNonNegativeInt(filters.limit)
     const rows = this.db.query(
-      `SELECT * FROM tasks ${where} ORDER BY created_at DESC LIMIT ${limit}`
-    ).all(...params as any[]) as Task[]
-    const total = (this.db.query(`SELECT COUNT(*) as cnt FROM tasks ${where}`).get(...params as any[]) as { cnt: number }).cnt
+      `SELECT * FROM tasks ${where} ORDER BY created_at DESC, id DESC LIMIT ${limit}`
+    ).all(...bindParams(params)) as Task[]
+    const total = (this.db.query(`SELECT COUNT(*) as cnt FROM tasks ${where}`).get(...bindParams(params)) as { cnt: number }).cnt
     return { rows, total }
   }
 
   queuedCandidates(limit: number, offset?: number): Task[] {
-    const n = Math.max(0, Math.floor(limit))
-    const o = Math.max(0, Math.floor(offset ?? 0))
+    const n = clampNonNegativeInt(limit)
+    const o = clampNonNegativeInt(offset ?? 0)
     return this.db.query(
       `SELECT * FROM tasks WHERE status = 'queued' AND is_epic = 0
-       ORDER BY CASE priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 WHEN 'p3' THEN 3 END, created_at ASC, id ASC
+       ORDER BY ${PRIORITY_ORDER_SQL}, created_at ASC, id ASC
        LIMIT ${n} OFFSET ${o}`
     ).all() as Task[]
   }
@@ -88,7 +102,7 @@ export class TaskRepo implements TaskStore {
   statusesOf(ids: number[]): Map<number, TaskStatus> {
     if (ids.length === 0) return new Map()
     const inClause = ids.map(() => '?').join(',')
-    const rows = this.db.query(`SELECT id, status FROM tasks WHERE id IN (${inClause})`).all(...ids as any[]) as Array<{ id: number; status: TaskStatus }>
+    const rows = this.db.query(`SELECT id, status FROM tasks WHERE id IN (${inClause})`).all(...bindParams(ids)) as Array<{ id: number; status: TaskStatus }>
     const map = new Map<number, TaskStatus>()
     for (const row of rows) map.set(row.id, row.status)
     return map
@@ -98,7 +112,7 @@ export class TaskRepo implements TaskStore {
     const map = new Map<number, Task | null>()
     if (ids.length === 0) return map
     const inClause = ids.map(() => '?').join(',')
-    const rows = this.db.query(`SELECT * FROM tasks WHERE id IN (${inClause})`).all(...ids as any[]) as Task[]
+    const rows = this.db.query(`SELECT * FROM tasks WHERE id IN (${inClause})`).all(...bindParams(ids)) as Task[]
     for (const row of rows) map.set(row.id, row)
     return map
   }
@@ -154,7 +168,7 @@ export class TaskRepo implements TaskStore {
   }
 
   timelineEntries(taskId: number, limit: number): Array<{ type: string; agent: string; text: string; created_at: string }> {
-    const n = Math.max(0, Math.floor(limit))
+    const n = clampNonNegativeInt(limit)
     const sql = `SELECT 'action' as type, agent, action || ': ' || COALESCE(old_value, 'null') || '->' || COALESCE(new_value, 'null') as text, created_at, rowid
       FROM audit_log WHERE task_id = ?
       UNION ALL
@@ -173,7 +187,7 @@ export class TaskRepo implements TaskStore {
 
   nonTerminalChildCount(epicId: number): number {
     const row = this.db.query(
-      "SELECT COUNT(*) as cnt FROM tasks WHERE epic_id = ? AND status NOT IN ('done', 'failed', 'canceled')"
+      `SELECT COUNT(*) as cnt FROM tasks WHERE epic_id = ? AND status NOT IN ${TERMINAL_STATUSES_SQL}`
     ).get(epicId) as { cnt: number }
     return row.cnt
   }
@@ -182,7 +196,7 @@ export class TaskRepo implements TaskStore {
     const rows = this.db.query(
       `SELECT
          COUNT(*) as total,
-         SUM(CASE WHEN status NOT IN ('done', 'failed', 'canceled') THEN 1 ELSE 0 END) as open,
+         SUM(CASE WHEN status NOT IN ${TERMINAL_STATUSES_SQL} THEN 1 ELSE 0 END) as open,
          SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done,
          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
          SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END) as canceled

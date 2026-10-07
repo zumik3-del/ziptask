@@ -7,6 +7,8 @@ import {
   DEFAULT_HTTP_SESSION_TTL_MS, DEFAULT_PRIORITY, DEFAULT_REPORTER, DEFAULT_LIST_LIMIT,
   DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT, DEFAULT_LOG_LEVEL, DEFAULT_AUDIT_LOG
 } from './defaults'
+import { TASK_PRIORITIES } from './core/tasks'
+import { LEVELS } from './logger'
 
 export const DEFAULTS = {
   dbPath: DEFAULT_DB_PATH,
@@ -41,14 +43,14 @@ const SettingsSchema = z.object({
     sessionTtlMs: z.number().int().positive().optional()
   }).optional(),
   defaults: z.object({
-    priority: z.enum(['p0', 'p1', 'p2', 'p3']).optional(),
+    priority: z.enum(TASK_PRIORITIES).optional(),
     reporter: z.string().optional(),
     listLimit: z.number().int().positive().optional(),
     timelineLimit: z.number().int().positive().optional(),
     queueLimit: z.number().int().positive().optional()
   }).optional(),
   logging: z.object({
-    level: z.enum(['off', 'error', 'info', 'debug']).optional()
+    level: z.enum(LEVELS).optional()
   }).optional(),
   auditLog: z.boolean().optional()
 })
@@ -67,6 +69,9 @@ export type Settings = z.infer<typeof SettingsSchema> & {
   auditLog: boolean
 }
 
+// Level parsing is the logger's job: the raw ZIPTASK_LOG_LEVEL string reaches createLogger
+// so it can warn about an unknown level. settings.json keeps the closed enum instead, so a
+// bad value in the file still fails startup loudly.
 export type EnvType = 'string' | 'int' | 'float' | 'bool'
 
 export interface EnvMapping {
@@ -97,14 +102,8 @@ export const ENV_MAPPINGS: EnvMapping[] = [
 function parseValue(raw: string, type: EnvType): string | number | boolean {
   switch (type) {
     case 'string': return raw
-    case 'int': {
-      const n = parseInt(raw, 10)
-      return Number.isFinite(n) ? n : NaN
-    }
-    case 'float': {
-      const n = parseFloat(raw)
-      return Number.isFinite(n) ? n : NaN
-    }
+    case 'int': return parseInt(raw, 10)
+    case 'float': return parseFloat(raw)
     case 'bool': return raw === 'true'
   }
 }

@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { nowIso, clampLimit, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './core/tasks'
+import { nowIso, clampLimit, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './core/tasks'
 import type { TaskStore } from './core/types'
 import { TaskRepo } from './db/repo'
 import { MetricsRepo } from './db/metrics-repo'
@@ -8,7 +8,7 @@ import { TaskService } from './core/service'
 import { computeMetrics } from './core/metrics'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus,
-  handleAddComment, handleListQueue, handleGetTimeline, handleListTasks
+  handleAddComment, handleListQueue, handleGetTimeline, handleListTasks, registerAllTools
 } from './mcp/tools'
 import {
   createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, driveToDone,
@@ -641,7 +641,7 @@ describe('claimTask taskId branch (F1 #1040)', () => {
   test('claimTask with taskId 0 → NOT_FOUND, never an auto-claim', () => {
     const bait = json(handleCreateTask(svc, { title: 'Bait', reporter: 'dev', priority: 'p0' })).id
     const res = svc.claimTask({ agent: 'test', taskId: 0 })
-    expect(res).toEqual({ ok: false, error: 'NOT_FOUND' })
+    expect(res).toEqual({ ok: false, error: 'NOT_FOUND:' })
     expect(getTaskRow(db, bait).status).toBe('queued')
     expect(getTaskRow(db, bait).lease_expires_at).toBeNull()
   })
@@ -668,10 +668,14 @@ describe('claimTask taskId branch (F1 #1040)', () => {
 })
 
 describe('listTasks invalid status filter (#811)', () => {
-  test('listTasks with invalid status returns error', () => {
-    const res = handleListTasks(svc, { status: 'invalid_status' })
-    expect(res.isError).toBe(true)
-    expect(text(res)).toContain('INVALID: status')
+  test('listTasks rejects an unknown status through the input schema enum', () => {
+    let schema: any
+    registerAllTools({ registerTool: (name: string, cfg: any) => { if (name === 'list_tasks') schema = cfg.inputSchema } } as any, svc)
+    expect(schema.safeParse({ status: 'invalid_status' }).success).toBe(false)
+    // the enum is sourced from TASK_STATUSES, so every status must pass and nothing else may
+    for (const status of TASK_STATUSES) {
+      expect(`${status}:${schema.safeParse({ status }).success}`).toBe(`${status}:true`)
+    }
   })
 
   test('listTasks with valid status filter works', () => {
@@ -679,5 +683,46 @@ describe('listTasks invalid status filter (#811)', () => {
     handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: 1 })
     const res = json(handleListTasks(svc, { status: 'blocked' }))
     expect(res.tasks.some((t: any) => t.id === id)).toBe(true)
+  })
+})
+
+describe('TaskService error contract after the hygiene refactor (#1445)', () => {
+  test('claim: an unknown task id is NOT_FOUND:', () => {
+    expect(svc.claimTask({ agent: 'a', taskId: 9999 })).toEqual({ ok: false, error: 'NOT_FOUND:' })
+  })
+
+  test('claim: an already-leased task is CONFLICT: status=<current>', () => {
+    const id = json(handleCreateTask(svc, { title: 'Busy', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'a', task_id: id })
+    expect(svc.claimTask({ agent: 'b', taskId: id })).toEqual({ ok: false, error: 'CONFLICT: status=in_progress' })
+  })
+
+  test('claim: an empty queue is EMPTY: no claimable tasks', () => {
+    expect(svc.claimTask({ agent: 'a' })).toEqual({ ok: false, error: 'EMPTY: no claimable tasks' })
+  })
+
+  test('claim: a lost compare-and-swap is CONFLICT: version mismatch', () => {
+    const id = json(handleCreateTask(svc, { title: 'LostRace', reporter: 'dev' })).id
+    const raced = new TaskRepo(db)
+    raced.markClaimed = () => 0
+    expect(new TaskService(raced, { leaseTtlMin: 15 }).claimTask({ agent: 'a', taskId: id }))
+      .toEqual({ ok: false, error: 'CONFLICT: version mismatch' })
+  })
+
+  test('update_status: an unknown task id is NOT_FOUND:', () => {
+    expect(svc.updateStatus({ id: 9999, agent: 'a', status: 'blocked', version: 1 }))
+      .toEqual({ ok: false, error: 'NOT_FOUND:' })
+  })
+
+  test('update_status: a lost compare-and-swap is CONFLICT: concurrent modification', () => {
+    const id = json(handleCreateTask(svc, { title: 'LostRace2', reporter: 'dev' })).id
+    const raced = new TaskRepo(db)
+    raced.transitionStatus = () => 0
+    expect(new TaskService(raced, { leaseTtlMin: 15 }).updateStatus({ id, agent: 'a', status: 'blocked', version: 1 }))
+      .toEqual({ ok: false, error: 'CONFLICT: concurrent modification' })
+  })
+
+  test('add_comment: an unknown task id is NOT_FOUND:', () => {
+    expect(svc.addComment({ id: 9999, agent: 'a', content: 'x' })).toEqual({ ok: false, error: 'NOT_FOUND:' })
   })
 })

@@ -4,7 +4,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { TaskService } from './core/service'
 import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
-import { createLogger } from './logger'
+import { createLogger, normalizeError } from './logger'
 import { VERSION } from './version'
 import { DEFAULT_HTTP_MAX_SESSIONS, DEFAULT_HTTP_SESSION_TTL_MS, SESSION_CLEANUP_INTERVAL_MS } from './defaults'
 
@@ -93,7 +93,7 @@ export interface StartHttpOptions {
   onShutdown?: () => void
 }
 
-async function peekInitialize(req: Request): Promise<{ request: Request; agentName: string; isInitialize: boolean }> {
+async function peekInitialize(req: Request, logger: Logger): Promise<{ request: Request; agentName: string; isInitialize: boolean }> {
   if (req.method !== 'POST') return { request: req, agentName: 'unknown', isInitialize: false }
   const body = await req.text()
   const request = new Request(req.url, { method: req.method, headers: req.headers, body })
@@ -105,12 +105,21 @@ async function peekInitialize(req: Request): Promise<{ request: Request; agentNa
     isInitialize = init?.method === 'initialize'
     const name = init?.params?.clientInfo?.name
     if (typeof name === 'string' && name.length > 0) agentName = name
-  } catch {}
+  } catch (err) {
+    // A non-JSON body is a client error, not a server fault: log it for diagnosis and keep
+    // treating the request as a non-initialize one (the caller answers 400).
+    logger.debug('peekInitialize: failed to parse request body', { err: err instanceof Error ? err.message : String(err) })
+  }
   return { request, agentName, isInitialize }
 }
 
-const SESSION_NOT_FOUND = { jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null }
-const SESSION_REQUIRED = { jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request: Mcp-Session-Id header is required' }, id: null }
+// JSON-RPC server-error codes live in the -32000..-32099 range; name them so both transport
+// error responses stay consistent and the two magic numbers cannot drift apart.
+const JSONRPC_SESSION_NOT_FOUND = -32001
+const JSONRPC_BAD_REQUEST = -32000
+
+const SESSION_NOT_FOUND = { jsonrpc: '2.0', error: { code: JSONRPC_SESSION_NOT_FOUND, message: 'Session not found' }, id: null }
+const SESSION_REQUIRED = { jsonrpc: '2.0', error: { code: JSONRPC_BAD_REQUEST, message: 'Bad Request: Mcp-Session-Id header is required' }, id: null }
 
 export function startHttp(opts: StartHttpOptions) {
   const { svc, port, host, dbPath, maxSessions = DEFAULT_HTTP_MAX_SESSIONS, sessionTtlMs = DEFAULT_HTTP_SESSION_TTL_MS, logger, onShutdown } = opts
@@ -118,7 +127,7 @@ export function startHttp(opts: StartHttpOptions) {
   const sessions = new Map<string, Session>()
   let reservedSessions = 0
   const logSessionClose = (id: string, agent: string) => {
-    svcLogger.info(`session close id=${id} agent=${agent}`)
+    svcLogger.child({ session: id, agent }).info('session close')
   }
 
   const cleanup = setInterval(() => {
@@ -184,7 +193,7 @@ export function startHttp(opts: StartHttpOptions) {
         }
         reservedSessions++
         try {
-          const { request, agentName, isInitialize } = await peekInitialize(req)
+          const { request, agentName, isInitialize } = await peekInitialize(req, svcLogger)
           if (!isInitialize) {
             return Response.json(SESSION_REQUIRED, { status: 400 })
           }
@@ -197,7 +206,7 @@ export function startHttp(opts: StartHttpOptions) {
             eventStore,
             onsessioninitialized: (id) => {
               sessions.set(id, { transport, lastAccess: Date.now(), agent: agentName })
-              svcLogger.info(`session open id=${id} agent=${agentName}`)
+              svcLogger.child({ session: id, agent: agentName }).info('session open')
             },
             onsessionclosed: (id) => {
               const session = sessions.get(id)
@@ -220,7 +229,7 @@ export function startHttp(opts: StartHttpOptions) {
           reservedSessions--
         }
       } catch (err) {
-        svcLogger.error(`http handler error: ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
+        svcLogger.error('http handler error', normalizeError(err))
         return new Response('Internal Server Error', { status: 500 })
       }
     }
@@ -241,6 +250,6 @@ export function startHttp(opts: StartHttpOptions) {
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
 
-  svcLogger.info(`ziptask started version=${VERSION} host=${host} port=${server.port} dbPath=${dbPath ?? ''}`)
+  svcLogger.info('ziptask started', { version: VERSION, host, port: server.port, dbPath: dbPath ?? '' })
   return server
 }
