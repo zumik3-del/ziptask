@@ -8,7 +8,7 @@ import { TaskService } from './core/service'
 import { computeMetrics } from './core/metrics'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus,
-  handleAddComment, handleListQueue, handleGetTimeline, handleListTasks
+  handleAddComment, handleListQueue, handleGetTimeline, handleListTasks, registerAllTools
 } from './mcp/tools'
 import {
   createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, driveToDone,
@@ -668,10 +668,10 @@ describe('claimTask taskId branch (F1 #1040)', () => {
 })
 
 describe('listTasks invalid status filter (#811)', () => {
-  test('listTasks with invalid status returns error', () => {
-    const res = handleListTasks(svc, { status: 'invalid_status' })
-    expect(res.isError).toBe(true)
-    expect(text(res)).toContain('INVALID: status')
+  test('listTasks rejects an unknown status through the input schema enum', () => {
+    let schema: any
+    registerAllTools({ registerTool: (name: string, cfg: any) => { if (name === 'list_tasks') schema = cfg.inputSchema } } as any, svc)
+    expect(schema.safeParse({ status: 'invalid_status' }).success).toBe(false)
   })
 
   test('listTasks with valid status filter works', () => {
