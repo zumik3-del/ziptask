@@ -325,6 +325,10 @@ export class TaskService {
         this.store.insertComment(args.id, args.agent, args.comment, type)
       }
 
+      // No existence guard needed: epic_id is never rewritten after insert, the self-FK
+      // (migrations.ts:50) plus PRAGMA foreign_keys = ON rejects a child whose parent is missing,
+      // and the only deleteTask call site (createTask cycle rollback, line 130) removes a
+      // just-inserted task by its own id - never a parent some child still references.
       if (task.epic_id !== null && subtaskMirror !== null && this.auditLog) {
         this.store.appendEpicAuditMirror(task.epic_id, args.agent, subtaskMirror,
           `#${task.id} ${sanitizePipe(task.title)}`)
