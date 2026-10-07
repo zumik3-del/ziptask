@@ -33,6 +33,6 @@ Errors:
 | Condition | Status | Body |
 |---|---|---|
 | non-integer or empty id | `400` | `{"error":"Invalid task id"}` |
-| unknown id | `404` | `{"error":"NOT_FOUND"}` |
+| unknown id | `404` | `{"error":"NOT_FOUND:"}` |
 
 Because it routes through the service, this read also triggers the [lazy lease reap](mcp-tools.md#reads-and-lease-reap) — it can change task state and bump `version`.

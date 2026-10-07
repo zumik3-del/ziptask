@@ -102,7 +102,7 @@ export class TaskService {
     // D5: epic_id target must exist, be non-terminal, and have epic_id IS NULL
     if (args.epic_id !== undefined) {
       const target = this.store.getTaskRow(args.epic_id)
-      if (!target) return { ok: false, error: 'NOT_FOUND' }
+      if (!target) return { ok: false, error: 'NOT_FOUND:' }
       if (TERMINAL_STATUSES.includes(target.status)) {
         return { ok: false, error: 'INVALID: cannot attach to a terminal task' }
       }
@@ -145,7 +145,7 @@ export class TaskService {
   getTaskView(id: number): SvcResult<{ task: Task; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number; canceled: number } }> {
     this.reaper.reapIfStale()
     const task = this.store.getTaskRow(id)
-    if (!task) return { ok: false, error: 'NOT_FOUND' }
+    if (!task) return { ok: false, error: 'NOT_FOUND:' }
     const deps = parseDeps(task.depends_on)
     const depStatuses = this.store.statusesOf(deps)
     const blockedBy = deps.filter(d => {
@@ -213,7 +213,7 @@ export class TaskService {
 
     if (args.taskId !== undefined) {
       task = this.store.getTaskRow(args.taskId)
-      if (!task) return { ok: false, error: 'NOT_FOUND' }
+      if (!task) return { ok: false, error: 'NOT_FOUND:' }
       if (task.status !== 'queued' && task.status !== 'blocked') return { ok: false, error: `CONFLICT: status=${task.status}` }
       const epicErr = this._epicError(task, `INVALID: #${task.id} is an epic, not claimable`)
       if (epicErr) return { ok: false, error: epicErr }
@@ -246,7 +246,7 @@ export class TaskService {
     if (refund && !args.comment?.trim()) return { ok: false, error: 'INVALID: reset_attempts requires a comment' }
     this.reaper.reap()
     const task = this.store.getTaskRow(args.id)
-    if (!task) return { ok: false, error: 'NOT_FOUND' }
+    if (!task) return { ok: false, error: 'NOT_FOUND:' }
     if (task.version !== args.version) return { ok: false, error: `CONFLICT: expected version ${task.version}, got ${args.version}` }
 
     // Lease heartbeat: only the holder re-arms its own in_progress lease. The reap above is the fence,
@@ -345,7 +345,7 @@ export class TaskService {
   addComment(args: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
     this.reaper.reapIfStale()
     const task = this.store.getTaskRow(args.id)
-    if (!task) return { ok: false, error: 'NOT_FOUND' }
+    if (!task) return { ok: false, error: 'NOT_FOUND:' }
     const validationErr =
       this._agentError(args.agent) ??
       this._contentError(args.content)
@@ -357,7 +357,7 @@ export class TaskService {
   getTimeline(id: number, limit?: number): SvcResult<TimelineRow[]> {
     this.reaper.reapIfStale()
     const task = this.store.getTaskRow(id)
-    if (!task) return { ok: false, error: 'NOT_FOUND' }
+    if (!task) return { ok: false, error: 'NOT_FOUND:' }
     const limitN = clampLimit(limit, this.timelineLimit)
     const rows = this.store.timelineEntries(id, limitN)
     return { ok: true, data: rows }
@@ -366,7 +366,7 @@ export class TaskService {
   listComments(id: number): SvcResult<CommentRow[]> {
     this.reaper.reapIfStale()
     const task = this.store.getTaskRow(id)
-    if (!task) return { ok: false, error: 'NOT_FOUND' }
+    if (!task) return { ok: false, error: 'NOT_FOUND:' }
     return { ok: true, data: this.store.commentsOf(id) }
   }
 

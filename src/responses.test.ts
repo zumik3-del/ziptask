@@ -178,7 +178,7 @@ describe('add_comment', () => {
   test('unknown id returns NOT_FOUND', () => {
     const res = handleAddComment(svc, { id: 9999, agent: 'dev', content: 'x' })
     expect(res.isError).toBe(true)
-    expect(text(res)).toContain('NOT_FOUND')
+    expect(text(res)).toContain('NOT_FOUND:')
   })
 
   test('empty agent rejected', () => {
@@ -227,7 +227,7 @@ describe('get_timeline', () => {
   test('unknown id returns NOT_FOUND', () => {
     const res = handleGetTimeline(svc, { id: 9999 })
     expect(res.isError).toBe(true)
-    expect(text(res)).toContain('NOT_FOUND')
+    expect(text(res)).toContain('NOT_FOUND:')
   })
 
   test('limit trims result set', () => {

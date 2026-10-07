@@ -641,7 +641,7 @@ describe('claimTask taskId branch (F1 #1040)', () => {
   test('claimTask with taskId 0 → NOT_FOUND, never an auto-claim', () => {
     const bait = json(handleCreateTask(svc, { title: 'Bait', reporter: 'dev', priority: 'p0' })).id
     const res = svc.claimTask({ agent: 'test', taskId: 0 })
-    expect(res).toEqual({ ok: false, error: 'NOT_FOUND' })
+    expect(res).toEqual({ ok: false, error: 'NOT_FOUND:' })
     expect(getTaskRow(db, bait).status).toBe('queued')
     expect(getTaskRow(db, bait).lease_expires_at).toBeNull()
   })
