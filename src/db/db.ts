@@ -1,11 +1,11 @@
 import { Database } from 'bun:sqlite'
+import { mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { MIGRATIONS } from './migrations'
 import { DEFAULT_DB_PATH, SQLITE_BUSY_TIMEOUT_MS } from '../defaults'
 
 export function openDatabase(path?: string): Database {
   const dbPath = path ?? DEFAULT_DB_PATH
-  const { mkdirSync } = require('node:fs')
-  const { dirname } = require('node:path')
   mkdirSync(dirname(dbPath), { recursive: true })
   const db = new Database(dbPath)
   db.exec('PRAGMA journal_mode = WAL')
@@ -30,10 +30,10 @@ function applyMigrations(db: Database) {
   }
   const migrate = db.transaction(() => {
     for (let i = current; i < migrationCount; i++) {
-      db!.exec(MIGRATIONS[i])
+      db.exec(MIGRATIONS[i])
     }
-    db!.run('DELETE FROM schema_version')
-    db!.run('INSERT INTO schema_version (version) VALUES (?)', [migrationCount])
+    db.run('DELETE FROM schema_version')
+    db.run('INSERT INTO schema_version (version) VALUES (?)', [migrationCount])
   })
   try {
     migrate()
