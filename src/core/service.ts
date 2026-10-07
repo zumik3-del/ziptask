@@ -3,8 +3,9 @@ import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit,
 import type { TaskStore, TimelineRow, CommentRow, SvcResult } from './types'
 import { parseDeps, createsCycle, depsSatisfied } from './deps'
 import type { UpdateStatusData } from './types'
+import { LeaseReaper } from './reaper'
 import {
-  SECOND_MS, MINUTE_MS, CANDIDATES_PAGE_SIZE, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
+  MINUTE_MS, CANDIDATES_PAGE_SIZE, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
   DEFAULT_AUDIT_LOG, DEFAULT_REAP_COOLDOWN_SEC, DEFAULT_AUTO_CLAIM_CEILING, DEFAULT_PRIORITY,
   DEFAULT_REPORTER, DEFAULT_LIST_LIMIT, DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT
 } from '../defaults'
@@ -13,14 +14,13 @@ export class TaskService {
   private readonly leaseTtlMin: number
   private readonly maxAttempts: number
   private readonly auditLog: boolean
-  private readonly reapCooldownSec: number
   private readonly autoClaimCeiling: number
   private readonly defaultPriority: string
   private readonly defaultReporter: string
   private readonly listLimit: number
   private readonly timelineLimit: number
   private readonly queueLimit: number
-  private lastReapAt = 0
+  private readonly reaper: LeaseReaper
 
   constructor(private store: TaskStore, opts?: {
     leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number
@@ -29,17 +29,13 @@ export class TaskService {
     this.leaseTtlMin = opts?.leaseTtlMin ?? DEFAULT_LEASE_TTL_MIN
     this.maxAttempts = opts?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     this.auditLog = opts?.auditLog ?? DEFAULT_AUDIT_LOG
-    this.reapCooldownSec = opts?.reapCooldownSec ?? DEFAULT_REAP_COOLDOWN_SEC
     this.autoClaimCeiling = opts?.autoClaimCeiling ?? DEFAULT_AUTO_CLAIM_CEILING
     this.defaultPriority = opts?.defaultPriority ?? DEFAULT_PRIORITY
     this.defaultReporter = opts?.defaultReporter ?? DEFAULT_REPORTER
     this.listLimit = opts?.listLimit ?? DEFAULT_LIST_LIMIT
     this.timelineLimit = opts?.timelineLimit ?? DEFAULT_TIMELINE_LIMIT
     this.queueLimit = opts?.queueLimit ?? DEFAULT_QUEUE_LIMIT
-  }
-
-  private _shouldReap(): boolean {
-    return Date.now() - this.lastReapAt >= this.reapCooldownSec * SECOND_MS
+    this.reaper = new LeaseReaper(store, opts?.reapCooldownSec ?? DEFAULT_REAP_COOLDOWN_SEC, this.auditLog)
   }
 
   private _leaseUntil(): string {
@@ -54,30 +50,22 @@ export class TaskService {
     return value.length > max ? `INVALID: ${field} too long` : null
   }
 
+  private _agentError(agent: string): string | null {
+    return this._requiredError(agent, 'agent') ?? this._tooLongError(agent, MAX_AGENT_LENGTH, 'agent')
+  }
+
   private _contentError(content: string): string | null {
     return this._requiredError(content, 'content') ?? this._tooLongError(content, MAX_CONTENT_LENGTH, 'content')
   }
 
+  // The per-door wording differs (claim, renew, refund), so the caller supplies it verbatim;
+  // only the epic predicate and the rejection shape are centralized.
+  private _epicError(task: Task, message: string): string | null {
+    return isEpic(task) ? message : null
+  }
+
   private _atomic<T>(fn: () => T): T {
     return this.store.transaction(fn)
-  }
-
-  private _reapIfStale(): void {
-    if (this._shouldReap()) this._doReap()
-  }
-
-  // claimTask, updateStatus and reapExpiredLeases deliberately bypass the cooldown via _doReap().
-
-  private _doReap(): void {
-    const now = nowIso()
-    const expired = this.store.expiredLeases(now)
-    for (const task of expired) {
-      const newAttempts = task.attempts + 1
-      const newStatus: TaskStatus = newAttempts > task.max_attempts ? 'failed' : 'queued'
-      const changes = this.store.reapTransition(task.id, task.version, newStatus, newAttempts, now)
-      if (changes === 1 && this.auditLog) this.store.auditAppend(task.id, 'system', 'lease_expired', 'in_progress', newStatus)
-    }
-    this.lastReapAt = Date.now()
   }
 
   createTask(args: {
@@ -107,9 +95,8 @@ export class TaskService {
     if (deps.length > 0) {
       const batch = this.store.batchTasks(deps)
       for (const [d, t] of batch) {
-    if (t && isEpic(t)) {
-          return { ok: false, error: `INVALID: dependencies on epic tasks not allowed (#${d})` }
-        }
+        const epicErr = t ? this._epicError(t, `INVALID: dependencies on epic tasks not allowed (#${d})`) : null
+        if (epicErr) return { ok: false, error: epicErr }
       }
     }
     // D5: epic_id target must exist, be non-terminal, and have epic_id IS NULL
@@ -156,7 +143,7 @@ export class TaskService {
   }
 
   getTaskView(id: number): SvcResult<{ task: Task; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number; canceled: number } }> {
-    this._reapIfStale()
+    this.reaper.reapIfStale()
     const task = this.store.getTaskRow(id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     const deps = parseDeps(task.depends_on)
@@ -176,7 +163,7 @@ export class TaskService {
   }
 
   listTasks(args: { assignee?: string; status?: string; updated_since?: number; epic_id?: number; limit?: number; ids?: number[] }): { tasks: Task[]; total: number } | { items: Array<{ id: number; task: Task | null }>; total: number } {
-    this._reapIfStale()
+    this.reaper.reapIfStale()
     if (args.ids !== undefined && args.ids.length > 0) {
       const batch = this.store.batchTasks(args.ids)
       return {
@@ -219,16 +206,17 @@ export class TaskService {
   }
 
   claimTask(args: { agent: string; taskId?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Task }> {
-    const agentErr = this._requiredError(args.agent, 'agent') ?? this._tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent')
+    const agentErr = this._agentError(args.agent)
     if (agentErr) return { ok: false, error: agentErr }
-    this._doReap()
+    this.reaper.reap()
     let task: Task | null = null
 
     if (args.taskId !== undefined) {
       task = this.store.getTaskRow(args.taskId)
       if (!task) return { ok: false, error: 'NOT_FOUND' }
       if (task.status !== 'queued' && task.status !== 'blocked') return { ok: false, error: `CONFLICT: status=${task.status}` }
-      if (isEpic(task)) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }
+      const epicErr = this._epicError(task, `INVALID: #${task.id} is an epic, not claimable`)
+      if (epicErr) return { ok: false, error: epicErr }
       const deps = parseDeps(task.depends_on)
       if (!depsSatisfied(this.store.statusesOf(deps), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
     } else {
@@ -241,13 +229,13 @@ export class TaskService {
     const leaseUntil = this._leaseUntil()
     const changes = this.store.markClaimed(task.id, task.version, args.agent, leaseUntil, now)
     const updated = this.store.getTaskRow(task.id)
-    if (changes !== 1 || updated?.status !== 'in_progress') return { ok: false, error: 'CONFLICT: version mismatch' }
+    if (changes !== 1 || !updated) return { ok: false, error: 'CONFLICT: version mismatch' }
     if (this.auditLog) this.store.auditAppend(task.id, args.agent, 'claim', task.status, 'in_progress')
     return { ok: true, data: { id: task.id, leaseTtlMin: this.leaseTtlMin, task: updated } }
   }
 
   updateStatus(args: { id: number; agent: string; status: TaskStatus; version: number; comment?: string; renew?: boolean; reset_attempts?: boolean }): SvcResult<UpdateStatusData> {
-    const agentErr = this._requiredError(args.agent, 'agent') ?? this._tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent')
+    const agentErr = this._agentError(args.agent)
     if (agentErr) return { ok: false, error: agentErr }
     if (args.comment !== undefined) {
       const commentErr = this._contentError(args.comment)
@@ -256,7 +244,7 @@ export class TaskService {
     // an audited escape hatch without a stated reason is what hides the next accidents
     const refund = args.reset_attempts === true
     if (refund && !args.comment?.trim()) return { ok: false, error: 'INVALID: reset_attempts requires a comment' }
-    this._doReap()
+    this.reaper.reap()
     const task = this.store.getTaskRow(args.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     if (task.version !== args.version) return { ok: false, error: `CONFLICT: expected version ${task.version}, got ${args.version}` }
@@ -277,17 +265,19 @@ export class TaskService {
       return { ok: false, error: `INVALID: ${task.status} → ${args.status}` }
     }
     if (renewal) {
-      if (isEpic(task)) return { ok: false, error: `INVALID: #${task.id} is an epic` }
+      const epicErr = this._epicError(task, `INVALID: #${task.id} is an epic`)
+      if (epicErr) return { ok: false, error: epicErr }
       if (task.assignee !== args.agent) return { ok: false, error: `CONFLICT: lease held by ${task.assignee}` }
     }
     // acquiring a lease is a claim-verb concern: update_status must not stay a second, unguarded
-    // door to in_progress. The claimTask precondition set (service.ts:228-233) maps 1:1 — NOT_FOUND
+    // door to in_progress. The claimTask precondition set (service.ts:216-221) maps 1:1 — NOT_FOUND
     // is covered by the row read, the status window by isValidTransition, so is_epic and deps are
     // the only two missing checks. review -> in_progress is a deliberate superset (work sent back):
     // its deps are provably still satisfied, because deps are immutable after create and terminal
     // statuses have no outgoing edge (tasks.ts:58-61).
     if (args.status === 'in_progress' && !selfEdge) {
-      if (isEpic(task)) return { ok: false, error: `INVALID: #${task.id} is an epic, not claimable` }
+      const epicErr = this._epicError(task, `INVALID: #${task.id} is an epic, not claimable`)
+      if (epicErr) return { ok: false, error: epicErr }
       if (task.status === 'queued' || task.status === 'blocked') {
         const deps = parseDeps(task.depends_on)
         if (!depsSatisfied(this.store.statusesOf(deps), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
@@ -296,7 +286,10 @@ export class TaskService {
     // an epic is never leased (the in_progress acquisition guard above), so its attempts is always 0 and
     // a refund here would be a no-op write with a misleading audit row. Terminal statuses need no guard:
     // they have no outgoing edge, so isValidTransition refuses them all.
-    if (refund && isEpic(task)) return { ok: false, error: `INVALID: cannot reset attempts on epic #${task.id}` }
+    if (refund) {
+      const epicErr = this._epicError(task, `INVALID: cannot reset attempts on epic #${task.id}`)
+      if (epicErr) return { ok: false, error: epicErr }
+    }
 
     // D3: epic terminal guard — reject done/failed while non-terminal children exist
     if (isEpic(task) && TERMINAL_STATUSES.includes(args.status)) {
@@ -333,11 +326,8 @@ export class TaskService {
       }
 
       if (task.epic_id !== null && subtaskMirror !== null && this.auditLog) {
-        const epicTask = this.store.getTaskRow(task.epic_id)
-        if (epicTask) {
-          this.store.appendEpicAuditMirror(task.epic_id, args.agent, subtaskMirror,
-            `#${task.id} ${sanitizePipe(task.title)}`)
-        }
+        this.store.appendEpicAuditMirror(task.epic_id, args.agent, subtaskMirror,
+          `#${task.id} ${sanitizePipe(task.title)}`)
       }
 
       // attempts is echoed only on a refund: its absence is the in-band signal that the flag was
@@ -347,18 +337,17 @@ export class TaskService {
   }
 
   listQueue(args: { limit?: number }): Task[] {
-    this._reapIfStale()
+    this.reaper.reapIfStale()
     const limit = clampLimit(args.limit, this.queueLimit)
     return this._readyCandidates(limit)
   }
 
   addComment(args: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
-    this._reapIfStale()
+    this.reaper.reapIfStale()
     const task = this.store.getTaskRow(args.id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     const validationErr =
-      this._requiredError(args.agent, 'agent') ??
-      this._tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent') ??
+      this._agentError(args.agent) ??
       this._contentError(args.content)
     if (validationErr) return { ok: false, error: validationErr }
     const comment_id = this.store.insertComment(args.id, args.agent, args.content)
@@ -366,7 +355,7 @@ export class TaskService {
   }
 
   getTimeline(id: number, limit?: number): SvcResult<TimelineRow[]> {
-    this._reapIfStale()
+    this.reaper.reapIfStale()
     const task = this.store.getTaskRow(id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     const limitN = clampLimit(limit, this.timelineLimit)
@@ -375,13 +364,13 @@ export class TaskService {
   }
 
   listComments(id: number): SvcResult<CommentRow[]> {
-    this._reapIfStale()
+    this.reaper.reapIfStale()
     const task = this.store.getTaskRow(id)
     if (!task) return { ok: false, error: 'NOT_FOUND' }
     return { ok: true, data: this.store.commentsOf(id) }
   }
 
   reapExpiredLeases(): void {
-    this._doReap()
+    this.reaper.reap()
   }
 }
