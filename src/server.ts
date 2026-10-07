@@ -150,7 +150,7 @@ export function startHttp(opts: StartHttpOptions) {
         const url = new URL(req.url)
 
         if (url.pathname === '/health' && req.method === 'GET') {
-          return Response.json({ ok: true })
+          return Response.json({ ok: true, version: VERSION })
         }
 
         // EXPERIMENTAL: provisional read-only endpoint, response shape subject to change.

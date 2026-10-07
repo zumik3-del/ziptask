@@ -45,6 +45,7 @@ describe('GET /api/task/:id HTTP endpoint', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as any
     expect(body.ok).toBe(true)
+    expect(body.version).toBe(VERSION)
   })
 
   test('GET /api/task/:id → 200 with task, blocked_by, comments', async () => {

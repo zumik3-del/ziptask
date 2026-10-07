@@ -5,10 +5,12 @@
 | Method & path | Purpose |
 |---|---|
 | `POST` / `GET` / `DELETE` `/mcp` | MCP StreamableHTTP transport — the client-facing API (tool calls, SSE stream, session teardown) |
-| `GET /health` | Liveness probe, always `{"ok":true}` |
+| `GET /health` | Liveness probe, always `{"ok":true}` plus `version` (the running package version) |
 | `GET /api/task/:id` | **Experimental** read-only task view (subagentix integration) |
 
 Every path returns `404` `Not Found` when it does not match. No endpoint authenticates — keep the listener bound to `127.0.0.1` (`ZIPTASK_HOST`/`settings.json`) and put an authenticating reverse proxy in front if it must be reachable from other hosts.
+
+`GET /health` is purely additive over `{"ok":true}`: `version` carries the running package version (no leading `v`) so the deploy framework's health gate can compare it against the target release (`HEALTH_VERSION_FIELD`, `expected = ${TAG#v}`).
 
 ## `GET /api/task/:id` (experimental)
 
