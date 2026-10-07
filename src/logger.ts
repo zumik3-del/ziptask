@@ -1,7 +1,7 @@
 export type LogLevel = 'off' | 'error' | 'warn' | 'info' | 'debug'
 export type LogFields = Record<string, unknown>
 
-const LEVELS: readonly LogLevel[] = ['off', 'error', 'warn', 'info', 'debug']
+export const LEVELS: readonly LogLevel[] = ['off', 'error', 'warn', 'info', 'debug']
 const LEVEL_ORDER: Record<LogLevel, number> = { off: 0, error: 1, warn: 2, info: 3, debug: 4 }
 const RESERVED_KEYS = new Set(['logger', 'ts', 'level', 'msg'])
 
