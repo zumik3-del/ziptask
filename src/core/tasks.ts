@@ -1,3 +1,5 @@
+import { TERMINAL_STATUS_VALUES } from '../defaults'
+
 export type TaskStatus = 'queued' | 'in_progress' | 'review' | 'done' | 'failed' | 'blocked' | 'canceled'
 export type TaskPriority = 'p0' | 'p1' | 'p2' | 'p3'
 
@@ -32,7 +34,9 @@ export const STATUS_CODES: Record<TaskStatus | 'not_found', number> = {
   canceled: 7
 }
 
-export const TASK_STATUSES = ['queued', 'in_progress', 'review', 'done', 'failed', 'blocked', 'canceled'] as const
+export const TASK_STATUSES = Object.keys(STATUS_CODES).filter(
+  (status): status is TaskStatus => status !== 'not_found'
+) as [TaskStatus, ...TaskStatus[]]
 export const TASK_PRIORITIES = ['p0', 'p1', 'p2', 'p3'] as const
 
 export function statusToCode(status: TaskStatus | 'not_found'): number {
@@ -49,7 +53,7 @@ export function pipeJoin(...fields: Array<string | number>): string {
 
 export type CommentType = 'comment' | 'resolution'
 
-export const TERMINAL_STATUSES: TaskStatus[] = ['done', 'failed', 'canceled']
+export const TERMINAL_STATUSES: TaskStatus[] = [...TERMINAL_STATUS_VALUES]
 
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   queued: ['in_progress', 'blocked', 'canceled'],

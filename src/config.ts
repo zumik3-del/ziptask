@@ -7,6 +7,8 @@ import {
   DEFAULT_HTTP_SESSION_TTL_MS, DEFAULT_PRIORITY, DEFAULT_REPORTER, DEFAULT_LIST_LIMIT,
   DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT, DEFAULT_LOG_LEVEL, DEFAULT_AUDIT_LOG
 } from './defaults'
+import { TASK_PRIORITIES } from './core/tasks'
+import { LEVELS } from './logger'
 
 export const DEFAULTS = {
   dbPath: DEFAULT_DB_PATH,
@@ -41,14 +43,14 @@ const SettingsSchema = z.object({
     sessionTtlMs: z.number().int().positive().optional()
   }).optional(),
   defaults: z.object({
-    priority: z.enum(['p0', 'p1', 'p2', 'p3']).optional(),
+    priority: z.enum(TASK_PRIORITIES).optional(),
     reporter: z.string().optional(),
     listLimit: z.number().int().positive().optional(),
     timelineLimit: z.number().int().positive().optional(),
     queueLimit: z.number().int().positive().optional()
   }).optional(),
   logging: z.object({
-    level: z.enum(['off', 'error', 'warn', 'info', 'debug']).optional()
+    level: z.enum(LEVELS).optional()
   }).optional(),
   auditLog: z.boolean().optional()
 })
