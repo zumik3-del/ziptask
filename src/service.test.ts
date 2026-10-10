@@ -470,6 +470,20 @@ describe('deleteTask cascade (#795)', () => {
     const audit = db.query('SELECT COUNT(*) AS n FROM audit_log').get() as { n: number }
     expect(audit.n).toBe(0)
   })
+
+  test('a raw task delete cascades to comments and audit_log (schema v4)', () => {
+    const id = json(handleCreateTask(svc, { title: 'CascadeMe', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    handleAddComment(svc, { id, agent: 'dev', content: 'note' })
+    expect((db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }).n).toBeGreaterThan(0)
+    expect((db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n).toBeGreaterThan(0)
+
+    // bypass deleteTask entirely: only the ON DELETE CASCADE can clean the children
+    db.run('DELETE FROM tasks WHERE id = ?', [id])
+
+    expect((db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }).n).toBe(0)
+    expect((db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n).toBe(0)
+  })
 })
 
 describe('length limits: agent and content (#795)', () => {

@@ -54,8 +54,8 @@ export class TaskRepo implements TaskStore {
   }
 
   deleteTask(id: number): void {
-    this.db.run('DELETE FROM comments WHERE task_id = ?', [id])
-    this.db.run('DELETE FROM audit_log WHERE task_id = ?', [id])
+    // comments and audit_log carry ON DELETE CASCADE (schema v4), so the single delete
+    // removes the task and every child row in one statement.
     this.db.run('DELETE FROM tasks WHERE id = ?', [id])
   }
 
@@ -125,14 +125,27 @@ export class TaskRepo implements TaskStore {
   }
 
   transitionStatus(id: number, expectedVersion: number, status: TaskStatus, now: string, completedAt: string | null, leaseUntilIso: string | null, holder: string | null = null, resetAttempts: 0 | 1 = 0): number {
+    // Assemble the SET list from the target status so each column's rule is one readable
+    // branch instead of a chain of `CASE WHEN ? = ...` over the same bound parameter.
+    const assignments = [
+      'status = ?',
+      'version = version + 1',
+      'updated_at = ?',
+      'completed_at = COALESCE(?, completed_at)'
+    ]
+    const params: SqlParam[] = [status, now, completedAt]
+    if (status === 'in_progress') {
+      assignments.push('lease_expires_at = ?', 'assignee = ?')
+      params.push(leaseUntilIso, holder)
+    } else {
+      assignments.push('lease_expires_at = NULL')
+      if (status === 'canceled') assignments.push('assignee = NULL')
+    }
+    if (resetAttempts === 1) assignments.push('attempts = 0')
+    params.push(id, expectedVersion)
     const result = this.db.run(
-      `UPDATE tasks SET status = ?, version = version + 1, updated_at = ?,
-         completed_at = COALESCE(?, completed_at),
-         lease_expires_at = CASE WHEN ? = 'in_progress' THEN ? ELSE NULL END,
-         assignee = CASE WHEN ? = 'in_progress' THEN ? WHEN ? = 'canceled' THEN NULL ELSE assignee END,
-         attempts = CASE WHEN ? = 1 THEN 0 ELSE attempts END
-       WHERE id = ? AND version = ?`,
-      [status, now, completedAt, status, leaseUntilIso, status, holder, status, resetAttempts, id, expectedVersion]
+      `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND version = ?`,
+      bindParams(params)
     )
     return Number(result.changes)
   }
