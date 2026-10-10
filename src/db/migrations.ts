@@ -53,5 +53,37 @@ export const MIGRATIONS = [
   // 003: query indexes for timeline and metrics
   `CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)`,
   `CREATE INDEX IF NOT EXISTS idx_comments_task_id ON comments(task_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_tasks_status_completed ON tasks(status, completed_at)`
+  `CREATE INDEX IF NOT EXISTS idx_tasks_status_completed ON tasks(status, completed_at)`,
+
+  // 004: ON DELETE CASCADE on comments/audit_log (schema v4). SQLite cannot alter a FK in
+  // place, so each child table is rebuilt: recreate with the cascade, copy the rows, drop
+  // the old table, rename, and restore its task_id index (dropped with the old table).
+  `CREATE TABLE comments_new (
+    id INTEGER PRIMARY KEY,
+    task_id INTEGER NOT NULL,
+    agent TEXT NOT NULL,
+    content TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'comment',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+  )`,
+  `INSERT INTO comments_new SELECT id, task_id, agent, content, type, created_at FROM comments`,
+  `DROP TABLE comments`,
+  `ALTER TABLE comments_new RENAME TO comments`,
+  `CREATE INDEX IF NOT EXISTS idx_comments_task_id ON comments(task_id)`,
+
+  `CREATE TABLE audit_log_new (
+    id INTEGER PRIMARY KEY,
+    task_id INTEGER NOT NULL,
+    agent TEXT NOT NULL,
+    action TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+  )`,
+  `INSERT INTO audit_log_new SELECT id, task_id, agent, action, old_value, new_value, created_at FROM audit_log`,
+  `DROP TABLE audit_log`,
+  `ALTER TABLE audit_log_new RENAME TO audit_log`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)`
 ]

@@ -12,7 +12,7 @@ export interface TaskStore extends LeaseStore {
   getTaskRow(id: number): Task | null
   insertTask(task: { title: string; description: string | null; priority: string;
     assignee: string | null; reporter: string; depends_on: string; now: string; maxAttempts?: number
-    epicId?: number; isEpic?: number }): number
+    epicId?: number; isEpic?: boolean }): number
   deleteTask(id: number): void
   listTasks(filters: { assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number })
     : { rows: Task[]; total: number }
@@ -38,7 +38,11 @@ export type TimelineRow = { type: string; agent: string; text: string; created_a
 
 export type CommentRow = { id: number; agent: string; content: string; type: CommentType; created_at: string }
 
-export type SvcResult<T> = { ok: true; data: T } | { ok: false; error: string }
+export type ErrorCode = 'INVALID' | 'CONFLICT' | 'NOT_FOUND' | 'BLOCKED' | 'CHILDREN' | 'EMPTY' | 'CYCLE'
+
+export type SvcError = { code: ErrorCode; message: string }
+
+export type SvcResult<T> = { ok: true; data: T } | { ok: false; error: SvcError }
 
 // attempts is present only when update_status was called with reset_attempts
 export type UpdateStatusData = { id: number; status: TaskStatus; version: number; attempts?: number }

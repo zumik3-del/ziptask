@@ -39,6 +39,24 @@ describe('schema migration (v2)', () => {
   })
 })
 
+describe('schema cascade (v4)', () => {
+  test('comments and audit_log reference tasks with ON DELETE CASCADE', () => {
+    for (const table of ['comments', 'audit_log']) {
+      const fks = db.query(`PRAGMA foreign_key_list(${table})`).all() as any[]
+      expect(fks).toHaveLength(1)
+      expect(fks[0].table).toBe('tasks')
+      expect(fks[0].on_delete).toBe('CASCADE')
+    }
+  })
+
+  test('the task_id indexes survive the v4 table rebuild', () => {
+    const names = (db.query("SELECT name FROM sqlite_master WHERE type='index'").all() as { name: string }[])
+      .map(i => i.name)
+    expect(names).toContain('idx_comments_task_id')
+    expect(names).toContain('idx_audit_log_task_id')
+  })
+})
+
 describe('schema guard (v1.6)', () => {
   function makeTempDbPath(): string {
     const dir = '/tmp/opencode'
@@ -132,6 +150,35 @@ describe('schema guard (v1.6)', () => {
       const ver = raw.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | null
       expect(ver?.version).toBe(2)
       raw.close()
+    } finally { rmTempDb(path) }
+  })
+
+  test('v3 -> v4 rebuild preserves child rows and adds ON DELETE CASCADE', () => {
+    // 12 = statements before the v4 rebuild block; pinning it keeps the v3->v4 boundary explicit
+    const V3_STATEMENT_COUNT = 12
+    const path = makeTempDbPath()
+    try {
+      const raw = new Database(path)
+      raw.exec('PRAGMA foreign_keys = ON')
+      for (let i = 0; i < V3_STATEMENT_COUNT; i++) raw.exec(MIGRATIONS[i])
+      raw.run('DELETE FROM schema_version')
+      raw.run('INSERT INTO schema_version (version) VALUES (?)', [V3_STATEMENT_COUNT])
+      const id = Number(raw.run(
+        "INSERT INTO tasks (title, reporter, status, created_at, updated_at) VALUES ('t', 'dev', 'queued', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')"
+      ).lastInsertRowid)
+      raw.run("INSERT INTO comments (task_id, agent, content, created_at) VALUES (?, 'dev', 'hi', '2026-01-01T00:00:00.000Z')", [id])
+      raw.run("INSERT INTO audit_log (task_id, agent, action, created_at) VALUES (?, 'dev', 'create', '2026-01-01T00:00:00.000Z')", [id])
+      raw.close()
+
+      const db = openDatabase(path)
+      expect((db.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number }).version).toBe(MIGRATIONS.length)
+      expect((db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }).n).toBe(1)
+      expect((db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n).toBe(1)
+      expect((db.query('PRAGMA foreign_key_list(comments)').all() as any[])[0].on_delete).toBe('CASCADE')
+
+      db.run('DELETE FROM tasks WHERE id = ?', [id])
+      expect((db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }).n).toBe(0)
+      db.close()
     } finally { rmTempDb(path) }
   })
 })

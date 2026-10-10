@@ -333,7 +333,7 @@ describe('metrics exclude epics (#2)', () => {
     ins(id, 'update_status', 'review', '2020-01-01T00:20:00.000Z')
     ins(id, 'update_status', 'done', '2020-01-01T00:30:00.000Z')
 
-    const epicId = repo.insertTask({ title: 'E', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z', isEpic: 1 })
+    const epicId = repo.insertTask({ title: 'E', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z', isEpic: true })
     db.run('UPDATE tasks SET created_at=? WHERE id=?', ['2020-01-01T00:00:00.000Z', epicId])
 
     const map = Object.fromEntries(metrics.statusDurations('0001-01-01T00:00:00.000Z', '2100-01-01T00:00:00.000Z').map(r => [r.status, r.minutes]))
@@ -469,6 +469,20 @@ describe('deleteTask cascade (#795)', () => {
     expect(() => repo.deleteTask(99999)).not.toThrow()
     const audit = db.query('SELECT COUNT(*) AS n FROM audit_log').get() as { n: number }
     expect(audit.n).toBe(0)
+  })
+
+  test('a raw task delete cascades to comments and audit_log (schema v4)', () => {
+    const id = json(handleCreateTask(svc, { title: 'CascadeMe', reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: 'agent-1', task_id: id })
+    handleAddComment(svc, { id, agent: 'dev', content: 'note' })
+    expect((db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }).n).toBeGreaterThan(0)
+    expect((db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n).toBeGreaterThan(0)
+
+    // bypass deleteTask entirely: only the ON DELETE CASCADE can clean the children
+    db.run('DELETE FROM tasks WHERE id = ?', [id])
+
+    expect((db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }).n).toBe(0)
+    expect((db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n).toBe(0)
   })
 })
 
@@ -641,7 +655,7 @@ describe('claimTask taskId branch (F1 #1040)', () => {
   test('claimTask with taskId 0 → NOT_FOUND, never an auto-claim', () => {
     const bait = json(handleCreateTask(svc, { title: 'Bait', reporter: 'dev', priority: 'p0' })).id
     const res = svc.claimTask({ agent: 'test', taskId: 0 })
-    expect(res).toEqual({ ok: false, error: 'NOT_FOUND:' })
+    expect(res).toEqual({ ok: false, error: { code: 'NOT_FOUND', message: '' } })
     expect(getTaskRow(db, bait).status).toBe('queued')
     expect(getTaskRow(db, bait).lease_expires_at).toBeNull()
   })
@@ -688,17 +702,17 @@ describe('listTasks invalid status filter (#811)', () => {
 
 describe('TaskService error contract after the hygiene refactor (#1445)', () => {
   test('claim: an unknown task id is NOT_FOUND:', () => {
-    expect(svc.claimTask({ agent: 'a', taskId: 9999 })).toEqual({ ok: false, error: 'NOT_FOUND:' })
+    expect(svc.claimTask({ agent: 'a', taskId: 9999 })).toEqual({ ok: false, error: { code: 'NOT_FOUND', message: '' } })
   })
 
   test('claim: an already-leased task is CONFLICT: status=<current>', () => {
     const id = json(handleCreateTask(svc, { title: 'Busy', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'a', task_id: id })
-    expect(svc.claimTask({ agent: 'b', taskId: id })).toEqual({ ok: false, error: 'CONFLICT: status=in_progress' })
+    expect(svc.claimTask({ agent: 'b', taskId: id })).toEqual({ ok: false, error: { code: 'CONFLICT', message: 'status=in_progress' } })
   })
 
   test('claim: an empty queue is EMPTY: no claimable tasks', () => {
-    expect(svc.claimTask({ agent: 'a' })).toEqual({ ok: false, error: 'EMPTY: no claimable tasks' })
+    expect(svc.claimTask({ agent: 'a' })).toEqual({ ok: false, error: { code: 'EMPTY', message: 'no claimable tasks' } })
   })
 
   test('claim: a lost compare-and-swap is CONFLICT: version mismatch', () => {
@@ -706,12 +720,12 @@ describe('TaskService error contract after the hygiene refactor (#1445)', () => 
     const raced = new TaskRepo(db)
     raced.markClaimed = () => 0
     expect(new TaskService(raced, { leaseTtlMin: 15 }).claimTask({ agent: 'a', taskId: id }))
-      .toEqual({ ok: false, error: 'CONFLICT: version mismatch' })
+      .toEqual({ ok: false, error: { code: 'CONFLICT', message: 'version mismatch' } })
   })
 
   test('update_status: an unknown task id is NOT_FOUND:', () => {
     expect(svc.updateStatus({ id: 9999, agent: 'a', status: 'blocked', version: 1 }))
-      .toEqual({ ok: false, error: 'NOT_FOUND:' })
+      .toEqual({ ok: false, error: { code: 'NOT_FOUND', message: '' } })
   })
 
   test('update_status: a lost compare-and-swap is CONFLICT: concurrent modification', () => {
@@ -719,10 +733,10 @@ describe('TaskService error contract after the hygiene refactor (#1445)', () => 
     const raced = new TaskRepo(db)
     raced.transitionStatus = () => 0
     expect(new TaskService(raced, { leaseTtlMin: 15 }).updateStatus({ id, agent: 'a', status: 'blocked', version: 1 }))
-      .toEqual({ ok: false, error: 'CONFLICT: concurrent modification' })
+      .toEqual({ ok: false, error: { code: 'CONFLICT', message: 'concurrent modification' } })
   })
 
   test('add_comment: an unknown task id is NOT_FOUND:', () => {
-    expect(svc.addComment({ id: 9999, agent: 'a', content: 'x' })).toEqual({ ok: false, error: 'NOT_FOUND:' })
+    expect(svc.addComment({ id: 9999, agent: 'a', content: 'x' })).toEqual({ ok: false, error: { code: 'NOT_FOUND', message: '' } })
   })
 })

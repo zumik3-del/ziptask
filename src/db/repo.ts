@@ -1,12 +1,11 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
 import type { CommentRow, TaskStore } from '../core/types'
-import { DEFAULT_MAX_ATTEMPTS, TERMINAL_STATUSES_SQL } from '../defaults'
+import { DEFAULT_MAX_ATTEMPTS, TERMINAL_STATUSES_SQL, TASK_PRIORITIES } from '../defaults'
 
 type SqlParam = string | number | null
 
-const TASK_PRIORITY_ORDER = ['p0', 'p1', 'p2', 'p3'] as const
-const PRIORITY_ORDER_SQL = `CASE priority ${TASK_PRIORITY_ORDER.map((p, i) => `WHEN '${p}' THEN ${i}`).join(' ')} END`
+const PRIORITY_ORDER_SQL = `CASE priority ${TASK_PRIORITIES.map((p, i) => `WHEN '${p}' THEN ${i}`).join(' ')} END`
 
 // bun:sqlite's spread bindings need a typed array; keep the single cast here.
 function bindParams(params: SqlParam[]): SQLQueryBindings[] {
@@ -15,6 +14,13 @@ function bindParams(params: SqlParam[]): SQLQueryBindings[] {
 
 function clampNonNegativeInt(value: number): number {
   return Math.max(0, Math.floor(value))
+}
+
+type TaskRow = Omit<Task, 'is_epic'> & { is_epic: number }
+
+// SQL keeps is_epic as 0/1; the domain type carries it as a boolean.
+function toTask(row: TaskRow): Task {
+  return { ...row, is_epic: row.is_epic !== 0 }
 }
 
 export class TaskRepo implements TaskStore {
@@ -34,18 +40,19 @@ export class TaskRepo implements TaskStore {
   }
 
   getTaskRow(id: number): Task | null {
-    return this.db.query('SELECT * FROM tasks WHERE id = ?').get(id) as Task | null
+    const row = this.db.query('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | null
+    return row ? toTask(row) : null
   }
 
   insertTask(task: {
     title: string; description: string | null; priority: string
     assignee: string | null; reporter: string; depends_on: string; now: string
     maxAttempts?: number
-    epicId?: number; isEpic?: number
+    epicId?: number; isEpic?: boolean
   }): number {
     const maxAttempts = task.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const epicId = task.epicId ?? null
-    const epicFlag = task.isEpic ?? 0
+    const epicFlag = task.isEpic ? 1 : 0
     const result = this.db.run(
       `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic)
        VALUES (?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
@@ -55,8 +62,8 @@ export class TaskRepo implements TaskStore {
   }
 
   deleteTask(id: number): void {
-    this.db.run('DELETE FROM comments WHERE task_id = ?', [id])
-    this.db.run('DELETE FROM audit_log WHERE task_id = ?', [id])
+    // comments and audit_log carry ON DELETE CASCADE (schema v4), so the single delete
+    // removes the task and every child row in one statement.
     this.db.run('DELETE FROM tasks WHERE id = ?', [id])
   }
 
@@ -79,19 +86,20 @@ export class TaskRepo implements TaskStore {
     const limit = clampNonNegativeInt(filters.limit)
     const rows = this.db.query(
       `SELECT * FROM tasks ${where} ORDER BY created_at DESC, id DESC LIMIT ${limit}`
-    ).all(...bindParams(params)) as Task[]
+    ).all(...bindParams(params)) as TaskRow[]
     const total = (this.db.query(`SELECT COUNT(*) as cnt FROM tasks ${where}`).get(...bindParams(params)) as { cnt: number }).cnt
-    return { rows, total }
+    return { rows: rows.map(toTask), total }
   }
 
   queuedCandidates(limit: number, offset?: number): Task[] {
     const n = clampNonNegativeInt(limit)
     const o = clampNonNegativeInt(offset ?? 0)
-    return this.db.query(
+    const rows = this.db.query(
       `SELECT * FROM tasks WHERE status = 'queued' AND is_epic = 0
        ORDER BY ${PRIORITY_ORDER_SQL}, created_at ASC, id ASC
        LIMIT ${n} OFFSET ${o}`
-    ).all() as Task[]
+    ).all() as TaskRow[]
+    return rows.map(toTask)
   }
 
   depsOf(id: number): string | null {
@@ -112,8 +120,8 @@ export class TaskRepo implements TaskStore {
     const map = new Map<number, Task | null>()
     if (ids.length === 0) return map
     const inClause = ids.map(() => '?').join(',')
-    const rows = this.db.query(`SELECT * FROM tasks WHERE id IN (${inClause})`).all(...bindParams(ids)) as Task[]
-    for (const row of rows) map.set(row.id, row)
+    const rows = this.db.query(`SELECT * FROM tasks WHERE id IN (${inClause})`).all(...bindParams(ids)) as TaskRow[]
+    for (const row of rows) map.set(row.id, toTask(row))
     return map
   }
 
@@ -126,14 +134,27 @@ export class TaskRepo implements TaskStore {
   }
 
   transitionStatus(id: number, expectedVersion: number, status: TaskStatus, now: string, completedAt: string | null, leaseUntilIso: string | null, holder: string | null = null, resetAttempts: 0 | 1 = 0): number {
+    // Assemble the SET list from the target status so each column's rule is one readable
+    // branch instead of a chain of `CASE WHEN ? = ...` over the same bound parameter.
+    const assignments = [
+      'status = ?',
+      'version = version + 1',
+      'updated_at = ?',
+      'completed_at = COALESCE(?, completed_at)'
+    ]
+    const params: SqlParam[] = [status, now, completedAt]
+    if (status === 'in_progress') {
+      assignments.push('lease_expires_at = ?', 'assignee = ?')
+      params.push(leaseUntilIso, holder)
+    } else {
+      assignments.push('lease_expires_at = NULL')
+      if (status === 'canceled') assignments.push('assignee = NULL')
+    }
+    if (resetAttempts === 1) assignments.push('attempts = 0')
+    params.push(id, expectedVersion)
     const result = this.db.run(
-      `UPDATE tasks SET status = ?, version = version + 1, updated_at = ?,
-         completed_at = COALESCE(?, completed_at),
-         lease_expires_at = CASE WHEN ? = 'in_progress' THEN ? ELSE NULL END,
-         assignee = CASE WHEN ? = 'in_progress' THEN ? WHEN ? = 'canceled' THEN NULL ELSE assignee END,
-         attempts = CASE WHEN ? = 1 THEN 0 ELSE attempts END
-       WHERE id = ? AND version = ?`,
-      [status, now, completedAt, status, leaseUntilIso, status, holder, status, resetAttempts, id, expectedVersion]
+      `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND version = ?`,
+      bindParams(params)
     )
     return Number(result.changes)
   }

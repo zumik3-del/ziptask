@@ -22,7 +22,7 @@ describe('epic creation', () => {
     const res = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true }))
     expect(res.status).toBe('queued')
     const task = getTaskRow(db, res.id)
-    expect(task.is_epic).toBe(1)
+    expect(task.is_epic).toBe(true)
     expect(task.epic_id).toBeNull()
   })
 
@@ -104,10 +104,10 @@ describe('auto-promote', () => {
   test('first sub-task attach promotes target to epic', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Pre-Epic', reporter: 'dev' })).id
     const task = getTaskRow(db, epicId)
-    expect(task.is_epic).toBe(0)
+    expect(task.is_epic).toBe(false)
     json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId }))
     const promoted = getTaskRow(db, epicId)
-    expect(promoted.is_epic).toBe(1)
+    expect(promoted.is_epic).toBe(true)
     expect(promoted.epic_id).toBeNull()
   })
 
@@ -116,7 +116,7 @@ describe('auto-promote', () => {
     json(handleCreateTask(svc, { title: 'Sub1', reporter: 'dev', epic_id: epicId }))
     json(handleCreateTask(svc, { title: 'Sub2', reporter: 'dev', epic_id: epicId }))
     const task = getTaskRow(db, epicId)
-    expect(task.is_epic).toBe(1)
+    expect(task.is_epic).toBe(true)
   })
 })
 
@@ -201,7 +201,7 @@ describe('epic terminal guard', () => {
     // Epic should still be queued (not auto-promoted to done)
     const epic = getTaskRow(db, epicId)
     expect(epic.status).toBe('queued')
-    expect(epic.is_epic).toBe(1)
+    expect(epic.is_epic).toBe(true)
   })
 })
 
@@ -371,7 +371,7 @@ describe('atomic epic promotion (#108)', () => {
     const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
 
     const epic = getTaskRow(db, epicId)
-    expect(epic.is_epic).toBe(1)
+    expect(epic.is_epic).toBe(true)
 
     const mirrors = db.query(
       "SELECT action, new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
@@ -391,7 +391,7 @@ describe('atomic epic promotion (#108)', () => {
       epicId, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true
     )
     const epic = getTaskRow(db, epicId)
-    expect(epic.is_epic).toBe(1)
+    expect(epic.is_epic).toBe(true)
     const mirrors = db.query(
       "SELECT action FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
     ).all(epicId) as any[]
