@@ -2,6 +2,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { EventStore } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { TaskService } from './core/service'
+import { formatError } from './core/result'
 import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
 import { createLogger, normalizeError } from './logger'
@@ -162,7 +163,7 @@ export function startHttp(opts: StartHttpOptions) {
           }
           const view = svc.getTaskView(id)
           if (!view.ok) {
-            return Response.json({ error: view.error }, { status: 404 })
+            return Response.json({ error: formatError(view.error) }, { status: 404 })
           }
           const comments = svc.listComments(id)
           return Response.json({

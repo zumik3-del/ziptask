@@ -11,7 +11,7 @@ or attach the first sub-task to promote it automatically:
 ```
 create_task {title: 'Sub-work', reporter: 'orchestrator', epic_id: <epic-id>}
 ```
-The target is auto-promoted to `is_epic=1` (audit row `subtask_add`).
+The target is auto-promoted to an epic (audit row `subtask_add`); the API exposes it as `is_epic: true` (`is_epic = 1` in SQL).
 
 ## Attaching sub-tasks
 

@@ -4,6 +4,7 @@ import { isValidTransition, nowIso } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { MetricsRepo } from './db/metrics-repo'
 import { TaskService } from './core/service'
+import { formatError } from './core/result'
 import {
   handleCreateTask, handleGetTask, handleUpdateStatus, handleGetTimeline, handleListTasks
 } from './mcp/tools'
@@ -52,13 +53,13 @@ const leaseField = (id: number, agent: string, version: number, extra: Record<st
   handleUpdateStatus(svc, { id, agent, status: 'in_progress', renew: true, version, ...extra } as any)
 const claimOrThrow = (id: number, agent: string) => {
   const res = svc.claimTask({ agent, taskId: id })
-  if (!res.ok) throw new Error(`claimTask(${id}) failed: ${res.error}`)
+  if (!res.ok) throw new Error(`claimTask(${id}) failed: ${formatError(res.error)}`)
   return res.data
 }
 // the refusal text from the claim verb itself — the guard reuses it, so the two doors must agree
 const claimError = (id: number, agent: string): string | undefined => {
   const res = svc.claimTask({ agent, taskId: id })
-  return res.ok ? undefined : res.error
+  return res.ok ? undefined : formatError(res.error)
 }
 // one #1013 round: a claim that is never finished costs exactly one attempt on the next sweep
 const burnAttempt = (id: number, agent = 'developer') => {
@@ -258,7 +259,7 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     // Seeded through the store fixture (the production write), never through update_status.
     const epic = seedLeasedEpic('Epic', HOLDER)
     const before = row(epic)
-    expect(before.is_epic).toBe(1)
+    expect(before.is_epic).toBe(true)
     expect(before.status).toBe('in_progress')
 
     const res = leaseField(epic, HOLDER, before.version)

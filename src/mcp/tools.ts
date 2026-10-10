@@ -8,7 +8,8 @@ import type { Task, TaskStatus, TaskPriority } from '../core/tasks'
 import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS } from '../core/tasks'
 import { TASK_PRIORITIES } from '../defaults'
 import type { TaskService } from '../core/service'
-import type { SvcResult } from '../core/types'
+import type { SvcResult, SvcError } from '../core/types'
+import { foldResult, formatError } from '../core/result'
 
 const TEMPLATE_NAMES = ['task', 'epic', 'comment-success', 'comment-failure'] as const
 type TemplateName = typeof TEMPLATE_NAMES[number]
@@ -38,8 +39,12 @@ function errorResult(msg: string): ToolResult {
   return { content: [{ type: 'text', text: msg }], isError: true }
 }
 
+function errorTool(error: SvcError): ToolResult {
+  return errorResult(formatError(error))
+}
+
 function toToolResult<T>(r: SvcResult<T>): ToolResult {
-  return r.ok ? jsonResult(r.data) : errorResult(r.error)
+  return foldResult(r, jsonResult, errorTool)
 }
 
 function pickFields(src: Task, fields: string[]): Record<string, unknown> {
@@ -205,19 +210,18 @@ export function handleCreateTask(svc: TaskService, args: {
 export function handleGetTask(svc: TaskService, args: { id: number; fields?: string[] }): ToolResult {
   const unknown = rejectUnknownArgs('get_task', GET_TASK_SHAPE, args)
   if (unknown) return unknown
-  const r = svc.getTaskView(args.id)
-  if (!r.ok) return errorResult(r.error)
-  const task = r.data.task
-  const fields = args.fields ?? ['id', 'title', 'status', 'priority', 'blocked_by']
-  const result = pickFields(task, fields)
-  if (fields.includes('blocked_by')) {
-    result.blocked_by = r.data.blockedBy
-  }
-  // D3: derived subtasks roll-up for epics
-  if (fields.includes('subtasks') && r.data.subtasks) {
-    result.subtasks = r.data.subtasks
-  }
-  return jsonResult(result)
+  return foldResult(svc.getTaskView(args.id), (data) => {
+    const fields = args.fields ?? ['id', 'title', 'status', 'priority', 'blocked_by']
+    const result = pickFields(data.task, fields)
+    if (fields.includes('blocked_by')) {
+      result.blocked_by = data.blockedBy
+    }
+    // D3: derived subtasks roll-up for epics
+    if (fields.includes('subtasks') && data.subtasks) {
+      result.subtasks = data.subtasks
+    }
+    return jsonResult(result)
+  }, errorTool)
 }
 
 export function handleListTasks(svc: TaskService, args: {
@@ -262,12 +266,11 @@ export function handleClaimTask(svc: TaskService, args: {
     return errorResult(`INVALID: claim_task id/task_id conflict (id=${args.id} task_id=${args.task_id}); task_id is canonical`)
   }
   const taskId = args.task_id !== undefined ? args.task_id : args.id
-  const r = svc.claimTask({ agent: args.agent ?? 'unknown', taskId, leaseTtlMin: args.lease_ttl_min })
-  if (!r.ok) return errorResult(r.error)
-  const { id, leaseTtlMin, task } = r.data
-  const result: Record<string, unknown> = { id, lease_ttl_min: leaseTtlMin, version: task.version }
-  Object.assign(result, pickFields(task, args.include ?? []))
-  return jsonResult(result)
+  return foldResult(svc.claimTask({ agent: args.agent ?? 'unknown', taskId, leaseTtlMin: args.lease_ttl_min }), ({ id, leaseTtlMin, task }) => {
+    const result: Record<string, unknown> = { id, lease_ttl_min: leaseTtlMin, version: task.version }
+    Object.assign(result, pickFields(task, args.include ?? []))
+    return jsonResult(result)
+  }, errorTool)
 }
 
 export function handleUpdateStatus(svc: TaskService, args: {
@@ -310,10 +313,10 @@ export function handleAddComment(svc: TaskService, args: {
 export function handleGetTimeline(svc: TaskService, args: { id: number; limit?: number }): ToolResult {
   const unknown = rejectUnknownArgs('get_timeline', GET_TIMELINE_SHAPE, args)
   if (unknown) return unknown
-  const r = svc.getTimeline(args.id, args.limit)
-  if (!r.ok) return errorResult(r.error)
-  const lines = r.data.map((row, i) => pipeJoin(i + 1, row.type, row.agent, row.created_at, sanitizePipe(row.text)))
-  return textResult(lines.join('\n'))
+  return foldResult(svc.getTimeline(args.id, args.limit), (rows) => {
+    const lines = rows.map((row, i) => pipeJoin(i + 1, row.type, row.agent, row.created_at, sanitizePipe(row.text)))
+    return textResult(lines.join('\n'))
+  }, errorTool)
 }
 
 

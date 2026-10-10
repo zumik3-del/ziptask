@@ -49,7 +49,8 @@ export function insertTaskRow(repo: TaskRepo, opts: CreateTaskRowOpts): number {
 }
 
 export function getTaskRow(db: Database, id: number) {
-  return db.query('SELECT * FROM tasks WHERE id = ?').get(id) as any
+  const row = db.query('SELECT * FROM tasks WHERE id = ?').get(id) as any
+  return row ? { ...row, is_epic: row.is_epic !== 0 } : null
 }
 
 export function json(res: any): any {

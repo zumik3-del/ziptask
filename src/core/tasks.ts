@@ -20,10 +20,10 @@ export interface Task {
   updated_at: string
   completed_at: string | null
   epic_id: number | null
-  is_epic: number
+  is_epic: boolean
 }
 
-export const STATUS_CODES: Record<TaskStatus | 'not_found', number> = {
+export const STATUS_CODES: Record<TaskStatus | 'not_found', number> = Object.freeze({
   not_found: 0,
   queued: 1,
   in_progress: 2,
@@ -32,7 +32,7 @@ export const STATUS_CODES: Record<TaskStatus | 'not_found', number> = {
   failed: 5,
   blocked: 6,
   canceled: 7
-}
+})
 
 export const TASK_STATUSES = Object.keys(STATUS_CODES).filter(
   (status): status is TaskStatus => status !== 'not_found'
@@ -53,9 +53,9 @@ export function pipeJoin(...fields: Array<string | number>): string {
 
 export type CommentType = 'comment' | 'resolution'
 
-export const TERMINAL_STATUSES: TaskStatus[] = [...TERMINAL_STATUS_VALUES]
+export const TERMINAL_STATUSES: readonly TaskStatus[] = Object.freeze([...TERMINAL_STATUS_VALUES])
 
-const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
+const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = Object.freeze({
   queued: ['in_progress', 'blocked', 'canceled'],
   in_progress: ['in_progress', 'review', 'failed', 'blocked', 'canceled'],
   review: ['done', 'in_progress', 'failed', 'canceled'],
@@ -63,7 +63,7 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   failed: [],
   blocked: ['queued', 'in_progress', 'review', 'canceled'],
   canceled: []
-}
+})
 
 export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
   return VALID_TRANSITIONS[from]?.includes(to) ?? false
@@ -84,12 +84,4 @@ export function clampLimit(value: number | undefined, fallback: number, max = MA
   const n = Math.floor(value)
   if (!Number.isFinite(n) || n <= 0) return fallback
   return Math.min(n, max)
-}
-
-export function isEpic(task: { is_epic: number }): boolean {
-  return task.is_epic !== 0
-}
-
-export function toEpicFlag(epic?: boolean): number {
-  return epic ? 1 : 0
 }

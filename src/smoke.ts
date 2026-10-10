@@ -274,7 +274,7 @@ try {
   const epicId = epicCreate.id
 
   const epicGet = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epicId, fields: ['id', 'is_epic'] } }))
-  assert(epicGet.is_epic === 1, `epic row has is_epic=1: ${JSON.stringify(epicGet)}`)
+  assert(epicGet.is_epic === true, `epic row has is_epic=true: ${JSON.stringify(epicGet)}`)
 
   const epicClaim = await client.callTool({
     name: 'claim_task',
@@ -291,7 +291,7 @@ try {
   const subId = subCreate.id
 
   const epicPromoted = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epicId, fields: ['is_epic'] } }))
-  assert(epicPromoted.is_epic === 1, `auto-promote: epic is_epic=1 after sub attach`)
+  assert(epicPromoted.is_epic === true, `auto-promote: epic is_epic=true after sub attach`)
 
   const subtasksRollup = parseToolResult(await client.callTool({
     name: 'get_task', arguments: { id: epicId, fields: ['id', 'title', 'subtasks'] }

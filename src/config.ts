@@ -10,7 +10,7 @@ import {
 } from './defaults'
 import { LEVELS } from './logger'
 
-export const DEFAULTS = {
+export const DEFAULTS = Object.freeze({
   dbPath: DEFAULT_DB_PATH,
   host: DEFAULT_HOST,
   port: DEFAULT_PORT,
@@ -28,7 +28,7 @@ export const DEFAULTS = {
   },
   logging: { level: DEFAULT_LOG_LEVEL },
   auditLog: DEFAULT_AUDIT_LOG
-} as const
+} as const)
 
 const SettingsSchema = z.object({
   dbPath: z.string().optional(),

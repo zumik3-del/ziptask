@@ -16,6 +16,13 @@ function clampNonNegativeInt(value: number): number {
   return Math.max(0, Math.floor(value))
 }
 
+type TaskRow = Omit<Task, 'is_epic'> & { is_epic: number }
+
+// SQL keeps is_epic as 0/1; the domain type carries it as a boolean.
+function toTask(row: TaskRow): Task {
+  return { ...row, is_epic: row.is_epic !== 0 }
+}
+
 export class TaskRepo implements TaskStore {
   private lastTimestampMs = 0
 
@@ -33,18 +40,19 @@ export class TaskRepo implements TaskStore {
   }
 
   getTaskRow(id: number): Task | null {
-    return this.db.query('SELECT * FROM tasks WHERE id = ?').get(id) as Task | null
+    const row = this.db.query('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | null
+    return row ? toTask(row) : null
   }
 
   insertTask(task: {
     title: string; description: string | null; priority: string
     assignee: string | null; reporter: string; depends_on: string; now: string
     maxAttempts?: number
-    epicId?: number; isEpic?: number
+    epicId?: number; isEpic?: boolean
   }): number {
     const maxAttempts = task.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const epicId = task.epicId ?? null
-    const epicFlag = task.isEpic ?? 0
+    const epicFlag = task.isEpic ? 1 : 0
     const result = this.db.run(
       `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic)
        VALUES (?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
@@ -78,19 +86,20 @@ export class TaskRepo implements TaskStore {
     const limit = clampNonNegativeInt(filters.limit)
     const rows = this.db.query(
       `SELECT * FROM tasks ${where} ORDER BY created_at DESC, id DESC LIMIT ${limit}`
-    ).all(...bindParams(params)) as Task[]
+    ).all(...bindParams(params)) as TaskRow[]
     const total = (this.db.query(`SELECT COUNT(*) as cnt FROM tasks ${where}`).get(...bindParams(params)) as { cnt: number }).cnt
-    return { rows, total }
+    return { rows: rows.map(toTask), total }
   }
 
   queuedCandidates(limit: number, offset?: number): Task[] {
     const n = clampNonNegativeInt(limit)
     const o = clampNonNegativeInt(offset ?? 0)
-    return this.db.query(
+    const rows = this.db.query(
       `SELECT * FROM tasks WHERE status = 'queued' AND is_epic = 0
        ORDER BY ${PRIORITY_ORDER_SQL}, created_at ASC, id ASC
        LIMIT ${n} OFFSET ${o}`
-    ).all() as Task[]
+    ).all() as TaskRow[]
+    return rows.map(toTask)
   }
 
   depsOf(id: number): string | null {
@@ -111,8 +120,8 @@ export class TaskRepo implements TaskStore {
     const map = new Map<number, Task | null>()
     if (ids.length === 0) return map
     const inClause = ids.map(() => '?').join(',')
-    const rows = this.db.query(`SELECT * FROM tasks WHERE id IN (${inClause})`).all(...bindParams(ids)) as Task[]
-    for (const row of rows) map.set(row.id, row)
+    const rows = this.db.query(`SELECT * FROM tasks WHERE id IN (${inClause})`).all(...bindParams(ids)) as TaskRow[]
+    for (const row of rows) map.set(row.id, toTask(row))
     return map
   }
 
