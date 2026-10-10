@@ -2,7 +2,7 @@ import type { Task, TaskStatus } from './tasks'
 import { isValidTransition, TERMINAL_STATUSES } from './tasks'
 import type { TaskStore, SvcError } from './types'
 import { parseDeps, depsSatisfied } from './deps'
-import { requiredError, tooLongError, epicError, MAX_TITLE, MAX_AGENT } from './validation'
+import { tooLongError, epicError, MAX_TITLE, MAX_AGENT } from './validation'
 
 export type CreateTaskInput = {
   title: string; description?: string; priority?: string; assignee?: string
