@@ -38,8 +38,8 @@ export class TaskService {
     this.reaper = new LeaseReaper(store, opts?.reapCooldownSec ?? DEFAULT_REAP_COOLDOWN_SEC, this.auditLog)
   }
 
-  private _leaseUntil(): string {
-    return new Date(Date.now() + this.leaseTtlMin * MINUTE_MS).toISOString()
+  private _leaseUntil(ttlMin: number = this.leaseTtlMin): string {
+    return new Date(Date.now() + ttlMin * MINUTE_MS).toISOString()
   }
 
   private _requiredError(value: string, field: string): string | null {
@@ -205,7 +205,7 @@ export class TaskService {
     return ready
   }
 
-  claimTask(args: { agent: string; taskId?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Task }> {
+  claimTask(args: { agent: string; taskId?: number; leaseTtlMin?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Task }> {
     const agentErr = this._agentError(args.agent)
     if (agentErr) return { ok: false, error: agentErr }
     this.reaper.reap()
@@ -226,15 +226,17 @@ export class TaskService {
     if (!task) return { ok: false, error: 'EMPTY: no claimable tasks' }
 
     const now = nowIso()
-    const leaseUntil = this._leaseUntil()
+    // a per-claim override lives only for this call: the instance default is never mutated
+    const leaseTtlMin = args.leaseTtlMin ?? this.leaseTtlMin
+    const leaseUntil = this._leaseUntil(leaseTtlMin)
     const changes = this.store.markClaimed(task.id, task.version, args.agent, leaseUntil, now)
     const updated = this.store.getTaskRow(task.id)
     if (changes !== 1 || !updated) return { ok: false, error: 'CONFLICT: version mismatch' }
     if (this.auditLog) this.store.auditAppend(task.id, args.agent, 'claim', task.status, 'in_progress')
-    return { ok: true, data: { id: task.id, leaseTtlMin: this.leaseTtlMin, task: updated } }
+    return { ok: true, data: { id: task.id, leaseTtlMin, task: updated } }
   }
 
-  updateStatus(args: { id: number; agent: string; status: TaskStatus; version: number; comment?: string; renew?: boolean; reset_attempts?: boolean }): SvcResult<UpdateStatusData> {
+  updateStatus(args: { id: number; agent: string; status: TaskStatus; version?: number; comment?: string; renew?: boolean; reset_attempts?: boolean }): SvcResult<UpdateStatusData> {
     const agentErr = this._agentError(args.agent)
     if (agentErr) return { ok: false, error: agentErr }
     if (args.comment !== undefined) {
@@ -247,7 +249,11 @@ export class TaskService {
     this.reaper.reap()
     const task = this.store.getTaskRow(args.id)
     if (!task) return { ok: false, error: 'NOT_FOUND:' }
-    if (task.version !== args.version) return { ok: false, error: `CONFLICT: expected version ${task.version}, got ${args.version}` }
+    // version is optional: when omitted the read-time check is skipped, but the write still CASes on
+    // the version read here, so a concurrent modification between read and write refuses as CONFLICT.
+    if (args.version !== undefined && task.version !== args.version) {
+      return { ok: false, error: `CONFLICT: expected version ${task.version}, got ${args.version}` }
+    }
 
     // Lease heartbeat: only the holder re-arms its own in_progress lease. The reap above is the fence,
     // so a late heartbeat sees a requeued task and fails here instead of resurrecting the lease.
@@ -306,7 +312,10 @@ export class TaskService {
     const subtaskMirror = args.status === 'done' ? 'subtask_done' : args.status === 'failed' ? 'subtask_failed' : null
 
     return this._atomic((): SvcResult<UpdateStatusData> => {
-      const changes = this.store.transitionStatus(args.id, args.version, args.status, now, completedAt, leaseUntil, args.agent, refund ? 1 : 0)
+      // CAS on the version read above when the caller omitted it, so an omitted version is not a
+      // lost update: a write landing between the read and here still fails as CONFLICT.
+      const expectedVersion = args.version ?? task.version
+      const changes = this.store.transitionStatus(args.id, expectedVersion, args.status, now, completedAt, leaseUntil, args.agent, refund ? 1 : 0)
       if (changes !== 1) return { ok: false, error: 'CONFLICT: concurrent modification' }
       const updated = this.store.getTaskRow(args.id)
       if (!updated) return { ok: false, error: 'CONFLICT: concurrent modification' }

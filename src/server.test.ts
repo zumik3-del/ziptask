@@ -1030,7 +1030,7 @@ describe('argument contract over MCP (F1 #1040)', () => {
       const listed = await client.listTools()
       const claim = (listed.tools as any[]).find(t => t.name === 'claim_task')!
       const props = claim.inputSchema.properties
-      expect(Object.keys(props).sort()).toEqual(['agent', 'id', 'include', 'task_id'])
+      expect(Object.keys(props).sort()).toEqual(['agent', 'id', 'include', 'lease_ttl_min', 'task_id'])
       expect(props.id.description).toContain('alias of task_id')
     })
 
