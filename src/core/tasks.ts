@@ -55,6 +55,10 @@ export type CommentType = 'comment' | 'resolution'
 
 export const TERMINAL_STATUSES: readonly TaskStatus[] = Object.freeze([...TERMINAL_STATUS_VALUES])
 
+// SQL CASE expression for ORDER BY priority (low number = high priority).
+// Kept in core so the db layer does not import from defaults directly.
+export const PRIORITY_ORDER_SQL = `CASE priority ${TASK_PRIORITIES.map((p, i) => `WHEN '${p}' THEN ${i}`).join(' ')} END`
+
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = Object.freeze({
   queued: ['in_progress', 'blocked', 'canceled'],
   in_progress: ['in_progress', 'review', 'failed', 'blocked', 'canceled'],

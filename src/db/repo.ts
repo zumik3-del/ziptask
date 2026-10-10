@@ -1,19 +1,14 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
+import { PRIORITY_ORDER_SQL, clampLimit } from '../core/tasks'
 import type { CommentRow, TaskStore } from '../core/types'
-import { DEFAULT_MAX_ATTEMPTS, TERMINAL_STATUSES_SQL, TASK_PRIORITIES } from '../defaults'
+import { DEFAULT_MAX_ATTEMPTS, TERMINAL_STATUSES_SQL } from '../defaults'
 
 type SqlParam = string | number | null
-
-const PRIORITY_ORDER_SQL = `CASE priority ${TASK_PRIORITIES.map((p, i) => `WHEN '${p}' THEN ${i}`).join(' ')} END`
 
 // bun:sqlite's spread bindings need a typed array; keep the single cast here.
 function bindParams(params: SqlParam[]): SQLQueryBindings[] {
   return params as SQLQueryBindings[]
-}
-
-function clampNonNegativeInt(value: number): number {
-  return Math.max(0, Math.floor(value))
 }
 
 type TaskRow = Omit<Task, 'is_epic'> & { is_epic: number }
@@ -83,7 +78,7 @@ export class TaskRepo implements TaskStore {
       params.push(filters.epicId)
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
-    const limit = clampNonNegativeInt(filters.limit)
+    const limit = clampLimit(filters.limit, 0)
     const rows = this.db.query(
       `SELECT * FROM tasks ${where} ORDER BY created_at DESC, id DESC LIMIT ${limit}`
     ).all(...bindParams(params)) as TaskRow[]
@@ -92,8 +87,8 @@ export class TaskRepo implements TaskStore {
   }
 
   queuedCandidates(limit: number, offset?: number): Task[] {
-    const n = clampNonNegativeInt(limit)
-    const o = clampNonNegativeInt(offset ?? 0)
+    const n = clampLimit(limit, 0)
+    const o = clampLimit(offset ?? 0, 0)
     const rows = this.db.query(
       `SELECT * FROM tasks WHERE status = 'queued' AND is_epic = 0
        ORDER BY ${PRIORITY_ORDER_SQL}, created_at ASC, id ASC
@@ -189,7 +184,7 @@ export class TaskRepo implements TaskStore {
   }
 
   timelineEntries(taskId: number, limit: number): Array<{ type: string; agent: string; text: string; created_at: string }> {
-    const n = clampNonNegativeInt(limit)
+    const n = clampLimit(limit, 0)
     const sql = `SELECT 'action' as type, agent, action || ': ' || COALESCE(old_value, 'null') || '->' || COALESCE(new_value, 'null') as text, created_at, rowid
       FROM audit_log WHERE task_id = ?
       UNION ALL
