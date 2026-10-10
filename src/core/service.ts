@@ -2,10 +2,11 @@ import type { Task, TaskStatus } from './tasks'
 import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, isEpic, toEpicFlag } from './tasks'
 import type { TaskStore, TimelineRow, CommentRow, SvcResult } from './types'
 import { parseDeps, createsCycle, depsSatisfied } from './deps'
+import { readyCandidates } from './candidates'
 import type { UpdateStatusData } from './types'
 import { LeaseReaper } from './reaper'
 import {
-  MINUTE_MS, CANDIDATES_PAGE_SIZE, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
+  MINUTE_MS, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
   DEFAULT_AUDIT_LOG, DEFAULT_REAP_COOLDOWN_SEC, DEFAULT_AUTO_CLAIM_CEILING, DEFAULT_PRIORITY,
   DEFAULT_REPORTER, DEFAULT_LIST_LIMIT, DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT
 } from '../defaults'
@@ -181,30 +182,6 @@ export class TaskService {
     return { tasks: rows, total }
   }
 
-  private _readyCandidates(limit: number): Task[] {
-    const ready: Task[] = []
-    if (limit <= 0) return ready
-    const depCache = new Map<number, number[]>()
-    let offset = 0
-    while (ready.length < limit && offset < this.autoClaimCeiling) {
-      const page = this.store.queuedCandidates(CANDIDATES_PAGE_SIZE, offset)
-      if (page.length === 0) break
-      const allDeps = new Set<number>()
-      for (const row of page) {
-        let deps = depCache.get(row.id)
-        if (deps === undefined) { deps = parseDeps(row.depends_on); depCache.set(row.id, deps) }
-        for (const dep of deps) allDeps.add(dep)
-      }
-      const depStatuses = this.store.statusesOf(Array.from(allDeps))
-      for (const row of page) {
-        if (ready.length >= limit) break
-        if (depsSatisfied(depStatuses, depCache.get(row.id)!)) ready.push(row)
-      }
-      offset += CANDIDATES_PAGE_SIZE
-    }
-    return ready
-  }
-
   claimTask(args: { agent: string; taskId?: number; leaseTtlMin?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Task }> {
     const agentErr = this._agentError(args.agent)
     if (agentErr) return { ok: false, error: agentErr }
@@ -220,7 +197,7 @@ export class TaskService {
       const deps = parseDeps(task.depends_on)
       if (!depsSatisfied(this.store.statusesOf(deps), deps)) return { ok: false, error: 'BLOCKED: dependencies not satisfied' }
     } else {
-      task = this._readyCandidates(1)[0] ?? null
+      task = readyCandidates(this.store, 1, this.autoClaimCeiling)[0] ?? null
     }
 
     if (!task) return { ok: false, error: 'EMPTY: no claimable tasks' }
@@ -352,7 +329,7 @@ export class TaskService {
   listQueue(args: { limit?: number }): Task[] {
     this.reaper.reapIfStale()
     const limit = clampLimit(args.limit, this.queueLimit)
-    return this._readyCandidates(limit)
+    return readyCandidates(this.store, limit, this.autoClaimCeiling)
   }
 
   addComment(args: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
