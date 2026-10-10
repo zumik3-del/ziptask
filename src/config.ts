@@ -5,9 +5,9 @@ import {
   DEFAULT_DB_PATH, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
   DEFAULT_REAP_COOLDOWN_SEC, DEFAULT_AUTO_CLAIM_CEILING, DEFAULT_HTTP_MAX_SESSIONS,
   DEFAULT_HTTP_SESSION_TTL_MS, DEFAULT_PRIORITY, DEFAULT_REPORTER, DEFAULT_LIST_LIMIT,
-  DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT, DEFAULT_LOG_LEVEL, DEFAULT_AUDIT_LOG
+  DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT, DEFAULT_LOG_LEVEL, DEFAULT_AUDIT_LOG,
+  TASK_PRIORITIES
 } from './defaults'
-import { TASK_PRIORITIES } from './defaults'
 import { LEVELS } from './logger'
 
 export const DEFAULTS = {
@@ -136,7 +136,12 @@ function deepMerge(target: Record<string, unknown>, source: Record<string, unkno
   return result
 }
 
-export function loadSettings(opts?: { path?: string; env?: NodeJS.ProcessEnv; argv?: string[] }): Settings {
+export function loadSettings(opts?: {
+  path?: string
+  env?: NodeJS.ProcessEnv
+  argv?: string[]
+  warn?: (message: string, fields: Record<string, unknown>) => void
+}): Settings {
   const env = opts?.env ?? process.env
   const argv = opts?.argv ?? process.argv
 
@@ -180,6 +185,9 @@ export function loadSettings(opts?: { path?: string; env?: NodeJS.ProcessEnv; ar
     if (raw === undefined) continue
     const value = parseValue(raw, type)
     if (typeof value === 'number' && Number.isNaN(value)) {
+      // A typo in an int/float env var must not silently vanish: keep the previous value
+      // (settings.json or default) but surface the ignored override to the caller's logger.
+      opts?.warn?.(`ignoring invalid ${envName} value`, { value: raw })
       continue
     }
     setNested(merged, path, value)

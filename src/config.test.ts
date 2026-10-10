@@ -168,6 +168,25 @@ describe('loadSettings env overrides', () => {
     expect(s.port).toBe(DEFAULTS.port)
   })
 
+  test('invalid int env value is reported to the warn sink', () => {
+    const warnings: Array<{ message: string; fields: Record<string, unknown> }> = []
+    const s = loadSettings({
+      env: { ZIPTASK_PORT: 'not-a-number' },
+      argv: [],
+      warn: (message, fields) => warnings.push({ message, fields })
+    })
+    expect(s.port).toBe(DEFAULTS.port)
+    expect(warnings).toEqual([
+      { message: 'ignoring invalid ZIPTASK_PORT value', fields: { value: 'not-a-number' } }
+    ])
+  })
+
+  test('a valid env value emits no warning', () => {
+    const warnings: string[] = []
+    loadSettings({ env: { ZIPTASK_PORT: '1234' }, argv: [], warn: (message) => warnings.push(message) })
+    expect(warnings).toEqual([])
+  })
+
   test('ZIPTASK_LOG_LEVEL overrides logging level (error/warn/debug/off)', () => {
     expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'error' }, argv: [] }).logging.level).toBe('error')
     expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'warn' }, argv: [] }).logging.level).toBe('warn')

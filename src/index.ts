@@ -8,8 +8,10 @@ import { loadSettings } from './config'
 import { createLogger, normalizeError } from './logger'
 import { VERSION } from './version'
 
-const settings = loadSettings()
+const settingsWarnings: Array<{ message: string; fields: Record<string, unknown> }> = []
+const settings = loadSettings({ warn: (message, fields) => settingsWarnings.push({ message, fields }) })
 const logger = createLogger('app', settings.logging.level)
+for (const { message, fields } of settingsWarnings) logger.warn(message, fields)
 
 process.on('uncaughtException', (err) => {
   logger.error('uncaught exception', normalizeError(err))
