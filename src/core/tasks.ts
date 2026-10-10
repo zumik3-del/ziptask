@@ -1,4 +1,4 @@
-import { TERMINAL_STATUS_VALUES } from '../defaults'
+import { TERMINAL_STATUS_VALUES, TASK_PRIORITIES } from '../defaults'
 
 export type TaskStatus = 'queued' | 'in_progress' | 'review' | 'done' | 'failed' | 'blocked' | 'canceled'
 export type TaskPriority = 'p0' | 'p1' | 'p2' | 'p3'
@@ -37,7 +37,7 @@ export const STATUS_CODES: Record<TaskStatus | 'not_found', number> = {
 export const TASK_STATUSES = Object.keys(STATUS_CODES).filter(
   (status): status is TaskStatus => status !== 'not_found'
 ) as [TaskStatus, ...TaskStatus[]]
-export const TASK_PRIORITIES = ['p0', 'p1', 'p2', 'p3'] as const
+export { TASK_PRIORITIES }
 
 export function statusToCode(status: TaskStatus | 'not_found'): number {
   return STATUS_CODES[status] ?? 0

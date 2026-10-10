@@ -7,7 +7,7 @@ import {
   DEFAULT_HTTP_SESSION_TTL_MS, DEFAULT_PRIORITY, DEFAULT_REPORTER, DEFAULT_LIST_LIMIT,
   DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT, DEFAULT_LOG_LEVEL, DEFAULT_AUDIT_LOG
 } from './defaults'
-import { TASK_PRIORITIES } from './core/tasks'
+import { TASK_PRIORITIES } from './defaults'
 import { LEVELS } from './logger'
 
 export const DEFAULTS = {

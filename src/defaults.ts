@@ -25,3 +25,4 @@ export const TERMINAL_STATUS_VALUES = ['done', 'failed', 'canceled'] as const
 export const TERMINAL_STATUSES_SQL = `(${TERMINAL_STATUS_VALUES.map(status => `'${status}'`).join(', ')})`
 export const SESSION_CLEANUP_INTERVAL_MS = MINUTE_MS
 export const DEFAULT_METRICS_PERIOD_HOURS = 24
+export const TASK_PRIORITIES = ['p0', 'p1', 'p2', 'p3'] as const

@@ -5,7 +5,8 @@ import epicTemplate from '../../templates/epic.md' with { type: 'text' }
 import commentSuccessTemplate from '../../templates/comment-success.md' with { type: 'text' }
 import commentFailureTemplate from '../../templates/comment-failure.md' with { type: 'text' }
 import type { Task, TaskStatus, TaskPriority } from '../core/tasks'
-import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS } from '../core/tasks'
+import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS } from '../core/tasks'
+import { TASK_PRIORITIES } from '../defaults'
 import type { TaskService } from '../core/service'
 import type { SvcResult } from '../core/types'
 

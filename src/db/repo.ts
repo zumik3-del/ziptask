@@ -1,12 +1,11 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
 import type { CommentRow, TaskStore } from '../core/types'
-import { DEFAULT_MAX_ATTEMPTS, TERMINAL_STATUSES_SQL } from '../defaults'
+import { DEFAULT_MAX_ATTEMPTS, TERMINAL_STATUSES_SQL, TASK_PRIORITIES } from '../defaults'
 
 type SqlParam = string | number | null
 
-const TASK_PRIORITY_ORDER = ['p0', 'p1', 'p2', 'p3'] as const
-const PRIORITY_ORDER_SQL = `CASE priority ${TASK_PRIORITY_ORDER.map((p, i) => `WHEN '${p}' THEN ${i}`).join(' ')} END`
+const PRIORITY_ORDER_SQL = `CASE priority ${TASK_PRIORITIES.map((p, i) => `WHEN '${p}' THEN ${i}`).join(' ')} END`
 
 // bun:sqlite's spread bindings need a typed array; keep the single cast here.
 function bindParams(params: SqlParam[]): SQLQueryBindings[] {
