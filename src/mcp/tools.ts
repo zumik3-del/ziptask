@@ -21,14 +21,6 @@ const TEMPLATES: Record<TemplateName, string> = {
   'comment-failure': commentFailureTemplate
 }
 
-function handleGetTemplate(_svc: TaskService, args: { name: TemplateName }): ToolResult {
-  const unknown = rejectUnknownArgs('get_template', GET_TEMPLATE_SHAPE, args)
-  if (unknown) return unknown
-  const template = TEMPLATES[args.name]
-  if (template === undefined) return errorResult(`Template not found: ${args.name}`)
-  return textResult(template)
-}
-
 type ToolResult = {
   content: Array<{ type: 'text'; text: string }>
   isError?: boolean
@@ -138,6 +130,14 @@ function rejectUnknownArgs(tool: string, shape: object, args: object): ToolResul
   return errorResult(
     `INVALID: unknown argument${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')} on ${tool} (accepted: ${accepted.join(', ')})`
   )
+}
+
+function handleGetTemplate(_svc: TaskService, args: { name: TemplateName }): ToolResult {
+  const unknown = rejectUnknownArgs('get_template', GET_TEMPLATE_SHAPE, args)
+  if (unknown) return unknown
+  const template = TEMPLATES[args.name]
+  if (template === undefined) return errorResult(`Template not found: ${args.name}`)
+  return textResult(template)
 }
 
 export function registerAllTools(server: McpServer, svc: TaskService) {
