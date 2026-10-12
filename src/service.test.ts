@@ -3,23 +3,20 @@ import type { Database } from 'bun:sqlite'
 import { nowIso, clampLimit, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './core/tasks'
 import type { TaskStore } from './core/types'
 import { TaskRepo } from './db/repo'
-import { MetricsRepo } from './db/metrics-repo'
 import { TaskService } from './core/service'
-import { computeMetrics } from './core/metrics'
 import {
-  handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus,
+  handleCreateTask, handleClaimTask, handleUpdateStatus,
   handleAddComment, handleListQueue, handleGetTimeline, handleListTasks, registerAllTools
 } from './mcp/tools'
 import {
-  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, driveToDone,
+  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text,
   type CreateTaskRowOpts
 } from './test-context'
 
 let db: Database
 let repo: TaskRepo
-let metrics: MetricsRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); metrics = new MetricsRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15 }) })
+beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15 }) })
 afterEach(() => { closeTestDb(db) })
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
@@ -294,53 +291,6 @@ describe('service defaults from config (#6)', () => {
     const row = getTaskRow(db, id)
     expect(row.priority).toBe('p0')
     expect(row.reporter).toBe('human')
-  })
-})
-
-describe('metrics exclude epics (#2)', () => {
-  // lease-free on-ramp: an epic is never in_progress, so closed = queued → blocked → review → done.
-  // Each result is asserted: the helper used to ignore them, so a refused hop left the epic open and
-  // the exclusion assertion below still passed — for the wrong reason.
-  function driveEpicToDone(id: number) {
-    for (const status of ['blocked', 'review', 'done'] as const) {
-      const v = json(handleGetTask(svc, { id, fields: ['version'] })).version
-      const res = handleUpdateStatus(svc, { id, agent: 'dev', status, version: v })
-      expect(res.isError).toBeUndefined()
-      expect(json(res)).toEqual({ id, status, version: v + 1 })
-    }
-  }
-
-  test('done_count excludes closed epics', () => {
-    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
-    const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
-    const plainId = json(handleCreateTask(svc, { title: 'Plain', reporter: 'dev' })).id
-    driveToDone(svc, subId, 'dev')
-    driveToDone(svc, plainId, 'dev')
-    driveEpicToDone(epicId)
-    expect(getTaskRow(db, epicId).status).toBe('done')
-
-    expect(metrics.doneCount('0001-01-01T00:00:00.000Z')).toBe(2)
-    expect(computeMetrics(metrics, 'all').doneCount).toBe(2)
-  })
-
-  test('statusDurations computes clamped segment minutes and ignores epics', () => {
-    const ins = (id: number, action: string, nv: string, at: string) =>
-      db.run("INSERT INTO audit_log (task_id,agent,action,old_value,new_value,created_at) VALUES (?,?,?,?,?,?)", [id, 'dev', action, null, nv, at])
-
-    const id = repo.insertTask({ title: 'T', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
-    db.run("UPDATE tasks SET created_at=?, updated_at=?, status='done', completed_at=? WHERE id=?", ['2020-01-01T00:00:00.000Z', '2020-01-01T00:30:00.000Z', '2020-01-01T00:30:00.000Z', id])
-    ins(id, 'claim', 'in_progress', '2020-01-01T00:10:00.000Z')
-    ins(id, 'update_status', 'review', '2020-01-01T00:20:00.000Z')
-    ins(id, 'update_status', 'done', '2020-01-01T00:30:00.000Z')
-
-    const epicId = repo.insertTask({ title: 'E', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z', isEpic: true })
-    db.run('UPDATE tasks SET created_at=? WHERE id=?', ['2020-01-01T00:00:00.000Z', epicId])
-
-    const map = Object.fromEntries(metrics.statusDurations('0001-01-01T00:00:00.000Z', '2100-01-01T00:00:00.000Z').map(r => [r.status, r.minutes]))
-    expect(Math.round(map.queued)).toBe(10)
-    expect(Math.round(map.in_progress)).toBe(10)
-    expect(Math.round(map.review)).toBe(10)
-    expect(map.done ?? 0).toBe(0)
   })
 })
 

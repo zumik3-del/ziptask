@@ -12,7 +12,7 @@ Subagents drive their own task claims per the ziptask MCP `instructions` (the se
 
 - **Task creation (orchestrator-only)**: `create_task`, `epic: true` for epics, `epic_id` for sub-tasks, `depends_on` for ordering (never in prose). Subagents never create tasks — only the orchestrator does.
 - **State transitions (policy, not protocol)**: only the orchestrator transitions a task out of `review`; `done`, `failed`, and `canceled` are orchestrator-only. A subagent that cannot finish sets `blocked` with the cause and never sets `done`/`failed`.
-- **State reads**: via the tracker read tools (`list_tasks`, `list_queue`, `get_timeline`); detailed evidence lives in completion comments, not in files. Aggregate metrics come from the offline `scripts/metrics.ts` CLI, not the tracker.
+- **State reads**: via the tracker read tools (`list_tasks`, `list_queue`, `get_timeline`); detailed evidence lives in completion comments, not in files.
 
 ## Tracker — client policy
 
@@ -30,7 +30,7 @@ Subagents drive their own task claims per the ziptask MCP `instructions` (the se
 
 ## Epics — orchestrator-owned
 
-Epics (is_epic) are created and managed only by the orchestrator. Subagents may read an epic (`get_task`, `get_timeline`) but never create or mutate them — task creation and epic mutation are orchestrator-only, enforced by the opencode agent-file permissions (no subagent is granted `ziptask_create_task`; `list_*`/`metrics` stay orchestrator-side). Roll-up via `get_task fields:["subtasks"]`; claiming/attaching to epics is rejected server-side.
+Epics (is_epic) are created and managed only by the orchestrator. Subagents may read an epic (`get_task`, `get_timeline`) but never create or mutate them — task creation and epic mutation are orchestrator-only, enforced by the opencode agent-file permissions (no subagent is granted `ziptask_create_task`; `list_*` stays orchestrator-side). Roll-up via `get_task fields:["subtasks"]`; claiming/attaching to epics is rejected server-side.
 
 ## Artifacts
 

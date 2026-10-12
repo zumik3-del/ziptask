@@ -54,7 +54,7 @@ permission:
     "**/AGENTS.md": deny
   todowrite: deny
   # ziptask MCP: claim your task, move it to review, comment, read context.
-  # create_task/metrics/list_* stay orchestrator-side (last match wins)
+  # create_task/list_* stay orchestrator-side (last match wins)
   "ziptask_*": deny
   "ziptask_claim_task": allow
   "ziptask_update_status": allow
