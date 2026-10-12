@@ -84,3 +84,7 @@ The previous unit body is also kept at `/etc/systemd/system/ziptask.service.bak`
 ## Backups
 
 `bun run scripts/backup.ts` writes an online SQLite backup (`sqlite3 .backup`), compresses it to `*.db.tar.gz`, and deletes all but the newest `ZIPTASK_BACKUP_RETAIN` (default `7`). Env: `ZIPTASK_DB` (source DB, default `./data/ziptask.db`), `ZIPTASK_BACKUP_DIR` (default `./backups`), `ZIPTASK_BACKUP_PREFIX` (default `ziptask`). The update path also creates a pre-upgrade backup (see above).
+
+## Task retention
+
+`bun run scripts/prune-tasks.ts` deletes terminal tasks (`done`/`failed`/`canceled`) whose `completed_at` is older than `--days` (default `30`; env `PRUNE_OLDER_THAN_DAYS`). It never deletes a task that a live (non-terminal) task still lists in `depends_on` — a missing dependency id would block its dependent forever — nor a parent epic with remaining children (`epic_id` has no `ON DELETE CASCADE`, so an epic is prunable only after its children are gone). `comments`/`audit_log` rows cascade with the task (schema v4). The script is a dry run unless `--apply` is passed; `--db`/`ZIPTASK_DB` selects the database.
