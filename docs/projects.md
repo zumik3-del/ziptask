@@ -35,7 +35,7 @@ The full table plus every refusal string: [MCP tools → Projects and scope](mcp
 
 - `update_project {project, archived: true}` stamps the archive. `create_task` into an archived project then refuses with `INVALID: project 'x' is archived`, while listing and claiming the existing work keeps working.
 - `archived: false` clears the stamp and is **idempotent** on a live project, so a client can un-archive blind.
-- `delete_project` works only on a project that holds no tasks: `{deleted:<slug>}`, or `CONFLICT: project 'x' has N tasks; archive it instead`.
+- `delete_project` works only on a project that holds no tasks **of any status** — deliberately not the same measure as the pipe's `open`: a project whose tasks are all terminal prints `open 0` and still refuses deletion. Success returns `{deleted:<slug>}`, refusal is `CONFLICT: project 'x' has N tasks; archive it instead`.
 - Project mutations write no audit row: the only trace of an update is the `updated_at` bump.
 
 ## `legacy`

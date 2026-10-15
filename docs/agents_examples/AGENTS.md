@@ -12,7 +12,7 @@ Subagents drive their own task claims per the ziptask MCP `instructions` (the se
 
 - **Task creation (orchestrator-only)**: `create_task`, `epic: true` for epics, `epic_id` for sub-tasks, `depends_on` for ordering (never in prose). Subagents never create tasks — only the orchestrator does.
 - **State transitions (policy, not protocol)**: only the orchestrator transitions a task out of `review`; `done`, `failed`, and `canceled` are orchestrator-only. A subagent that cannot finish sets `blocked` with the cause and never sets `done`/`failed`.
-- **State reads**: via the tracker read tools (`list_tasks`, `list_queue`, `get_timeline`); detailed evidence lives in completion comments, not in files.
+- **State reads**: via the tracker read tools (`list_tasks`, `list_queue`, `get_timeline`); the enumerating ones (`list_queue`, and `list_tasks` without `ids`) additionally require the project slug the orchestrator declares, while by-id reads (`get_task`, `get_timeline`) stay unscoped. Detailed evidence lives in completion comments, not in files.
 
 ## Tracker — client policy
 
