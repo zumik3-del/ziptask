@@ -1,5 +1,5 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
-import type { Task, TaskStatus, CommentType } from '../core/tasks'
+import type { Task, TaskStatus, TaskPriority, CommentType } from '../core/tasks'
 import { PRIORITY_ORDER_SQL, clampLimit, monotonicNowMs } from '../core/tasks'
 import type { CommentRow, ProjectListItem, ProjectRow, TaskStore } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS, TERMINAL_STATUSES_SQL } from '../defaults'
@@ -34,6 +34,10 @@ export class TaskRepo implements TaskStore {
     return new Date(this.lastTimestampMs).toISOString()
   }
 
+  private inClause(count: number): string {
+    return `IN (${Array.from({ length: count }, () => '?').join(',')})`
+  }
+
   transaction<T>(fn: () => T): T {
     return this.db.transaction(fn)()
   }
@@ -44,7 +48,7 @@ export class TaskRepo implements TaskStore {
   }
 
   insertTask(task: {
-    title: string; description: string | null; priority: string
+    title: string; description: string | null; priority: TaskPriority
     assignee: string | null; reporter: string; depends_on: string; now: string
     maxAttempts?: number
     epicId?: number; isEpic?: boolean; projectId?: number | null
@@ -68,7 +72,7 @@ export class TaskRepo implements TaskStore {
   }
 
   listTasks(filters: {
-    assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number; projectId?: number
+    assignee?: string; status?: TaskStatus; updatedSinceIso?: string; epicId?: number; limit: number; projectId?: number
   }): { rows: Task[]; total: number } {
     const conditions: string[] = []
     const params: (string | number | null)[] = []
@@ -110,8 +114,7 @@ export class TaskRepo implements TaskStore {
 
   statusesOf(ids: number[]): Map<number, TaskStatus> {
     if (ids.length === 0) return new Map()
-    const inClause = ids.map(() => '?').join(',')
-    const rows = this.db.query(`SELECT id, status FROM tasks WHERE id IN (${inClause})`).all(...bindParams(ids)) as Array<{ id: number; status: TaskStatus }>
+    const rows = this.db.query(`SELECT id, status FROM tasks WHERE id ${this.inClause(ids.length)}`).all(...bindParams(ids)) as Array<{ id: number; status: TaskStatus }>
     const map = new Map<number, TaskStatus>()
     for (const row of rows) map.set(row.id, row.status)
     return map
@@ -120,8 +123,7 @@ export class TaskRepo implements TaskStore {
   batchTasks(ids: number[]): Map<number, Task | null> {
     const map = new Map<number, Task | null>()
     if (ids.length === 0) return map
-    const inClause = ids.map(() => '?').join(',')
-    const rows = this.db.query(`${TASK_SELECT} WHERE t.id IN (${inClause})`).all(...bindParams(ids)) as TaskRow[]
+    const rows = this.db.query(`${TASK_SELECT} WHERE t.id ${this.inClause(ids.length)}`).all(...bindParams(ids)) as TaskRow[]
     for (const row of rows) map.set(row.id, toTask(row))
     return map
   }
@@ -166,10 +168,21 @@ export class TaskRepo implements TaskStore {
     ).all(nowIso) as Array<{ id: number; version: number; attempts: number; max_attempts: number }>
   }
 
-  reapTransition(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number {
+  reapTransition(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string, completedAt: string | null = null, clearAssignee = false): number {
+    const assignments = [
+      'status = ?',
+      'lease_expires_at = NULL',
+      'attempts = ?',
+      'version = version + 1',
+      'updated_at = ?',
+      'completed_at = COALESCE(?, completed_at)'
+    ]
+    const params: SqlParam[] = [status, attempts, now, completedAt]
+    if (clearAssignee) assignments.push('assignee = NULL')
+    params.push(id, expectedVersion)
     const result = this.db.run(
-      'UPDATE tasks SET status = ?, lease_expires_at = NULL, assignee = CASE WHEN ? = \'queued\' THEN NULL ELSE assignee END, attempts = ?, version = version + 1, updated_at = ?, completed_at = CASE WHEN ? = ? THEN ? ELSE completed_at END WHERE id = ? AND status = \'in_progress\' AND version = ?',
-      [status, status, attempts, now, status, 'failed', now, id, expectedVersion]
+      `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND status = 'in_progress' AND version = ?`,
+      bindParams(params)
     )
     return Number(result.changes)
   }

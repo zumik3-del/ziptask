@@ -1,4 +1,4 @@
-import type { Task, TaskStatus } from './tasks'
+import type { Task, TaskStatus, TaskPriority } from './tasks'
 import { TERMINAL_STATUSES, nowIso, isoFromNow, sanitizePipe, clampLimit } from './tasks'
 import type { ProjectListItem, ProjectRow, TaskStore, TimelineRow, CommentRow, SvcResult, SvcError, UpdateStatusData } from './types'
 import { parseDeps, createsCycle, depsSatisfied } from './deps'
@@ -15,12 +15,12 @@ import {
 } from '../defaults'
 
 type CreateTaskArgs = {
-  title: string; description?: string; priority?: string; assignee?: string
+  title: string; description?: string; priority?: TaskPriority; assignee?: string
   depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number; project?: string
 }
 
 type ListTasksArgs = {
-  assignee?: string; status?: string; updated_since?: number; epic_id?: number
+  assignee?: string; status?: TaskStatus; updated_since?: number; epic_id?: number
   limit?: number; ids?: number[]; project?: string
 }
 
@@ -36,7 +36,7 @@ export class TaskService {
   private readonly maxAttempts: number
   private readonly auditLog: boolean
   private readonly autoClaimCeiling: number
-  private readonly defaultPriority: string
+  private readonly defaultPriority: TaskPriority
   private readonly defaultReporter: string
   private readonly listLimit: number
   private readonly timelineLimit: number
@@ -46,7 +46,7 @@ export class TaskService {
 
   constructor(private store: TaskStore, opts?: {
     leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number
-    defaultPriority?: string; defaultReporter?: string; listLimit?: number; timelineLimit?: number; queueLimit?: number
+    defaultPriority?: TaskPriority; defaultReporter?: string; listLimit?: number; timelineLimit?: number; queueLimit?: number
     scope?: string
   }) {
     this.leaseTtlMin = opts?.leaseTtlMin ?? DEFAULT_LEASE_TTL_MIN
