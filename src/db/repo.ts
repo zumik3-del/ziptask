@@ -1,6 +1,6 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
 import type { Task, TaskStatus, TaskPriority, CommentType } from '../core/tasks'
-import { clampLimit, monotonicNowMs } from '../core/tasks'
+import { clampLimit, monotonicNowMs, TERMINAL_STATUSES } from '../core/tasks'
 import type { CommentRow, ProjectListItem, ProjectRow, TaskStore } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
 import { PRIORITY_ORDER_SQL, TASK_SELECT, TERMINAL_STATUSES_SQL } from './sql'
@@ -21,15 +21,10 @@ function toTask(row: TaskRow): Task {
 }
 
 export class TaskRepo implements TaskStore {
-  // Mirrors the value the shared clock returned for this repo's last stamp (pin #795); the
-  // ordering guarantee itself is process-wide, not per instance.
-  private lastTimestampMs = 0
-
   constructor(private db: Database) {}
 
   private monotonicIso(): string {
-    this.lastTimestampMs = monotonicNowMs()
-    return new Date(this.lastTimestampMs).toISOString()
+    return new Date(monotonicNowMs()).toISOString()
   }
 
   private inClause(count: number): string {
@@ -166,7 +161,10 @@ export class TaskRepo implements TaskStore {
     ).all(nowIso) as Array<{ id: number; version: number; attempts: number; max_attempts: number }>
   }
 
-  reapTransition(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string, completedAt: string | null = null, clearAssignee = false): number {
+  reapTransition(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number {
+    // The reap policy is derived from the target status here, so both write paths cannot drift
+    // and no caller can pass a policy that contradicts the status it asks for.
+    const completedAt = TERMINAL_STATUSES.includes(status) ? now : null
     const assignments = [
       'status = ?',
       'lease_expires_at = NULL',
@@ -176,7 +174,7 @@ export class TaskRepo implements TaskStore {
       'completed_at = COALESCE(?, completed_at)'
     ]
     const params: SqlParam[] = [status, attempts, now, completedAt]
-    if (clearAssignee) assignments.push('assignee = NULL')
+    if (status === 'queued') assignments.push('assignee = NULL')
     params.push(id, expectedVersion)
     const result = this.db.run(
       `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND status = 'in_progress' AND version = ?`,

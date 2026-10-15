@@ -4,7 +4,7 @@ import type { Task, TaskStatus, TaskPriority, CommentType } from './tasks'
 // transition and the audit row it writes — so it cannot reach the rest of the store.
 export interface LeaseStore {
   expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>>
-  reapTransition(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string, completedAt?: string | null, clearAssignee?: boolean): number
+  reapTransition(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number
   auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void
 }
 
