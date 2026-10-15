@@ -113,7 +113,7 @@ Layered by carrier, no framework beyond the MCP SDK:
 | Storage | `src/db/` | SQL (bun:sqlite, WAL) + migrations |
 | Entry | `src/index.ts`, `src/server.ts` | Composition root, HTTP transport |
 
-The public task API is MCP, exposed at `POST`/`GET`/`DELETE` `/mcp`, alongside `GET /health` and one experimental REST-style read endpoint, `GET /api/task/:id`, kept as an integration endpoint for the subagentix client. No endpoint authenticates. See [HTTP endpoints](docs/http-endpoints.md).
+The public task API is MCP, exposed at `POST`/`GET`/`DELETE` `/mcp`, alongside `GET /health` and one experimental REST-style read endpoint, `GET /api/task/:id`, kept as an integration endpoint for the subagentix client. No endpoint authenticates. Enumeration is scoped: the enumerating tools require a project slug, while by-id calls stay unscoped — see [Projects](docs/projects.md). See [HTTP endpoints](docs/http-endpoints.md).
 
 ## Development
 
@@ -129,8 +129,9 @@ bun run changelog      # rebuild CHANGELOG.md from git tags (maintainers; clean 
 
 - [Configuration](docs/configuration.md) — `settings.json`, environment variables, the upgrade path, and backups.
 - [HTTP endpoints](docs/http-endpoints.md) — `/mcp`, `/health`, and the experimental `GET /api/task/:id` integration endpoint.
-- [MCP tools](docs/mcp-tools.md) — tool reference, task statuses, lease-reap semantics, and lease recovery paths.
-- [Epic → sub-task workflow](docs/epics.md) — declaring epics, attaching sub-tasks, roll-up and closure.
+- [MCP tools](docs/mcp-tools.md) — the 13-tool reference, projects and scope, task statuses, lease-reap semantics, and lease recovery paths.
+- [Projects](docs/projects.md) — what a project is, the slug, the fail-closed scope rule, and the four project tools.
+- [Epic → sub-task workflow](docs/epics.md) — declaring epics, attaching sub-tasks, roll-up, closure, and the cross-project constraints.
 - [Subagent setup](docs/subagents.md) — install and configure the example orchestrator + subagent agents.
 
 ## License

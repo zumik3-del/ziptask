@@ -28,6 +28,8 @@ An optional JSON file; `settings.example.json` shows the full shape. Every key i
 | `ZIPTASK_DEFAULTS_QUEUE_LIMIT` | `100` | Fallback `limit` for `list_queue` |
 | `ZIPTASK_SETTINGS` | (unset) | Path to `settings.json`; `--settings` takes precedence |
 
+**There is deliberately no project key in either layer**: no `project` in `settings.json` and no `ZIPTASK_PROJECT`. The project slug is a required per-call argument on the enumerating tools ([Projects and scope](mcp-tools.md#projects-and-scope)), so an install cannot silently widen or narrow every call from config — the failure is a loud `INVALID: project required`.
+
 ## Log format
 
 One JSON object per line, written to **stderr** and nothing else (`emit`, `src/logger.ts`) — stdout belongs to the stdio MCP JSON-RPC stream, where a single stray line breaks the transport.
