@@ -78,14 +78,21 @@ try {
     'instructions carry the client lifecycle markers (claim_task, CONFLICT)'
   )
 
+  // A fresh smoke DB has no projects (the migration seeds `legacy` only when tasks exist) and every
+  // enumerating call needs a slug, so the harness declares its own project before it enumerates.
+  parseToolResult(await client.callTool({
+    name: 'create_project',
+    arguments: { slug: 'smoke', folder_path: '/tmp/opencode/smoke' }
+  }))
+
   const created = parseToolResult(await client.callTool({
     name: 'create_task',
-    arguments: { title: 'Smoke v2 task', description: 'Smoke description', reporter: 'smoke' }
+    arguments: { title: 'Smoke v2 task', description: 'Smoke description', reporter: 'smoke', project: 'smoke' }
   }))
   assert(created.status === 'queued' && created.id > 0, `create_task → {id, status:queued} (no task_path), id=${created.id}`)
   const idA = created.id
 
-  const queue1 = textOf(await client.callTool({ name: 'list_queue', arguments: {} }))
+  const queue1 = textOf(await client.callTool({ name: 'list_queue', arguments: { project: 'smoke' } }))
   assert(queue1 === `${idA}|p2|Smoke v2 task`, `list_queue pipe id|priority|title: "${queue1}"`)
 
   const claim = parseToolResult(await client.callTool({
@@ -157,7 +164,7 @@ try {
   // waited out in a smoke run), every assertion below goes over the wire.
   const refundCreate = parseToolResult(await client.callTool({
     name: 'create_task',
-    arguments: { title: 'Refund smoke task', reporter: 'smoke' }
+    arguments: { title: 'Refund smoke task', reporter: 'smoke', project: 'smoke' }
   }))
   const refundId = refundCreate.id
   await client.callTool({ name: 'claim_task', arguments: { agent: 'smoke-agent', task_id: refundId } })
@@ -210,10 +217,10 @@ try {
 
   const createdB = parseToolResult(await client.callTool({
     name: 'create_task',
-    arguments: { title: 'Second | task', reporter: 'smoke' }
+    arguments: { title: 'Second | task', reporter: 'smoke', project: 'smoke' }
   }))
   const idB = createdB.id
-  const queue2 = textOf(await client.callTool({ name: 'list_queue', arguments: {} }))
+  const queue2 = textOf(await client.callTool({ name: 'list_queue', arguments: { project: 'smoke' } }))
   assert(queue2 === `${idB}|p2|Second / task`, `list_queue sanitizes | → /: "${queue2}"`)
 
   const batch = textOf(await client.callTool({ name: 'list_tasks', arguments: { ids: [idA, idB, 999] } }))
@@ -268,7 +275,7 @@ try {
   // ── epic → sub-task mechanism ──────────────────────────────────────────────
   const epicCreate = parseToolResult(await client.callTool({
     name: 'create_task',
-    arguments: { title: 'Epic root', reporter: 'smoke', epic: true }
+    arguments: { title: 'Epic root', reporter: 'smoke', epic: true, project: 'smoke' }
   }))
   assert(epicCreate.status === 'queued' && epicCreate.id > 0, `create epic → {id, status:queued}, id=${epicCreate.id}`)
   const epicId = epicCreate.id
@@ -285,7 +292,7 @@ try {
 
   const subCreate = parseToolResult(await client.callTool({
     name: 'create_task',
-    arguments: { title: 'Epic sub', reporter: 'smoke', epic_id: epicId }
+    arguments: { title: 'Epic sub', reporter: 'smoke', epic_id: epicId, project: 'smoke' }
   }))
   assert(subCreate.status === 'queued', `sub-task created under epic: id=${subCreate.id}`)
   const subId = subCreate.id
@@ -301,12 +308,12 @@ try {
   assert(subtasksRollup.subtasks.open === 1, `subtasks.open=1`)
 
   const listByEpic = parseToolResult(await client.callTool({
-    name: 'list_tasks', arguments: { epic_id: epicId }
+    name: 'list_tasks', arguments: { epic_id: epicId, project: 'smoke' }
   }))
   assert(listByEpic.total === 1, `list_tasks epic_id filter returns 1 child`)
   assert(listByEpic.tasks[0].id === subId, `list_tasks returns the sub, not the epic`)
 
-  const listQueue = textOf(await client.callTool({ name: 'list_queue', arguments: {} }))
+  const listQueue = textOf(await client.callTool({ name: 'list_queue', arguments: { project: 'smoke' } }))
   assert(!listQueue.includes(`${epicId}|`), `list_queue excludes epic`)
   assert(listQueue.includes(`${subId}|`), `list_queue includes sub`)
 
@@ -324,12 +331,12 @@ try {
   // Terminal guard: fresh epic+sub to keep a child open while testing the guard
   const epic2 = parseToolResult(await client.callTool({
     name: 'create_task',
-    arguments: { title: 'Epic guard', reporter: 'smoke' }
+    arguments: { title: 'Epic guard', reporter: 'smoke', project: 'smoke' }
   }))
   const epic2Id = epic2.id
   const _sub2 = parseToolResult(await client.callTool({
     name: 'create_task',
-    arguments: { title: 'Guard sub', reporter: 'smoke', epic_id: epic2Id }
+    arguments: { title: 'Guard sub', reporter: 'smoke', epic_id: epic2Id, project: 'smoke' }
   }))
   // ── lease acquisition guard: in_progress needs claim-grade eligibility (#1075) ─
   // An epic holds no work, so it is never leased: update_status must refuse the acquisition, and the
@@ -354,9 +361,9 @@ try {
     `refused epic acquisition left the row untouched: ${JSON.stringify(epicAfterRefusal)}`
   )
 
-  const depA = parseToolResult(await client.callTool({ name: 'create_task', arguments: { title: 'Lease dep', reporter: 'smoke' } }))
+  const depA = parseToolResult(await client.callTool({ name: 'create_task', arguments: { title: 'Lease dep', reporter: 'smoke', project: 'smoke' } }))
   const depB = parseToolResult(await client.callTool({
-    name: 'create_task', arguments: { title: 'Lease dependent', reporter: 'smoke', depends_on: [depA.id] }
+    name: 'create_task', arguments: { title: 'Lease dependent', reporter: 'smoke', depends_on: [depA.id], project: 'smoke' }
   }))
   const depLease = await client.callTool({
     name: 'update_status',
@@ -390,7 +397,7 @@ try {
   // conflict probe claims nothing, so it can sit at the end of the flow.
   const aliasCreate = parseToolResult(await client.callTool({
     name: 'create_task',
-    arguments: { title: 'Alias smoke task', reporter: 'smoke' }
+    arguments: { title: 'Alias smoke task', reporter: 'smoke', project: 'smoke' }
   }))
   const aliasId = aliasCreate.id
 
@@ -403,7 +410,7 @@ try {
     textOf(aliasTypo).includes('INVALID: unknown argument id_typo on claim_task'),
     `unknown-key error is our contract text: ${textOf(aliasTypo)}`
   )
-  const aliasQueue = textOf(await client.callTool({ name: 'list_queue', arguments: {} }))
+  const aliasQueue = textOf(await client.callTool({ name: 'list_queue', arguments: { project: 'smoke' } }))
   assert(
     aliasQueue.includes(`${aliasId}|p2|Alias smoke task`),
     `rejected claim left no side effect: still in list_queue ("${aliasQueue.split('\n').join(' / ')}")`

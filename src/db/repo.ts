@@ -1,7 +1,7 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
 import { PRIORITY_ORDER_SQL, clampLimit } from '../core/tasks'
-import type { CommentRow, TaskStore } from '../core/types'
+import type { CommentRow, ProjectListItem, ProjectRow, TaskStore } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS, TERMINAL_STATUSES_SQL } from '../defaults'
 
 type SqlParam = string | number | null
@@ -11,11 +11,15 @@ function bindParams(params: SqlParam[]): SQLQueryBindings[] {
   return params as SQLQueryBindings[]
 }
 
-type TaskRow = Omit<Task, 'is_epic'> & { is_epic: number }
+// The LEFT JOIN carries the slug; project_id stays internal and is dropped by toTask.
+const TASK_SELECT = `SELECT t.*, p.slug AS project FROM tasks t LEFT JOIN projects p ON p.id = t.project_id`
+
+type TaskRow = Omit<Task, 'is_epic'> & { is_epic: number; project_id: number | null }
 
 // SQL keeps is_epic as 0/1; the domain type carries it as a boolean.
 function toTask(row: TaskRow): Task {
-  return { ...row, is_epic: row.is_epic !== 0 }
+  const { project_id: _internal, ...rest } = row
+  return { ...rest, project: rest.project ?? null, is_epic: rest.is_epic !== 0 }
 }
 
 export class TaskRepo implements TaskStore {
@@ -35,7 +39,7 @@ export class TaskRepo implements TaskStore {
   }
 
   getTaskRow(id: number): Task | null {
-    const row = this.db.query('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | null
+    const row = this.db.query(`${TASK_SELECT} WHERE t.id = ?`).get(id) as TaskRow | null
     return row ? toTask(row) : null
   }
 
@@ -43,15 +47,16 @@ export class TaskRepo implements TaskStore {
     title: string; description: string | null; priority: string
     assignee: string | null; reporter: string; depends_on: string; now: string
     maxAttempts?: number
-    epicId?: number; isEpic?: boolean
+    epicId?: number; isEpic?: boolean; projectId?: number | null
   }): number {
     const maxAttempts = task.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const epicId = task.epicId ?? null
     const epicFlag = task.isEpic ? 1 : 0
+    const projectId = task.projectId ?? null
     const result = this.db.run(
-      `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic)
-       VALUES (?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
-      [task.title, task.description, task.priority, task.assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, epicFlag]
+      `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic, project_id)
+       VALUES (?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+      [task.title, task.description, task.priority, task.assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, epicFlag, projectId]
     )
     return Number(result.lastInsertRowid)
   }
@@ -63,37 +68,38 @@ export class TaskRepo implements TaskStore {
   }
 
   listTasks(filters: {
-    assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number
+    assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number; projectId?: number
   }): { rows: Task[]; total: number } {
     const conditions: string[] = []
     const params: (string | number | null)[] = []
-    if (filters.assignee) { conditions.push('assignee = ?'); params.push(filters.assignee) }
-    if (filters.status) { conditions.push('status = ?'); params.push(filters.status) }
+    if (filters.projectId !== undefined) { conditions.push('t.project_id = ?'); params.push(filters.projectId) }
+    if (filters.assignee) { conditions.push('t.assignee = ?'); params.push(filters.assignee) }
+    if (filters.status) { conditions.push('t.status = ?'); params.push(filters.status) }
     if (filters.updatedSinceIso !== undefined) {
-      conditions.push('updated_at >= ?')
+      conditions.push('t.updated_at >= ?')
       params.push(filters.updatedSinceIso)
     }
     if (filters.epicId !== undefined) {
-      conditions.push('epic_id = ?')
+      conditions.push('t.epic_id = ?')
       params.push(filters.epicId)
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
     const limit = clampLimit(filters.limit, 0)
     const rows = this.db.query(
-      `SELECT * FROM tasks ${where} ORDER BY created_at DESC, id DESC LIMIT ${limit}`
+      `${TASK_SELECT} ${where} ORDER BY t.created_at DESC, t.id DESC LIMIT ${limit}`
     ).all(...bindParams(params)) as TaskRow[]
-    const total = (this.db.query(`SELECT COUNT(*) as cnt FROM tasks ${where}`).get(...bindParams(params)) as { cnt: number }).cnt
+    const total = (this.db.query(`SELECT COUNT(*) as cnt FROM tasks t ${where}`).get(...bindParams(params)) as { cnt: number }).cnt
     return { rows: rows.map(toTask), total }
   }
 
-  queuedCandidates(limit: number, offset?: number): Task[] {
+  queuedCandidates(limit: number, projectId: number, offset?: number): Task[] {
     const n = clampLimit(limit, 0)
     const o = clampLimit(offset ?? 0, 0)
     const rows = this.db.query(
-      `SELECT * FROM tasks WHERE status = 'queued' AND is_epic = 0
-       ORDER BY ${PRIORITY_ORDER_SQL}, created_at ASC, id ASC
+      `${TASK_SELECT} WHERE t.status = 'queued' AND t.is_epic = 0 AND t.project_id = ?
+       ORDER BY ${PRIORITY_ORDER_SQL}, t.created_at ASC, t.id ASC
        LIMIT ${n} OFFSET ${o}`
-    ).all() as TaskRow[]
+    ).all(projectId) as TaskRow[]
     return rows.map(toTask)
   }
 
@@ -115,7 +121,7 @@ export class TaskRepo implements TaskStore {
     const map = new Map<number, Task | null>()
     if (ids.length === 0) return map
     const inClause = ids.map(() => '?').join(',')
-    const rows = this.db.query(`SELECT * FROM tasks WHERE id IN (${inClause})`).all(...bindParams(ids)) as TaskRow[]
+    const rows = this.db.query(`${TASK_SELECT} WHERE t.id IN (${inClause})`).all(...bindParams(ids)) as TaskRow[]
     for (const row of rows) map.set(row.id, toTask(row))
     return map
   }
@@ -233,5 +239,51 @@ export class TaskRepo implements TaskStore {
 
   appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void {
     this.auditAppend(taskId, agent, action, undefined, newValue)
+  }
+
+  insertProject(project: { slug: string; folderPath: string; now: string }): number {
+    const result = this.db.run(
+      'INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES (?, ?, ?, ?)',
+      [project.slug, project.folderPath, project.now, project.now]
+    )
+    return Number(result.lastInsertRowid)
+  }
+
+  projectBySlug(slug: string): ProjectRow | null {
+    return this.db.query('SELECT * FROM projects WHERE slug = ?').get(slug) as ProjectRow | null
+  }
+
+  projectSlugs(): string[] {
+    const rows = this.db.query('SELECT slug FROM projects ORDER BY slug ASC').all() as Array<{ slug: string }>
+    return rows.map(row => row.slug)
+  }
+
+  listProjects(): ProjectListItem[] {
+    return this.db.query(
+      `SELECT p.slug AS slug, p.folder_path AS folder_path,
+         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status NOT IN ${TERMINAL_STATUSES_SQL}) AS open
+       FROM projects p ORDER BY p.slug ASC`
+    ).all() as ProjectListItem[]
+  }
+
+  updateProject(id: number, patch: { slug?: string; folderPath?: string; archived?: boolean }, now: string): number {
+    const assignments = ['updated_at = ?']
+    const params: SqlParam[] = [now]
+    if (patch.slug !== undefined) { assignments.push('slug = ?'); params.push(patch.slug) }
+    if (patch.folderPath !== undefined) { assignments.push('folder_path = ?'); params.push(patch.folderPath) }
+    if (patch.archived !== undefined) { assignments.push('archived_at = ?'); params.push(patch.archived ? now : null) }
+    params.push(id)
+    const result = this.db.run(`UPDATE projects SET ${assignments.join(', ')} WHERE id = ?`, bindParams(params))
+    return Number(result.changes)
+  }
+
+  deleteProject(id: number): number {
+    const result = this.db.run('DELETE FROM projects WHERE id = ?', [id])
+    return Number(result.changes)
+  }
+
+  projectTaskCount(id: number): number {
+    const row = this.db.query('SELECT COUNT(*) as cnt FROM tasks WHERE project_id = ?').get(id) as { cnt: number }
+    return row.cnt
   }
 }

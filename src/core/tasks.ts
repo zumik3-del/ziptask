@@ -21,6 +21,7 @@ export interface Task {
   completed_at: string | null
   epic_id: number | null
   is_epic: boolean
+  project: string | null
 }
 
 export const STATUS_CODES: Record<TaskStatus | 'not_found', number> = Object.freeze({

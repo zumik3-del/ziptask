@@ -85,5 +85,29 @@ export const MIGRATIONS = [
   `INSERT INTO audit_log_new SELECT id, task_id, agent, action, old_value, new_value, created_at FROM audit_log`,
   `DROP TABLE audit_log`,
   `ALTER TABLE audit_log_new RENAME TO audit_log`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)`
+  `CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)`,
+
+  // 005: projects (schema v5). `project` scopes enumeration; it is not an authorization token.
+  // `folder_path` is a client-side annotation, not a key (RL1, approved 2026-10-15): the server never resolves paths, so a
+  // global UNIQUE would only refuse legitimate setups; `slug` is the identity.
+  // project_id is nullable only for rows a pre-v5 DB may still hold; the backfill below claims them.
+  `CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    folder_path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    archived_at TEXT
+  )`,
+
+  `ALTER TABLE tasks ADD COLUMN project_id INTEGER REFERENCES projects(id)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_tasks_project_status_priority ON tasks(project_id, status, priority)`,
+
+  `INSERT INTO projects (slug, folder_path, created_at, updated_at)
+   SELECT 'legacy', '', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
+   WHERE EXISTS (SELECT 1 FROM tasks)`,
+
+  `UPDATE tasks SET project_id = (SELECT id FROM projects WHERE slug = 'legacy')
+   WHERE project_id IS NULL`
 ]

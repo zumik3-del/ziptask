@@ -10,6 +10,7 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { VERSION } from './version'
 import { createLogger, type Logger } from './logger'
+import { seedProject } from './test-context'
 
 const TMP = '/tmp/opencode'
 
@@ -19,7 +20,8 @@ function makeServer() {
   mkdirSync(TMP, { recursive: true })
   const dbPath = join(TMP, `server-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`)
   const db = openDatabase(dbPath)
-  const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+  seedProject(db)
+  const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: 'test' })
   const server = startHttp({ svc, port: 0, host: '127.0.0.1' })
   const port = server.port
   return { db, svc, port, dbPath, stop: () => { server.stop(); db.close(); try { rmSync(dbPath) } catch {} try { rmSync(dbPath + '-wal') } catch {} try { rmSync(dbPath + '-shm') } catch {} } }
@@ -203,10 +205,10 @@ describe('MCP schema guards (#431)', () => {
       name: 'create_task',
       arguments: { title: 'SinceTest', reporter: 'dev' }
     })
-    const all = await client.callTool({ name: 'list_tasks', arguments: { updated_since: 0 } })
+    const all = await client.callTool({ name: 'list_tasks', arguments: { updated_since: 0, project: 'test' } })
     expect((all as any).content[0].text).not.toBeNull()
 
-    const future = await client.callTool({ name: 'list_tasks', arguments: { updated_since: Date.now() + 60_000 } })
+    const future = await client.callTool({ name: 'list_tasks', arguments: { updated_since: Date.now() + 60_000, project: 'test' } })
     expect((future as any).content[0].text).toContain('0')
   })
 
@@ -214,7 +216,7 @@ describe('MCP schema guards (#431)', () => {
     const bad = await client.callTool({ name: 'list_tasks', arguments: { status: 'invalid_status' } })
     expect(bad.isError).toBe(true)
 
-    const good = await client.callTool({ name: 'list_tasks', arguments: { status: 'queued' } })
+    const good = await client.callTool({ name: 'list_tasks', arguments: { status: 'queued', project: 'test' } })
     expect(good.isError).toBeUndefined()
   })
 })
@@ -276,7 +278,8 @@ describe('observability logging', () => {
   test('startup emits one JSON record carrying version, host, port and dbPath as fields', () => {
     const dbPath = join(TMP, `obs-startup-${Date.now()}.db`)
     const db = openDatabase(dbPath)
-    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    seedProject(db)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: 'test' })
     const logger = makeCaptureLogger()
     const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
     const port = server.port
@@ -303,7 +306,8 @@ describe('observability logging', () => {
   test('session open logs the session id and agent name from clientInfo.name', async () => {
     const dbPath = join(TMP, `obs-session-${Date.now()}.db`)
     const db = openDatabase(dbPath)
-    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    seedProject(db)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: 'test' })
     const logger = makeCaptureLogger()
     const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
     const port = server.port
@@ -330,7 +334,8 @@ describe('observability logging', () => {
   test('session close logs the same session id and agent on disconnect', async () => {
     const dbPath = join(TMP, `obs-close-${Date.now()}.db`)
     const db = openDatabase(dbPath)
-    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    seedProject(db)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: 'test' })
     const logger = makeCaptureLogger()
     const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
     const port = server.port
@@ -359,7 +364,8 @@ describe('observability logging', () => {
   test('fetch path throw logs an error record with err and stack, and returns 500', async () => {
     const dbPath = join(TMP, `obs-500-${Date.now()}.db`)
     const db = openDatabase(dbPath)
-    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    seedProject(db)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: 'test' })
     const logger = makeCaptureLogger()
     const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
     const port = server.port
@@ -388,7 +394,8 @@ describe('observability logging', () => {
   test('a non-Error object throw is stringified away by the serializer fallback and still answers 500', async () => {
     const dbPath = join(TMP, `obs-500-circular-${Date.now()}.db`)
     const db = openDatabase(dbPath)
-    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    seedProject(db)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: 'test' })
     const logger = makeCaptureLogger()
     const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
 
@@ -422,7 +429,8 @@ describe('observability logging', () => {
   test('a non-Error throw keeps its provenance in a thrown field and still answers 500', async () => {
     const dbPath = join(TMP, `obs-500-thrown-${Date.now()}.db`)
     const db = openDatabase(dbPath)
-    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    seedProject(db)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: 'test' })
     const logger = makeCaptureLogger()
     const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
 
@@ -452,7 +460,8 @@ describe('observability logging', () => {
   test('a newline in the agent name stays inside one record and forges no session open', async () => {
     const dbPath = join(TMP, `obs-agent-forge-${Date.now()}.db`)
     const db = openDatabase(dbPath)
-    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    seedProject(db)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: 'test' })
     const logger = makeCaptureLogger()
     const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
 
@@ -485,7 +494,8 @@ describe('session keep-alive fix (#753/#754)', () => {
     mkdirSync(TMP, { recursive: true })
     const dbPath = join(TMP, `server-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`)
     const db = openDatabase(dbPath)
-    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    seedProject(db)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: 'test' })
     const logger = createLogger('test', 'off')
     const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger, sessionTtlMs })
     const port = server.port
@@ -550,11 +560,11 @@ describe('session keep-alive fix (#753/#754)', () => {
     await client.connect(transport)
 
     // Make an MCP call — exercises existing-session path
-    const result = await client.callTool({ name: 'list_tasks', arguments: {} })
+    const result = await client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
     expect(result).toBeDefined()
 
     // Session should still exist (no drop)
-    const res2 = await client.callTool({ name: 'list_tasks', arguments: {} })
+    const res2 = await client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
     expect(res2).toBeDefined()
 
     await client.close()
@@ -573,7 +583,7 @@ describe('session keep-alive fix (#753/#754)', () => {
     await Bun.sleep(3_000)
 
     // Make a call — should succeed, session still alive
-    const result = await client.callTool({ name: 'list_tasks', arguments: {} })
+    const result = await client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
     expect(result).toBeDefined()
 
     await client.close()
@@ -638,7 +648,7 @@ describe('stale session recovery', () => {
     const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${srv.port}/mcp`))
     await client.connect(transport)
     expect(transport.sessionId).toBeDefined()
-    const result = await client.callTool({ name: 'list_tasks', arguments: {} })
+    const result = await client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
     expect(result).toBeDefined()
     await client.close()
   })
@@ -655,7 +665,8 @@ describe('event store pruning on session close (#767)', () => {
   test('event store entries are cleared when session closes', async () => {
     const dbPath = join(TMP, `event-store-test-${Date.now()}.db`)
     const db = openDatabase(dbPath)
-    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    seedProject(db)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: 'test' })
     const logger = createLogger('test', 'off')
     const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
     const port = server.port
@@ -665,7 +676,7 @@ describe('event store pruning on session close (#767)', () => {
     await client.connect(transport)
 
     // Make an MCP call to populate the event store
-    const result = await client.callTool({ name: 'list_tasks', arguments: {} })
+    const result = await client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
     expect(result).toBeDefined()
 
     // Close the session
@@ -688,7 +699,8 @@ describe('session cap (#767)', () => {
     mkdirSync(TMP, { recursive: true })
     const dbPath = join(TMP, `session-cap-test-${Date.now()}.db`)
     const db = openDatabase(dbPath)
-    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15 })
+    seedProject(db)
+    const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: 'test' })
     const logger = createLogger('test', 'off')
     const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, maxSessions: 1, logger })
     const port = server.port
@@ -963,7 +975,7 @@ describe('argument contract over MCP (F1 #1040)', () => {
       expect(res.isError).toBe(true)
       expect(textOf(res)).toContain('INVALID: unknown argument bogus')
 
-      const queue = textOf(await client.callTool({ name: 'list_queue', arguments: {} }))
+      const queue = textOf(await client.callTool({ name: 'list_queue', arguments: { project: 'test' } }))
       expect(queue).toContain(`${target}|p0|Intended`)
 
       // Still genuinely claimable afterwards — no lease, no attempts bump.
@@ -978,14 +990,14 @@ describe('argument contract over MCP (F1 #1040)', () => {
       expect(textOf(res)).toBe('INVALID: unknown argument field on get_task (accepted: fields, id)')
     })
 
-    test('every one of the 9 tools rejects an unknown key, and the accepted list matches tools/list', async () => {
+    test('every one of the 13 tools rejects an unknown key, and the accepted list matches tools/list', async () => {
       const id = getId(srv.svc.createTask({ title: 'Base', reporter: 'dev', priority: 'p0' }))
       const version = getVersion(srv.db, id)
       const listed = await client.listTools()
       const schemas = new Map<string, any>(
         (listed.tools as any[]).map(t => [t.name, t.inputSchema as any])
       )
-      expect(schemas.size).toBe(9)
+      expect(schemas.size).toBe(13)
 
       const calls: Array<[string, Record<string, unknown>]> = [
         ['create_task', { title: 'Nope', reporter: 'dev', bogus: 1 }],
@@ -996,9 +1008,13 @@ describe('argument contract over MCP (F1 #1040)', () => {
         ['list_queue', { bogus: 1 }],
         ['add_comment', { id, agent: 'tester', content: 'nope', bogus: 1 }],
         ['get_timeline', { id, bogus: 1 }],
-        ['get_template', { name: 'task', bogus: 1 }]
+        ['get_template', { name: 'task', bogus: 1 }],
+        ['create_project', { folder_path: '/tmp/nope', bogus: 1 }],
+        ['list_projects', { bogus: 1 }],
+        ['update_project', { project: 'test', bogus: 1 }],
+        ['delete_project', { project: 'test', bogus: 1 }]
       ]
-      expect(calls.length).toBe(9)
+      expect(calls.length).toBe(13)
 
       const before = storeSnapshot()
       for (const [tool, args] of calls) {
@@ -1015,10 +1031,10 @@ describe('argument contract over MCP (F1 #1040)', () => {
   })
 
   describe('advertised schema (R7 guard against a later .strict() "fix")', () => {
-    test('no tool advertises additionalProperties: false, all 9 advertise it', async () => {
+    test('no tool advertises additionalProperties: false, all 13 advertise it', async () => {
       const listed = await client.listTools()
       const tools = listed.tools as any[]
-      expect(tools.length).toBe(9)
+      expect(tools.length).toBe(13)
       for (const t of tools) {
         expect(`${t.name}:${JSON.stringify(t.inputSchema.additionalProperties)}`)
           .toBe(`${t.name}:{}`)
@@ -1030,7 +1046,7 @@ describe('argument contract over MCP (F1 #1040)', () => {
       const listed = await client.listTools()
       const claim = (listed.tools as any[]).find(t => t.name === 'claim_task')!
       const props = claim.inputSchema.properties
-      expect(Object.keys(props).sort()).toEqual(['agent', 'id', 'include', 'lease_ttl_min', 'task_id'])
+      expect(Object.keys(props).sort()).toEqual(['agent', 'id', 'include', 'lease_ttl_min', 'project', 'task_id'])
       expect(props.id.description).toContain('alias of task_id')
     })
 

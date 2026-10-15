@@ -3,11 +3,13 @@ import { isValidTransition, TERMINAL_STATUSES } from './tasks'
 import type { TaskStore, SvcError } from './types'
 import { parseDeps, depsSatisfied } from './deps'
 import { tooLongError, epicError, MAX_TITLE, MAX_AGENT } from './validation'
+import { RESERVED_PROJECT_SLUG } from './projects'
 
 export type CreateTaskInput = {
   title: string; description?: string; priority?: string; assignee?: string
   depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
   defaultReporter: string
+  project: string; projectArchived: boolean
 }
 
 export type UpdateStatusInput = {
@@ -35,19 +37,32 @@ export function createTaskGuard(args: CreateTaskInput, store: TaskStore): SvcErr
   // D5: epic cannot coexist with epic_id or depends_on
   if (args.epic && args.epic_id !== undefined) return { code: 'INVALID', message: 'epic cannot have a parent epic' }
   if (args.epic && deps.length > 0) return { code: 'INVALID', message: 'epic cannot have depends_on' }
-  // D5: rejects depends_on pointing at an epic
+  // G1/G2: `legacy` parks pre-v5 rows and archived projects keep their work readable but take no new
+  // task; both are refusals on the resolved project row the service already looked up.
+  if (args.project === RESERVED_PROJECT_SLUG) {
+    return { code: 'INVALID', message: `create_task is refused in the reserved project '${RESERVED_PROJECT_SLUG}'` }
+  }
+  if (args.projectArchived) return { code: 'INVALID', message: `project '${args.project}' is archived` }
+  // D5: rejects depends_on pointing at an epic; G3: a dependency must live in the same project
   if (deps.length > 0) {
     const batch = store.batchTasks(deps)
     for (const [d, t] of batch) {
       if (t?.is_epic) return { code: 'INVALID', message: `dependencies on epic tasks not allowed (#${d})` }
+      if (t && t.project !== args.project) {
+        return { code: 'INVALID', message: `dependency #${d} belongs to project '${t.project ?? ''}'` }
+      }
     }
   }
   // D5: epic_id target must exist, be non-terminal, and have epic_id IS NULL
+  // G4: it must also live in the same project (G5: an epic's children inherit, never guess)
   if (args.epic_id !== undefined) {
     const target = store.getTaskRow(args.epic_id)
     if (!target) return { code: 'NOT_FOUND', message: '' }
     if (TERMINAL_STATUSES.includes(target.status)) return { code: 'INVALID', message: 'cannot attach to a terminal task' }
     if (target.epic_id !== null) return { code: 'INVALID', message: 'cannot attach to a sub-task (no nesting)' }
+    if (target.project !== args.project) {
+      return { code: 'INVALID', message: `epic #${args.epic_id} belongs to project '${target.project ?? ''}'` }
+    }
   }
   return null
 }

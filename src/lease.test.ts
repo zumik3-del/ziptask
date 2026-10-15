@@ -16,7 +16,7 @@ import { createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, drive
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15 }) })
+beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
 afterEach(() => { closeTestDb(db) })
 const createTaskRow = (title: string) => insertTaskRow(repo, { title, reporter: 'dev' })
 

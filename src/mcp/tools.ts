@@ -60,6 +60,10 @@ function pickFields(src: Task, fields: string[]): Record<string, unknown> {
 
 // One shape literal per tool: registered as the advertised inputSchema and reused by
 // rejectUnknownArgs (Object.keys), so schema and guard can never drift apart.
+// `project` is optional in the four enumerating shapes (the SDK must not pre-empt the refusal
+// text) and enforced in the service; by-id shapes do not declare it at all.
+const PROJECT_ARG = z.string().optional().describe('project slug; required on every enumerating call (no default, no all-projects mode)')
+
 const CREATE_TASK_SHAPE = {
   title: z.string().describe('English, <=200 chars'),
   description: z.string().optional().describe('English; fill get_template("task") or "epic" first'),
@@ -68,7 +72,8 @@ const CREATE_TASK_SHAPE = {
   depends_on: z.array(z.number()).optional(),
   reporter: z.string().optional(),
   epic: z.boolean().optional().describe('Create as an epic (not claimable); description follows get_template("epic") with required Source'),
-  epic_id: z.number().optional().describe('Attach as sub-task to an existing task')
+  epic_id: z.number().optional().describe('Attach as sub-task to an existing task'),
+  project: PROJECT_ARG
 }
 
 const GET_TASK_SHAPE = {
@@ -83,7 +88,8 @@ const LIST_TASKS_SHAPE = {
   limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional(),
   updated_since: z.number().finite().min(-MAX_SAFE_TIMESTAMP_MS).max(MAX_SAFE_TIMESTAMP_MS).optional(),
   epic_id: z.number().optional(),
-  ids: z.array(z.number()).optional()
+  ids: z.array(z.number()).optional(),
+  project: PROJECT_ARG
 }
 
 const CLAIM_TASK_SHAPE = {
@@ -91,7 +97,8 @@ const CLAIM_TASK_SHAPE = {
   task_id: z.number().int().positive().optional(),
   id: z.number().int().positive().optional().describe('alias of task_id'),
   include: z.array(z.string()).optional(),
-  lease_ttl_min: z.number().int().positive().optional().describe('lease TTL in minutes for this claim; overrides the server default for this claim only')
+  lease_ttl_min: z.number().int().positive().optional().describe('lease TTL in minutes for this claim; overrides the server default for this claim only'),
+  project: PROJECT_ARG
 }
 
 const UPDATE_STATUS_SHAPE = {
@@ -105,7 +112,26 @@ const UPDATE_STATUS_SHAPE = {
 }
 
 const LIST_QUEUE_SHAPE = {
-  limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional()
+  limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional(),
+  project: PROJECT_ARG
+}
+
+const CREATE_PROJECT_SHAPE = {
+  slug: z.string().optional().describe('lowercase ^[a-z0-9][a-z0-9._-]{0,31}$; defaults to the normalized folder name'),
+  folder_path: z.string().describe('absolute path of the project folder on the host that creates the row (an annotation; the server never resolves it)')
+}
+
+const LIST_PROJECTS_SHAPE = {}
+
+const UPDATE_PROJECT_SHAPE = {
+  project: z.string().describe('slug of the project to update'),
+  slug: z.string().optional(),
+  folder_path: z.string().optional(),
+  archived: z.boolean().optional().describe('true stamps archived_at (create_task refuses); false clears it and is idempotent')
+}
+
+const DELETE_PROJECT_SHAPE = {
+  project: z.string().describe('slug of the project to delete')
 }
 
 const ADD_COMMENT_SHAPE = {
@@ -145,24 +171,51 @@ function handleGetTemplate(_svc: TaskService, args: { name: TemplateName }): Too
   return textResult(template)
 }
 
+export function handleListProjects(svc: TaskService, args: object): ToolResult {
+  const unknown = rejectUnknownArgs('list_projects', LIST_PROJECTS_SHAPE, args)
+  if (unknown) return unknown
+  const lines = svc.listProjects().map(p => pipeJoin(p.slug, sanitizePipe(p.folder_path), p.open))
+  return textResult(lines.join('\n'))
+}
+
+export function handleCreateProject(svc: TaskService, args: { slug?: string; folder_path: string }): ToolResult {
+  const unknown = rejectUnknownArgs('create_project', CREATE_PROJECT_SHAPE, args)
+  if (unknown) return unknown
+  return toToolResult(svc.createProject(args))
+}
+
+export function handleUpdateProject(svc: TaskService, args: {
+  project: string; slug?: string; folder_path?: string; archived?: boolean
+}): ToolResult {
+  const unknown = rejectUnknownArgs('update_project', UPDATE_PROJECT_SHAPE, args)
+  if (unknown) return unknown
+  return toToolResult(svc.updateProject(args))
+}
+
+export function handleDeleteProject(svc: TaskService, args: { project: string }): ToolResult {
+  const unknown = rejectUnknownArgs('delete_project', DELETE_PROJECT_SHAPE, args)
+  if (unknown) return unknown
+  return toToolResult(svc.deleteProject(args.project))
+}
+
 export function registerAllTools(server: McpServer, svc: TaskService) {
   server.registerTool('create_task', {
-    description: 'Create task. Always queued; blocked is a manual flag only. Build description from get_template("task"); for epics use get_template("epic")',
+    description: 'Create task. Always queued; blocked is a manual flag only. `project` is required (no default; refused in `legacy` and in an archived project). Build description from get_template("task"); for epics use get_template("epic")',
     inputSchema: z.object(CREATE_TASK_SHAPE).catchall(z.unknown())
   }, async (args) => handleCreateTask(svc, args))
 
   server.registerTool('get_task', {
-    description: 'Brief default: id,title,status,priority,blocked_by. description only via explicit fields; null fields omitted. version via fields:["version"]',
+    description: 'Brief default: id,title,status,priority,blocked_by. description only via explicit fields; null fields omitted. version via fields:["version"], project via fields:["project"]. By-id: no project argument',
     inputSchema: z.object(GET_TASK_SHAPE).catchall(z.unknown())
   }, async (args) => handleGetTask(svc, args))
 
   server.registerTool('list_tasks', {
-    description: 'Filters: assignee,status,updated_since(unix ms),epic_id(children of epic). ids batch-mode returns pipe id|code; assignee via fields:["assignee"]. description only via explicit fields',
+    description: 'Filters: assignee,status,updated_since(unix ms),epic_id(children of epic). `project` (slug) is required unless ids is non-empty; ids batch-mode returns pipe id|code; assignee via fields:["assignee"]. description only via explicit fields',
     inputSchema: z.object(LIST_TASKS_SHAPE).catchall(z.unknown())
   }, async (args) => handleListTasks(svc, args))
 
   server.registerTool('claim_task', {
-    description: 'Claim a task (auto-picks the best queued, or task_id — queued/blocked). id is an alias of task_id: id alone claims it, id equal to task_id is fine, id different from task_id is an INVALID conflict. agent is optional (defaults to "unknown"); lease_ttl_min overrides the server default lease for this claim only. include: extra fields in response',
+    description: 'Claim a task (auto-picks the best queued, or task_id — queued/blocked). id is an alias of task_id: id alone claims it, id equal to task_id is fine, id different from task_id is an INVALID conflict. `project` (slug) is required for the auto-pick (it is the only scoped branch); a by-id claim stays unscoped. agent is optional (defaults to "unknown"); lease_ttl_min overrides the server default lease for this claim only. include: extra fields in response',
     inputSchema: z.object(CLAIM_TASK_SHAPE).catchall(z.unknown())
   }, async (args) => handleClaimTask(svc, args))
 
@@ -172,7 +225,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleUpdateStatus(svc, args))
 
   server.registerTool('list_queue', {
-    description: 'Deps-satisfied queued tasks, pipe lines id|priority|title',
+    description: 'Deps-satisfied queued tasks of one project, pipe lines id|priority|title. `project` (slug) is required (no default, no all-projects mode)',
     inputSchema: z.object(LIST_QUEUE_SHAPE).catchall(z.unknown())
   }, async (args) => handleListQueue(svc, args))
 
@@ -190,6 +243,26 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
     description: 'Return a markdown template by name',
     inputSchema: z.object(GET_TEMPLATE_SHAPE).catchall(z.unknown())
   }, async (args) => handleGetTemplate(svc, args))
+
+  server.registerTool('create_project', {
+    description: 'Create a project; slug? derives from the folder name and must match ^[a-z0-9][a-z0-9._-]{0,31}$ ("legacy" is reserved). Output {slug}',
+    inputSchema: z.object(CREATE_PROJECT_SHAPE).catchall(z.unknown())
+  }, async (args) => handleCreateProject(svc, args))
+
+  server.registerTool('list_projects', {
+    description: 'Pipe lines slug|folder|open (open = non-terminal tasks), ordered by slug; archived projects are listed identically (no archived column)',
+    inputSchema: z.object(LIST_PROJECTS_SHAPE).catchall(z.unknown())
+  }, async (args) => handleListProjects(svc, args))
+
+  server.registerTool('update_project', {
+    description: 'Update a project by slug (slug?, folder_path?, archived?). archived:false is idempotent; INVALID: nothing to update only when no optional argument is given. Output {slug}',
+    inputSchema: z.object(UPDATE_PROJECT_SHAPE).catchall(z.unknown())
+  }, async (args) => handleUpdateProject(svc, args))
+
+  server.registerTool('delete_project', {
+    description: 'Delete a project that has no tasks; a project with tasks refuses with CONFLICT (archive it instead). Output {deleted}',
+    inputSchema: z.object(DELETE_PROJECT_SHAPE).catchall(z.unknown())
+  }, async (args) => handleDeleteProject(svc, args))
 }
 
 export function handleCreateTask(svc: TaskService, args: {
@@ -201,6 +274,7 @@ export function handleCreateTask(svc: TaskService, args: {
   reporter?: string
   epic?: boolean
   epic_id?: number
+  project?: string
 }): ToolResult {
   const unknown = rejectUnknownArgs('create_task', CREATE_TASK_SHAPE, args)
   if (unknown) return unknown
@@ -232,14 +306,16 @@ export function handleListTasks(svc: TaskService, args: {
   updated_since?: number
   epic_id?: number
   ids?: number[]
+  project?: string
 }): ToolResult {
   const unknown = rejectUnknownArgs('list_tasks', LIST_TASKS_SHAPE, args)
   if (unknown) return unknown
   if (args.ids !== undefined && args.ids.length > 0) {
     const withAssignee = args.fields?.includes('assignee') ?? false
     const batch = svc.listTasks({ ids: args.ids })
-    if (!('items' in batch)) return errorResult('INVALID: ids batch mode')
-    const lines = batch.items.map(({ id, task }) => {
+    if (!batch.ok) return errorTool(batch.error)
+    if (!('items' in batch.data)) return errorResult('INVALID: ids batch mode')
+    const lines = batch.data.items.map(({ id, task }) => {
       if (!task) return withAssignee ? pipeJoin(id, 0, '-') : pipeJoin(id, 0)
       const code = statusToCode(task.status)
       return withAssignee ? pipeJoin(id, code, task.assignee ?? '-') : pipeJoin(id, code)
@@ -247,10 +323,11 @@ export function handleListTasks(svc: TaskService, args: {
     return textResult(lines.join('\n'))
   }
   const result = svc.listTasks(args)
-  if ('items' in result) return errorResult('INVALID: unexpected batch mode')
+  if (!result.ok) return errorTool(result.error)
+  if ('items' in result.data) return errorResult('INVALID: unexpected batch mode')
   const fields = args.fields ?? ['id', 'title', 'status', 'priority', 'assignee']
-  const tasks = result.tasks.map((task) => pickFields(task, fields))
-  return jsonResult({ tasks, total: result.total })
+  const tasks = result.data.tasks.map((task) => pickFields(task, fields))
+  return jsonResult({ tasks, total: result.data.total })
 }
 
 export function handleClaimTask(svc: TaskService, args: {
@@ -259,6 +336,7 @@ export function handleClaimTask(svc: TaskService, args: {
   id?: number
   include?: string[]
   lease_ttl_min?: number
+  project?: string
 }): ToolResult {
   const unknown = rejectUnknownArgs('claim_task', CLAIM_TASK_SHAPE, args)
   if (unknown) return unknown
@@ -266,7 +344,7 @@ export function handleClaimTask(svc: TaskService, args: {
     return errorResult(`INVALID: claim_task id/task_id conflict (id=${args.id} task_id=${args.task_id}); task_id is canonical`)
   }
   const taskId = args.task_id !== undefined ? args.task_id : args.id
-  return foldResult(svc.claimTask({ agent: args.agent ?? 'unknown', taskId, leaseTtlMin: args.lease_ttl_min }), ({ id, leaseTtlMin, task }) => {
+  return foldResult(svc.claimTask({ agent: args.agent ?? 'unknown', taskId, leaseTtlMin: args.lease_ttl_min, project: args.project }), ({ id, leaseTtlMin, task }) => {
     const result: Record<string, unknown> = { id, lease_ttl_min: leaseTtlMin, version: task.version }
     Object.assign(result, pickFields(task, args.include ?? []))
     return jsonResult(result)
@@ -287,12 +365,13 @@ export function handleUpdateStatus(svc: TaskService, args: {
   return toToolResult(svc.updateStatus(args))
 }
 
-export function handleListQueue(svc: TaskService, args: { limit?: number }): ToolResult {
+export function handleListQueue(svc: TaskService, args: { limit?: number; project?: string }): ToolResult {
   const unknown = rejectUnknownArgs('list_queue', LIST_QUEUE_SHAPE, args)
   if (unknown) return unknown
-  const ready = svc.listQueue(args)
-  const lines = ready.map(t => pipeJoin(t.id, t.priority, sanitizePipe(t.title)))
-  return textResult(lines.join('\n'))
+  return foldResult(svc.listQueue(args), (ready) => {
+    const lines = ready.map(t => pipeJoin(t.id, t.priority, sanitizePipe(t.title)))
+    return textResult(lines.join('\n'))
+  }, errorTool)
 }
 
 export function handleAddComment(svc: TaskService, args: {

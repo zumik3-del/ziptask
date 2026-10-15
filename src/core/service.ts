@@ -1,12 +1,13 @@
 import type { Task, TaskStatus } from './tasks'
 import { TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit } from './tasks'
-import type { TaskStore, TimelineRow, CommentRow, SvcResult, SvcError, UpdateStatusData } from './types'
+import type { ProjectListItem, ProjectRow, TaskStore, TimelineRow, CommentRow, SvcResult, SvcError, UpdateStatusData } from './types'
 import { parseDeps, createsCycle, depsSatisfied } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
 import { LeaseReaper } from './reaper'
 import { createTaskGuard, updateStatusGuard } from './guards'
 import { requiredError, tooLongError, epicError, MAX_AGENT, MAX_CONTENT } from './validation'
+import { resolveProject, createProject, updateProject, deleteProject } from './projects'
 import {
   MINUTE_MS, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
   DEFAULT_AUDIT_LOG, DEFAULT_REAP_COOLDOWN_SEC, DEFAULT_AUTO_CLAIM_CEILING, DEFAULT_PRIORITY,
@@ -15,12 +16,20 @@ import {
 
 type CreateTaskArgs = {
   title: string; description?: string; priority?: string; assignee?: string
-  depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
+  depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number; project?: string
+}
+
+type ListTasksArgs = {
+  assignee?: string; status?: string; updated_since?: number; epic_id?: number
+  limit?: number; ids?: number[]; project?: string
 }
 
 type UpdateStatusArgs = {
   id: number; agent: string; status: TaskStatus; version?: number; comment?: string; renew?: boolean; reset_attempts?: boolean
 }
+
+type ListQueueArgs = { limit?: number; project?: string }
+type ClaimTaskArgs = { agent: string; taskId?: number; leaseTtlMin?: number; project?: string }
 
 export class TaskService {
   private readonly leaseTtlMin: number
@@ -32,11 +41,13 @@ export class TaskService {
   private readonly listLimit: number
   private readonly timelineLimit: number
   private readonly queueLimit: number
+  private readonly scope: string | undefined
   private readonly reaper: LeaseReaper
 
   constructor(private store: TaskStore, opts?: {
     leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number
     defaultPriority?: string; defaultReporter?: string; listLimit?: number; timelineLimit?: number; queueLimit?: number
+    scope?: string
   }) {
     this.leaseTtlMin = opts?.leaseTtlMin ?? DEFAULT_LEASE_TTL_MIN
     this.maxAttempts = opts?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
@@ -47,6 +58,7 @@ export class TaskService {
     this.listLimit = opts?.listLimit ?? DEFAULT_LIST_LIMIT
     this.timelineLimit = opts?.timelineLimit ?? DEFAULT_TIMELINE_LIMIT
     this.queueLimit = opts?.queueLimit ?? DEFAULT_QUEUE_LIMIT
+    this.scope = opts?.scope
     this.reaper = new LeaseReaper(store, opts?.reapCooldownSec ?? DEFAULT_REAP_COOLDOWN_SEC, this.auditLog)
   }
 
@@ -70,14 +82,27 @@ export class TaskService {
     return this.store.transaction(fn)
   }
 
+  // The single resolution point: every enumerating call funnels its `project` (or the test-only
+  // `scope` fallback) through here, so a missing or unknown slug refuses identically everywhere.
+  private _resolveProject(project?: string): SvcResult<ProjectRow> {
+    return resolveProject(this.store, project ?? this.scope)
+  }
+
   // Pure precondition set for create_task: title/actor lengths, the epic↔(epic_id|deps) conflicts,
-  // the dep-on-epic rule, and the epic_id target shape. Returns the first failure or null.
-  private _createTaskGuard(args: CreateTaskArgs): SvcError | null {
-    return createTaskGuard({ ...args, defaultReporter: this.defaultReporter }, this.store)
+  // the dep-on-epic rule, the epic_id target shape, and the project scope. Returns the first failure or null.
+  private _createTaskGuard(args: CreateTaskArgs, project: ProjectRow): SvcError | null {
+    return createTaskGuard({
+      ...args,
+      defaultReporter: this.defaultReporter,
+      project: project.slug,
+      projectArchived: project.archived_at !== null
+    }, this.store)
   }
 
   createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' }> {
-    const guard = this._createTaskGuard(args)
+    const project = this._resolveProject(args.project)
+    if (!project.ok) return fail(project.error)
+    const guard = this._createTaskGuard(args, project.data)
     if (guard) return fail(guard)
     const deps = args.depends_on ?? []
     const reporter = args.reporter ?? this.defaultReporter
@@ -94,7 +119,8 @@ export class TaskService {
         now,
         maxAttempts: this.maxAttempts,
         epicId: epicId ?? undefined,
-        isEpic: args.epic
+        isEpic: args.epic,
+        projectId: project.data.id
       })
       if (createsCycle((depId) => this.store.depsOf(depId), id, deps)) {
         this.store.deleteTask(id)
@@ -132,28 +158,39 @@ export class TaskService {
     return ok({ task, blockedBy })
   }
 
-  listTasks(args: { assignee?: string; status?: string; updated_since?: number; epic_id?: number; limit?: number; ids?: number[] }): { tasks: ReadonlyArray<Readonly<Task>>; total: number } | { items: Array<{ id: number; task: Readonly<Task> | null }>; total: number } {
-    this.reaper.reapIfStale()
+  listTasks(args: ListTasksArgs): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number } | { items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
     if (args.ids !== undefined && args.ids.length > 0) {
+      this.reaper.reapIfStale()
       const batch = this.store.batchTasks(args.ids)
-      return {
+      return ok({
         items: args.ids.map(id => ({ id, task: batch.get(id) ?? null })),
         total: args.ids.length
-      }
+      })
     }
+    const project = this._resolveProject(args.project)
+    if (!project.ok) return fail(project.error)
+    this.reaper.reapIfStale()
     const { rows, total } = this.store.listTasks({
       assignee: args.assignee,
       status: args.status,
       updatedSinceIso: args.updated_since !== undefined ? new Date(args.updated_since).toISOString() : undefined,
       epicId: args.epic_id,
-      limit: clampLimit(args.limit, this.listLimit)
+      limit: clampLimit(args.limit, this.listLimit),
+      projectId: project.data.id
     })
-    return { tasks: rows, total }
+    return ok({ tasks: rows, total })
   }
 
-  claimTask(args: { agent: string; taskId?: number; leaseTtlMin?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> {
+  claimTask(args: ClaimTaskArgs): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> {
     const agentErr = this._agentError(args.agent)
     if (agentErr) return fail(agentErr)
+    // Only the auto-pick branch enumerates, so only it resolves a scope; a by-id claim stays unscoped.
+    let projectId: number | undefined
+    if (args.taskId === undefined) {
+      const project = this._resolveProject(args.project)
+      if (!project.ok) return fail(project.error)
+      projectId = project.data.id
+    }
     this.reaper.reap()
     let task: Task | null = null
 
@@ -165,8 +202,8 @@ export class TaskService {
       if (epicErr) return fail(epicErr)
       const deps = parseDeps(task.depends_on)
       if (!depsSatisfied(this.store.statusesOf(deps), deps)) return fail('BLOCKED', 'dependencies not satisfied')
-    } else {
-      task = readyCandidates(this.store, 1, this.autoClaimCeiling)[0] ?? null
+    } else if (projectId !== undefined) {
+      task = readyCandidates(this.store, 1, this.autoClaimCeiling, projectId)[0] ?? null
     }
 
     if (!task) return fail('EMPTY', 'no claimable tasks')
@@ -253,10 +290,28 @@ export class TaskService {
     })
   }
 
-  listQueue(args: { limit?: number }): ReadonlyArray<Readonly<Task>> {
+  listQueue(args: ListQueueArgs): SvcResult<ReadonlyArray<Readonly<Task>>> {
+    const project = this._resolveProject(args.project)
+    if (!project.ok) return fail(project.error)
     this.reaper.reapIfStale()
     const limit = clampLimit(args.limit, this.queueLimit)
-    return readyCandidates(this.store, limit, this.autoClaimCeiling)
+    return ok(readyCandidates(this.store, limit, this.autoClaimCeiling, project.data.id))
+  }
+
+  createProject(args: { slug?: string; folder_path?: string }): SvcResult<{ slug: string }> {
+    return createProject(this.store, args)
+  }
+
+  listProjects(): ReadonlyArray<ProjectListItem> {
+    return this.store.listProjects()
+  }
+
+  updateProject(args: { project: string; slug?: string; folder_path?: string; archived?: boolean }): SvcResult<{ slug: string }> {
+    return updateProject(this.store, args)
+  }
+
+  deleteProject(project: string): SvcResult<{ deleted: string }> {
+    return deleteProject(this.store, project)
   }
 
   addComment(args: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {

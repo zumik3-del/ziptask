@@ -12,11 +12,11 @@ export interface TaskStore extends LeaseStore {
   getTaskRow(id: number): Task | null
   insertTask(task: { title: string; description: string | null; priority: string;
     assignee: string | null; reporter: string; depends_on: string; now: string; maxAttempts?: number
-    epicId?: number; isEpic?: boolean }): number
+    epicId?: number; isEpic?: boolean; projectId?: number | null }): number
   deleteTask(id: number): void
-  listTasks(filters: { assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number })
+  listTasks(filters: { assignee?: string; status?: string; updatedSinceIso?: string; epicId?: number; limit: number; projectId?: number })
     : { rows: Task[]; total: number }
-  queuedCandidates(limit: number, offset?: number): Task[]
+  queuedCandidates(limit: number, projectId: number, offset?: number): Task[]
   depsOf(id: number): string | null
   statusesOf(ids: number[]): Map<number, TaskStatus>
   batchTasks(ids: number[]): Map<number, Task | null>
@@ -32,7 +32,21 @@ export interface TaskStore extends LeaseStore {
   insertComment(taskId: number, agent: string, content: string, type?: 'comment' | 'resolution'): number
   timelineEntries(taskId: number, limit: number): TimelineRow[]
   commentsOf(taskId: number): CommentRow[]
+  insertProject(project: { slug: string; folderPath: string; now: string }): number
+  projectBySlug(slug: string): ProjectRow | null
+  projectSlugs(): string[]
+  listProjects(): ProjectListItem[]
+  updateProject(id: number, patch: { slug?: string; folderPath?: string; archived?: boolean }, now: string): number
+  deleteProject(id: number): number
+  projectTaskCount(id: number): number
 }
+
+// The internal id never crosses the tool boundary; `slug` is the identity every call speaks.
+export type ProjectRow = {
+  id: number; slug: string; folder_path: string; created_at: string; updated_at: string; archived_at: string | null
+}
+
+export type ProjectListItem = { slug: string; folder_path: string; open: number }
 
 export type TimelineRow = { type: string; agent: string; text: string; created_at: string }
 

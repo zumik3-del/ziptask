@@ -8,14 +8,14 @@ import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus, handleListTasks
 } from './mcp/tools'
 import {
-  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, driveToDone,
+  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, testProjectId, driveToDone,
   type CreateTaskRowOpts
 } from './test-context'
 
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15 }) })
+beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
 afterEach(() => { closeTestDb(db) })
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
@@ -376,7 +376,7 @@ describe('terminal-status single source (#1445)', () => {
 describe('listTasks deterministic ordering (#1445)', () => {
   const TIE_NOW = '2026-01-01T00:00:00.000Z'
   const insertAt = (title: string, now: string) => repo.insertTask({
-    title, description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now
+    title, description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now, projectId: testProjectId(repo)
   })
 
   test('same-millisecond created_at ties break by id DESC, not by scan order', () => {
@@ -744,7 +744,7 @@ describe('TaskRepo port conformance (#812)', () => {
       expect(repo3.transaction(() => 42)).toBe(42)
       expect(repo3.expiredLeases(nowIso())).toEqual([])
       repo3.deleteTask(id)
-      expect(repo3.queuedCandidates(10, 0)).toHaveLength(0) // no queued tasks after delete
+      expect(repo3.queuedCandidates(10, testProjectId(repo3), 0)).toHaveLength(0) // no queued tasks after delete
       expect(repo3.getTaskRow(id)).toBeNull()
     } finally {
       closeTestDb(db3)

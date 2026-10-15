@@ -9,14 +9,14 @@ import {
   handleAddComment, handleListQueue, handleGetTimeline, handleListTasks, registerAllTools
 } from './mcp/tools'
 import {
-  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text,
+  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, projectStoreStubs, testProjectId,
   type CreateTaskRowOpts
 } from './test-context'
 
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15 }) })
+beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
 afterEach(() => { closeTestDb(db) })
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
@@ -24,7 +24,7 @@ describe('audit_log toggle', () => {
   function makeAuditSvc(auditLog: boolean): { db: Database; repo: TaskRepo; svc: TaskService } {
     const d = createTestDb()
     const r = new TaskRepo(d)
-    const s = new TaskService(r, { leaseTtlMin: 15, auditLog })
+    const s = new TaskService(r, { leaseTtlMin: 15, auditLog, scope: 'test' })
     return { db: d, repo: r, svc: s }
   }
 
@@ -112,13 +112,14 @@ describe('reap cooldown (#104)', () => {
        nonTerminalChildCount: () => 0,
       childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
       promoteEpicWithMirror: () => {},
-      appendEpicAuditMirror: () => {}
+      appendEpicAuditMirror: () => {},
+      ...projectStoreStubs()
     }
   }
 
   test('first read call reaps (lastReapAt=0), second read within cooldown skips', () => {
     let reapCallCount = 0
-    const svc = new TaskService(fakeStore(() => { reapCallCount++ }), { reapCooldownSec: 3600 })
+    const svc = new TaskService(fakeStore(() => { reapCallCount++ }), { reapCooldownSec: 3600, scope: 'test' })
 
     svc.getTaskView(1)
     expect(reapCallCount).toBe(1)
@@ -147,7 +148,7 @@ describe('reap cooldown (#104)', () => {
 
   test('reapCooldownSec=0 reaps on every call (no caching)', () => {
     let reapCallCount = 0
-    const svc = new TaskService(fakeStore(() => { reapCallCount++ }), { reapCooldownSec: 0 })
+    const svc = new TaskService(fakeStore(() => { reapCallCount++ }), { reapCooldownSec: 0, scope: 'test' })
 
     svc.getTaskView(1)
     expect(reapCallCount).toBe(1)
@@ -159,7 +160,7 @@ describe('reap cooldown (#104)', () => {
 
   test('public reapExpiredLeases always forces regardless of cooldown', () => {
     let reapCallCount = 0
-    const svc = new TaskService(fakeStore(() => { reapCallCount++ }), { reapCooldownSec: 3600 })
+    const svc = new TaskService(fakeStore(() => { reapCallCount++ }), { reapCooldownSec: 3600, scope: 'test' })
 
     svc.getTaskView(1)
     expect(reapCallCount).toBe(1)
@@ -174,7 +175,7 @@ describe('auto-claim ceiling (#105)', () => {
   test('low ceiling stops scan early, returns EMPTY when free task is beyond ceiling', () => {
     const db2 = createTestDb()
     const repo2 = new TaskRepo(db2)
-    const svc2 = new TaskService(repo2, { leaseTtlMin: 15, autoClaimCeiling: 100 })
+    const svc2 = new TaskService(repo2, { leaseTtlMin: 15, autoClaimCeiling: 100, scope: 'test' })
 
     for (let i = 0; i < 150; i++) {
       repo2.insertTask({
@@ -184,7 +185,8 @@ describe('auto-claim ceiling (#105)', () => {
         assignee: null,
         reporter: 'dev',
         depends_on: JSON.stringify([999]),
-        now: nowIso()
+        now: nowIso(),
+        projectId: testProjectId(repo2)
       })
     }
     const _freeId = repo2.insertTask({
@@ -194,7 +196,8 @@ describe('auto-claim ceiling (#105)', () => {
       assignee: null,
       reporter: 'dev',
       depends_on: '[]',
-      now: nowIso()
+      now: nowIso(),
+      projectId: testProjectId(repo2)
     })
 
     const res = handleClaimTask(svc2, { agent: 'agent-1' })
@@ -206,7 +209,7 @@ describe('auto-claim ceiling (#105)', () => {
   test('default ceiling finds free task beyond 100 blocked tasks', () => {
     const db2 = createTestDb()
     const repo2 = new TaskRepo(db2)
-    const svc2 = new TaskService(repo2, { leaseTtlMin: 15 })
+    const svc2 = new TaskService(repo2, { leaseTtlMin: 15, scope: 'test' })
 
     for (let i = 0; i < 150; i++) {
       repo2.insertTask({
@@ -216,7 +219,8 @@ describe('auto-claim ceiling (#105)', () => {
         assignee: null,
         reporter: 'dev',
         depends_on: JSON.stringify([999]),
-        now: nowIso()
+        now: nowIso(),
+        projectId: testProjectId(repo2)
       })
     }
     const _freeId = repo2.insertTask({
@@ -226,7 +230,8 @@ describe('auto-claim ceiling (#105)', () => {
       assignee: null,
       reporter: 'dev',
       depends_on: '[]',
-      now: nowIso()
+      now: nowIso(),
+      projectId: testProjectId(repo2)
     })
 
     const res = handleClaimTask(svc2, { agent: 'agent-1' })
@@ -286,7 +291,7 @@ describe('limit guards (#3)', () => {
 
 describe('service defaults from config (#6)', () => {
   test('defaultPriority/defaultReporter are honoured when args omit them', () => {
-    const configured = new TaskService(repo, { defaultPriority: 'p0', defaultReporter: 'human' })
+    const configured = new TaskService(repo, { defaultPriority: 'p0', defaultReporter: 'human', scope: 'test' })
     const id = json(handleCreateTask(configured, { title: 'C' })).id
     const row = getTaskRow(db, id)
     expect(row.priority).toBe('p0')
@@ -669,7 +674,7 @@ describe('TaskService error contract after the hygiene refactor (#1445)', () => 
     const id = json(handleCreateTask(svc, { title: 'LostRace', reporter: 'dev' })).id
     const raced = new TaskRepo(db)
     raced.markClaimed = () => 0
-    expect(new TaskService(raced, { leaseTtlMin: 15 }).claimTask({ agent: 'a', taskId: id }))
+    expect(new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }).claimTask({ agent: 'a', taskId: id }))
       .toEqual({ ok: false, error: { code: 'CONFLICT', message: 'version mismatch' } })
   })
 
@@ -682,7 +687,7 @@ describe('TaskService error contract after the hygiene refactor (#1445)', () => 
     const id = json(handleCreateTask(svc, { title: 'LostRace2', reporter: 'dev' })).id
     const raced = new TaskRepo(db)
     raced.transitionStatus = () => 0
-    expect(new TaskService(raced, { leaseTtlMin: 15 }).updateStatus({ id, agent: 'a', status: 'blocked', version: 1 }))
+    expect(new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }).updateStatus({ id, agent: 'a', status: 'blocked', version: 1 }))
       .toEqual({ ok: false, error: { code: 'CONFLICT', message: 'concurrent modification' } })
   })
 

@@ -3,6 +3,7 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { nowIso } from './core/tasks'
 import { openDatabase } from './db/db'
+import type { ProjectRow, TaskStore } from './core/types'
 import type { TaskRepo } from './db/repo'
 import type { TaskService } from './core/service'
 import {
@@ -16,11 +17,47 @@ export type CreateTaskRowOpts = {
   depends_on?: number[]
 }
 
+export const TEST_PROJECT_SLUG = 'test'
+
+// The seeded row every test-scoped service resolves through `scope`; a fresh DB has no projects.
+export function seedProject(db: Database, slug: string = TEST_PROJECT_SLUG): number {
+  const now = nowIso()
+  const result = db.run(
+    'INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES (?, ?, ?, ?)',
+    [slug, '', now, now]
+  )
+  return Number(result.lastInsertRowid)
+}
+
+export function testProjectId(repo: TaskRepo): number {
+  return repo.projectBySlug(TEST_PROJECT_SLUG)!.id
+}
+
+export function testProjectRow(): ProjectRow {
+  return { id: 1, slug: TEST_PROJECT_SLUG, folder_path: '', created_at: '', updated_at: '', archived_at: null }
+}
+
+// The project half of a hand-rolled TaskStore literal: only `test` resolves, so a fixture store
+// behaves like a seeded test DB without duplicating seven stubs per literal.
+export function projectStoreStubs(): Pick<TaskStore,
+  'insertProject' | 'projectBySlug' | 'projectSlugs' | 'listProjects' | 'updateProject' | 'deleteProject' | 'projectTaskCount'> {
+  return {
+    insertProject: () => 1,
+    projectBySlug: (slug: string) => slug === TEST_PROJECT_SLUG ? testProjectRow() : null,
+    projectSlugs: () => [TEST_PROJECT_SLUG],
+    listProjects: () => [],
+    updateProject: () => 0,
+    deleteProject: () => 0,
+    projectTaskCount: () => 0
+  }
+}
+
 export function createTestDb(): Database {
   const dir = '/tmp/opencode'
   mkdirSync(dir, { recursive: true })
   const path = join(dir, `ziptask-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`)
   const db = openDatabase(path)
+  seedProject(db)
   ;(db as any).__path = path
   return db
 }
@@ -43,7 +80,8 @@ export function insertTaskRow(repo: TaskRepo, opts: CreateTaskRowOpts): number {
     assignee: null,
     reporter: opts.reporter,
     depends_on: JSON.stringify(deps),
-    now
+    now,
+    projectId: testProjectId(repo)
   })
   return id
 }
