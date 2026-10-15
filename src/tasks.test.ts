@@ -650,8 +650,8 @@ describe('lease_expires_at cleared on exit from in_progress (#767)', () => {
   })
 })
 
-describe('monotonicIso per-repo (#795)', () => {
-  test('two separate TaskRepo instances have independent monotonic clocks', () => {
+describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
+  test('two TaskRepo instances share one monotonic clock, so repo B inherits repo A\'s advance', () => {
     const dbA = createTestDb()
     const repoA = new TaskRepo(dbA)
     const dbB = createTestDb()
@@ -664,14 +664,17 @@ describe('monotonicIso per-repo (#795)', () => {
         repoA.insertComment(idA, 'a', `ca${i}`)
         repoB.insertComment(idB, 'b', `cb${i}`)
       }
-      // Advance repoA's clock far ahead (500ms) by bulk-inserting comments
+      // Advance the shared clock far ahead (≈500ms) with a burst through repoA
       for (let i = 0; i < 500; i++) {
         repoA.insertComment(idA, 'a', `ca-adv${i}`)
       }
-      // The next write through repoB is the probe. Under a shared clock it would inherit
-      // repoA's advance and be stamped within a millisecond of repoA's last comment; under
-      // independent clocks it is stamped at the real wall clock, ~500 ms behind it. Reading the
-      // stored created_at keeps this a black-box check of the same property.
+      // Shipped contract (#1608): every stamp comes from one process-wide monotonic clock
+      // (monotonicNowMs in src/core/tasks.ts), so the two repos are NOT independent — repoB
+      // inherits repoA's advance. This supersedes the per-instance independence that #795
+      // pinned when TaskRepo still owned its own clock.
+      // Hence this probe through repoB must be stamped AFTER repoA's last burst stamp, not at
+      // an independent wall clock ~500 ms behind it. Reading the stored created_at keeps this a
+      // black-box check of the same property.
       repoB.insertComment(idB, 'b', 'cb-probe')
       // Verify repo A's entries are internally monotonic
       const rowsA = dbA.query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC').all(idA) as any[]
@@ -684,8 +687,11 @@ describe('monotonicIso per-repo (#795)', () => {
         expect(rowsB[i].created_at > rowsB[i - 1].created_at).toBe(true)
       }
       expect(rowsB.at(-1)!.content).toBe('cb-probe')
-      const probeAheadOfB = new Date(rowsA.at(-1)!.created_at).getTime() - new Date(rowsB.at(-1)!.created_at).getTime()
-      expect(probeAheadOfB).toBeGreaterThan(100)
+      // The shared-clock probe: the counter is strictly increasing process-wide, so repoB's
+      // last stamp lands strictly after repoA's last burst stamp (a per-instance clock would
+      // put it ~500 ms earlier here).
+      const bMinusA = new Date(rowsB.at(-1)!.created_at).getTime() - new Date(rowsA.at(-1)!.created_at).getTime()
+      expect(bMinusA).toBeGreaterThan(0)
     } finally {
       closeTestDb(dbA)
       closeTestDb(dbB)
