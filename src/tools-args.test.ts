@@ -197,7 +197,7 @@ describe('task_id 0 must not auto-pick (F1 #1040)', () => {
 
 describe('unknown-argument rejection on the other handlers (F1 #1040)', () => {
   // handleGetTemplate is not exported from src/mcp/tools.ts, so get_template is covered
-  // over the wire in src/server.test.ts ('argument contract over MCP'). The 7 exported
+  // over the wire in src/server.http.test.ts ('argument contract over MCP'). The 7 exported
   // handlers live here; every row passes args that WOULD mutate or read state if the
   // guard were absent, so the snapshot equality is a real no-fallthrough assertion.
   function rows(): Array<{ expected: string; call: (id: number) => any }> {

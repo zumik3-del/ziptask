@@ -9,7 +9,7 @@ import {
   handleAddComment, handleListQueue, handleGetTimeline, handleListTasks, registerAllTools
 } from './mcp/tools'
 import {
-  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, projectStoreStubs, testProjectId,
+  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, taskStoreStubs, testProjectId,
   type CreateTaskRowOpts
 } from './test-context'
 
@@ -91,30 +91,7 @@ describe('audit_log toggle', () => {
 
 describe('reap cooldown (#104)', () => {
   function fakeStore(reapCb?: () => void): TaskStore {
-    return {
-      getTaskRow: () => null,
-      insertTask: () => 1,
-      deleteTask: () => {},
-      listTasks: () => ({ rows: [], total: 0 }),
-      queuedCandidates: () => [],
-      depsOf: () => null,
-      statusesOf: () => new Map(),
-      batchTasks: () => new Map(),
-      markClaimed: () => 0,
-      transitionStatus: () => 0,
-      transaction: <T>(fn: () => T) => fn(),
-      expiredLeases: () => { reapCb?.(); return [] },
-      reapTransition: () => 0,
-      insertComment: () => 1,
-      auditAppend: () => {},
-       timelineEntries: () => [],
-       commentsOf: () => [],
-       nonTerminalChildCount: () => 0,
-      childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
-      promoteEpicWithMirror: () => {},
-      appendEpicAuditMirror: () => {},
-      ...projectStoreStubs()
-    }
+    return taskStoreStubs({ expiredLeases: () => { reapCb?.(); return [] } })
   }
 
   test('first read call reaps (lastReapAt=0), second read within cooldown skips', () => {

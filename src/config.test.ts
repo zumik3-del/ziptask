@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { loadSettings, DEFAULTS, type Settings } from './config'
 import { createLogger } from './logger'
 import { TaskService } from './core/service'
-import { projectStoreStubs } from './test-context'
+import { taskStoreStubs } from './test-context'
 
 const TMP = '/tmp/opencode'
 
@@ -427,33 +427,12 @@ describe('maxAttempts flow', () => {
     const settingsPath = writeSettingsJson(testDir, { maxAttempts: 5 })
     const s = loadSettings({ path: settingsPath, env: {}, argv: [] })
     // Build a minimal in-memory service to verify the value propagates
-    const svc = new TaskService({
-      getTaskRow: () => null,
+    const svc = new TaskService(taskStoreStubs({
       insertTask: (t) => {
         expect(t.maxAttempts).toBe(5)
         return 1
-      },
-      deleteTask: () => {},
-      listTasks: () => ({ rows: [], total: 0 }),
-      queuedCandidates: () => [],
-      depsOf: () => null,
-      statusesOf: () => new Map(),
-      batchTasks: () => new Map(),
-      markClaimed: () => 0,
-      transitionStatus: () => 0,
-      transaction: <T>(fn: () => T) => fn(),
-      expiredLeases: () => [],
-      reapTransition: () => 0,
-       insertComment: () => 1,
-       auditAppend: () => {},
-        timelineEntries: () => [],
-        commentsOf: () => [],
-        nonTerminalChildCount: () => 0,
-       childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
-        promoteEpicWithMirror: () => {},
-        appendEpicAuditMirror: () => {},
-        ...projectStoreStubs()
-     }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
+      }
+    }), { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
 
     const result = svc.createTask({ title: 'Flow test', reporter: 'tester' })
     expect(result.ok).toBe(true)
@@ -462,33 +441,12 @@ describe('maxAttempts flow', () => {
   test('default maxAttempts is 3 when not configured', () => {
     const s = loadSettings({ env: {}, argv: [] })
     expect(s.maxAttempts).toBe(3)
-    const svc = new TaskService({
-      getTaskRow: () => null,
+    const svc = new TaskService(taskStoreStubs({
       insertTask: (t) => {
         expect(t.maxAttempts).toBe(3)
         return 1
-      },
-      deleteTask: () => {},
-      listTasks: () => ({ rows: [], total: 0 }),
-      queuedCandidates: () => [],
-      depsOf: () => null,
-      statusesOf: () => new Map(),
-      batchTasks: () => new Map(),
-      markClaimed: () => 0,
-      transitionStatus: () => 0,
-      transaction: <T>(fn: () => T) => fn(),
-      expiredLeases: () => [],
-      reapTransition: () => 0,
-       insertComment: () => 1,
-       auditAppend: () => {},
-        timelineEntries: () => [],
-        commentsOf: () => [],
-        nonTerminalChildCount: () => 0,
-       childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
-        promoteEpicWithMirror: () => {},
-        appendEpicAuditMirror: () => {},
-        ...projectStoreStubs()
-     }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
+      }
+    }), { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
 
     const result = svc.createTask({ title: 'Default flow', reporter: 'tester' })
     expect(result.ok).toBe(true)

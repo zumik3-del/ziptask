@@ -551,7 +551,8 @@ describe('a heartbeat must not cut the in_progress segment (D-F2-3)', () => {
   // The regression signature: a lease_renewed row audited as update_status would carry an ISO
   // lease timestamp as new_value — a "status" name that does not exist. Assert the audit rows
   // directly instead of measuring segment minutes through them.
-  const driveToDone = (id: number, beats: number) => {
+  // Named apart from the shared driveToDone fixture: this one heartbeats `beats` times first.
+  const driveToDoneWithHeartbeats = (id: number, beats: number) => {
     claimOrThrow(id, HOLDER)
     for (let beat = 0; beat < beats; beat++) leaseField(id, HOLDER, versionOf(id))
     handleUpdateStatus(svc, { id, agent: HOLDER, status: 'review', version: versionOf(id) })
@@ -563,7 +564,7 @@ describe('a heartbeat must not cut the in_progress segment (D-F2-3)', () => {
 
   test('baseline: a task that never heartbeats writes claim + two update_status rows', () => {
     const quiet = createTaskRow('Quiet')
-    driveToDone(quiet, 0)
+    driveToDoneWithHeartbeats(quiet, 0)
 
     expect(countAudit(quiet, 'lease_renewed')).toBe(0)
     expect(auditActions(quiet)).toEqual(['claim', 'update_status', 'update_status'])
@@ -572,7 +573,7 @@ describe('a heartbeat must not cut the in_progress segment (D-F2-3)', () => {
 
   test('three heartbeats audit as lease_renewed, never as update_status with an ISO new_value', () => {
     const beating = createTaskRow('Beating')
-    driveToDone(beating, 3)
+    driveToDoneWithHeartbeats(beating, 3)
 
     expect(countAudit(beating, 'lease_renewed')).toBe(3)
     expect(countAudit(beating, 'update_status')).toBe(2)
@@ -593,7 +594,7 @@ describe('a heartbeat must not cut the in_progress segment (D-F2-3)', () => {
 
   test('a refused acquisition contributes no update_status row', () => {
     const control = createTaskRow('Control')
-    driveToDone(control, 0)
+    driveToDoneWithHeartbeats(control, 0)
     expect(auditActions(control)).toEqual(['claim', 'update_status', 'update_status'])
 
     const dep = createTaskRow('Dep')

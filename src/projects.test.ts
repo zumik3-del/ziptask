@@ -1,8 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { mkdirSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
 import { Database as SqliteDb } from 'bun:sqlite'
 import { openDatabase } from './db/db'
 import { MIGRATIONS } from './db/migrations'
@@ -16,7 +14,7 @@ import {
   handleListQueue, handleCreateProject, handleListProjects, handleUpdateProject,
   handleDeleteProject, handleUpdateStatus, handleAddComment, handleGetTimeline
 } from './mcp/tools'
-import { createTestDb, closeTestDb, seedProject, json, text } from './test-context'
+import { createTestDb, closeTestDb, seedProject, json, text, makeTempDbPath, removeTempDb } from './test-context'
 
 let db: Database
 let repo: TaskRepo
@@ -92,18 +90,6 @@ function okJson(res: ToolResult): any {
   return json(res)
 }
 
-function makeTempDbPath(tag: string): string {
-  const dir = '/tmp/opencode'
-  mkdirSync(dir, { recursive: true })
-  return join(dir, `ziptask-projects-${tag}-${Date.now()}-${Math.random().toString(36).slice(2)}.db`)
-}
-
-function rmTempDb(path: string) {
-  try { rmSync(path) } catch {}
-  try { rmSync(path + '-wal') } catch {}
-  try { rmSync(path + '-shm') } catch {}
-}
-
 // replay the frozen v4 prefix, stamp 22, and insert pre-existing rows through raw SQL
 function buildV4Db(path: string): void {
   const raw = new SqliteDb(path)
@@ -125,17 +111,17 @@ function buildV4Db(path: string): void {
 
 describe('projects: fresh DB and migration v4 -> v5 (ADR D1)', () => {
   test('a fresh DB has zero projects (the legacy row is guarded by WHERE EXISTS)', () => {
-    const path = makeTempDbPath('fresh')
+    const path = makeTempDbPath('projects-fresh')
     try {
       const fresh = openDatabase(path)
       expect((fresh.query('SELECT COUNT(*) AS n FROM projects').get() as { n: number }).n).toBe(0)
       expect((fresh.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number }).version).toBe(MIGRATIONS.length)
       fresh.close()
-    } finally { rmTempDb(path) }
+    } finally { removeTempDb(path) }
   })
 
   test('v4 -> v5 upgrade parks every pre-existing row in the reserved legacy project', () => {
-    const path = makeTempDbPath('upgrade')
+    const path = makeTempDbPath('projects-upgrade')
     try {
       buildV4Db(path)
       const upgraded = openDatabase(path)
@@ -168,7 +154,7 @@ describe('projects: fresh DB and migration v4 -> v5 (ADR D1)', () => {
       expect(projectFk[0].on_delete).toBe('NO ACTION')
       expect(fks.some(f => f.from === 'epic_id' && f.table === 'tasks')).toBe(true)
       upgraded.close()
-    } finally { rmTempDb(path) }
+    } finally { removeTempDb(path) }
   })
 
   test('migration statements 1..22 stay byte-identical (append-only)', () => {
@@ -481,7 +467,7 @@ describe('projects: fail-closed refusals (ADR D2, E1-E4)', () => {
       expect(text(shape)).toBe("INVALID: unknown project 'nope' (known: alpha, beta, test)")
     }
 
-    const emptyPath = makeTempDbPath('noprojects')
+    const emptyPath = makeTempDbPath('projects-noprojects')
     try {
       const fresh = openDatabase(emptyPath)
       const emptySvc = new TaskService(new TaskRepo(fresh), { leaseTtlMin: 15 })
@@ -492,7 +478,7 @@ describe('projects: fail-closed refusals (ADR D2, E1-E4)', () => {
         "INVALID: unknown project '*' (no projects defined; create one with create_project)"
       )
       fresh.close()
-    } finally { rmTempDb(emptyPath) }
+    } finally { removeTempDb(emptyPath) }
   })
 
   test('by-id shapes do not declare project: passing it is an unknown-argument refusal (E4)', () => {
