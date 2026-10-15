@@ -1,12 +1,12 @@
 import type { Task, TaskStatus } from './tasks'
-import { TERMINAL_STATUSES, nowIso, isoFromNow, sanitizePipe, clampLimit } from './tasks'
+import { TERMINAL_STATUSES, nowIso, isoFromNow, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './tasks'
 import type { ProjectListItem, ProjectRow, TaskStore, TimelineRow, CommentRow, SvcResult, SvcError, UpdateStatusData } from './types'
-import { parseDeps, createsCycle, depsSatisfied } from './deps'
+import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
 import { LeaseReaper } from './reaper'
-import { createTaskGuard, updateStatusGuard } from './guards'
-import { requiredError, tooLongError, epicError, MAX_AGENT, MAX_CONTENT } from './validation'
+import { createTaskGuard, updateStatusGuard, claimEligibilityError } from './guards'
+import { requiredError, tooLongError } from './validation'
 import { resolveProject, createProject, updateProject, deleteProject } from './projects'
 import {
   MINUTE_MS, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
@@ -67,19 +67,11 @@ export class TaskService {
   }
 
   private _agentError(agent: string): SvcError | null {
-    return requiredError(agent, 'agent') ?? tooLongError(agent, MAX_AGENT, 'agent')
+    return requiredError(agent, 'agent') ?? tooLongError(agent, MAX_AGENT_LENGTH, 'agent')
   }
 
   private _contentError(content: string): SvcError | null {
-    return requiredError(content, 'content') ?? tooLongError(content, MAX_CONTENT, 'content')
-  }
-
-  private _epicError(task: Task, message: string): SvcError | null {
-    return epicError(task, message)
-  }
-
-  private _atomic<T>(fn: () => T): T {
-    return this.store.transaction(fn)
+    return requiredError(content, 'content') ?? tooLongError(content, MAX_CONTENT_LENGTH, 'content')
   }
 
   // The single resolution point: every enumerating call funnels its `project` (or the test-only
@@ -108,7 +100,7 @@ export class TaskService {
     const reporter = args.reporter ?? this.defaultReporter
     const now = nowIso()
     const epicId = args.epic_id ?? null
-    return this._atomic((): SvcResult<{ id: number; status: 'queued' }> => {
+    return this.store.transaction((): SvcResult<{ id: number; status: 'queued' }> => {
       const id = this.store.insertTask({
         title: args.title,
         description: args.description ?? null,
@@ -144,10 +136,7 @@ export class TaskService {
     if (!task) return fail('NOT_FOUND')
     const deps = parseDeps(task.depends_on)
     const depStatuses = this.store.statusesOf(deps)
-    const blockedBy = deps.filter(d => {
-      const s = depStatuses.get(d)
-      return s === undefined || !TERMINAL_STATUSES.includes(s)
-    })
+    const blockedBy = blockingDeps(depStatuses, deps)
     // D3: derived roll-up for epics
     if (task.is_epic) {
       const counts = this.store.childStatusCounts(id)
@@ -198,10 +187,8 @@ export class TaskService {
       task = this.store.getTaskRow(args.taskId)
       if (!task) return fail('NOT_FOUND')
       if (task.status !== 'queued' && task.status !== 'blocked') return fail('CONFLICT', `status=${task.status}`)
-      const epicErr = this._epicError(task, `#${task.id} is an epic, not claimable`)
-      if (epicErr) return fail(epicErr)
-      const deps = parseDeps(task.depends_on)
-      if (!depsSatisfied(this.store.statusesOf(deps), deps)) return fail('BLOCKED', 'dependencies not satisfied')
+      const claimErr = claimEligibilityError(task, this.store)
+      if (claimErr) return fail(claimErr)
     } else if (projectId !== undefined) {
       task = readyCandidates(this.store, 1, this.autoClaimCeiling, projectId)[0] ?? null
     }
@@ -232,16 +219,9 @@ export class TaskService {
     this.reaper.reap()
     const task = this.store.getTaskRow(args.id)
     if (!task) return fail('NOT_FOUND')
-    const guard = this._updateStatusGuard(args, task, refund)
+    const guard = updateStatusGuard(args, task, refund, this.store)
     if (guard) return fail(guard)
     return this._applyTransition(args, task, refund)
-  }
-
-  // All refusals that do not touch the row: version CAS, the lease self-edge/renew rules, the
-  // transition table, claim-grade eligibility for a non-renewal in_progress, the epic refund ban
-  // and the epic terminal close-guard. Returns the first failure or null.
-  private _updateStatusGuard(args: UpdateStatusArgs, task: Task, refund: boolean): SvcError | null {
-    return updateStatusGuard(args, task, refund, this.store)
   }
 
   private _applyTransition(args: UpdateStatusArgs, task: Task, refund: boolean): SvcResult<UpdateStatusData> {
@@ -252,7 +232,7 @@ export class TaskService {
     // D6: mirror subtask_done/subtask_failed onto the parent epic
     const subtaskMirror = args.status === 'done' ? 'subtask_done' : args.status === 'failed' ? 'subtask_failed' : null
 
-    return this._atomic((): SvcResult<UpdateStatusData> => {
+    return this.store.transaction((): SvcResult<UpdateStatusData> => {
       // CAS on the version read in the guard when the caller omitted it, so an omitted version is not a
       // lost update: a write landing between the read and here still fails as CONFLICT.
       const expectedVersion = args.version ?? task.version

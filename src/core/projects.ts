@@ -4,6 +4,10 @@ import { fail, ok } from './result'
 import { requiredError } from './validation'
 import { nowIso } from './tasks'
 
+// Only the project-table reads and writes these verbs perform; the task half of the store is out of reach.
+type ProjectStore = Pick<TaskStore,
+  'projectBySlug' | 'projectSlugs' | 'insertProject' | 'updateProject' | 'deleteProject' | 'projectTaskCount'>
+
 export const PROJECT_SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]{0,31}$/
 export const PROJECT_SLUG_MAX = 32
 export const RESERVED_PROJECT_SLUG = 'legacy'
@@ -24,6 +28,7 @@ export function normalizeFolderPath(input: string): SvcResult<string> {
   return ok(resolve(input))
 }
 
+// The single slug validation point: pattern, then the reserved word.
 function slugError(slug: string): SvcError | null {
   if (!PROJECT_SLUG_PATTERN.test(slug)) return { code: 'INVALID', message: `slug must match ${PROJECT_SLUG_PATTERN.source}` }
   if (slug === RESERVED_PROJECT_SLUG) {
@@ -34,7 +39,7 @@ function slugError(slug: string): SvcError | null {
 
 // Enumeration scope: absent is a refusal, an unknown slug lists the known ones so a typo is
 // self-correcting in one round trip. `project: ''`/`'*'` are ordinary unknown slugs.
-export function resolveProject(store: TaskStore, slug?: string): SvcResult<ProjectRow> {
+export function resolveProject(store: ProjectStore, slug?: string): SvcResult<ProjectRow> {
   if (slug === undefined) return fail('INVALID', 'project required')
   const project = store.projectBySlug(slug)
   if (project) return ok(project)
@@ -46,20 +51,23 @@ export function resolveProject(store: TaskStore, slug?: string): SvcResult<Proje
 }
 
 // A project mutation names one project; an unknown slug is NOT_FOUND, not an unknown-scope refusal.
-function requireProject(store: TaskStore, slug: string): SvcResult<ProjectRow> {
+function requireProject(store: ProjectStore, slug: string): SvcResult<ProjectRow> {
   const project = store.projectBySlug(slug)
   return project ? ok(project) : fail('NOT_FOUND')
 }
 
-export function createProject(store: TaskStore, args: { slug?: string; folder_path?: string }): SvcResult<{ slug: string }> {
+export function createProject(store: ProjectStore, args: { slug?: string; folder_path?: string }): SvcResult<{ slug: string }> {
   const folderPath = args.folder_path ?? ''
   const folderErr = requiredError(folderPath, 'folder_path')
   if (folderErr) return fail(folderErr)
   const normalized = normalizeFolderPath(folderPath)
   if (!normalized.ok) return fail(normalized.error)
-  const slug = args.slug ?? normalizeSlug(basename(normalized.data))
-  if (args.slug === undefined && !PROJECT_SLUG_PATTERN.test(slug)) {
-    return fail('INVALID', 'slug required (cannot derive from folder name)')
+  let slug = args.slug
+  if (slug === undefined) {
+    // normalizeSlug only ever emits the pattern's charset, so a derived slug is empty or valid:
+    // emptiness is the entire derivation rule, and slugError below owns the pattern.
+    slug = normalizeSlug(basename(normalized.data))
+    if (slug === '') return fail('INVALID', 'slug required (cannot derive from folder name)')
   }
   const invalid = slugError(slug)
   if (invalid) return fail(invalid)
@@ -68,7 +76,7 @@ export function createProject(store: TaskStore, args: { slug?: string; folder_pa
   return ok({ slug })
 }
 
-export function updateProject(store: TaskStore, args: {
+export function updateProject(store: ProjectStore, args: {
   project: string; slug?: string; folder_path?: string; archived?: boolean
 }): SvcResult<{ slug: string }> {
   const found = requireProject(store, args.project)
@@ -96,7 +104,7 @@ export function updateProject(store: TaskStore, args: {
   return ok({ slug: patch.slug ?? found.data.slug })
 }
 
-export function deleteProject(store: TaskStore, project: string): SvcResult<{ deleted: string }> {
+export function deleteProject(store: ProjectStore, project: string): SvcResult<{ deleted: string }> {
   const found = requireProject(store, project)
   if (!found.ok) return fail(found.error)
   const count = store.projectTaskCount(found.data.id)

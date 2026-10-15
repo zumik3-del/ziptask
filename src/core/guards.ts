@@ -1,9 +1,13 @@
 import type { Task, TaskStatus } from './tasks'
-import { isValidTransition, TERMINAL_STATUSES } from './tasks'
+import { isValidTransition, TERMINAL_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH } from './tasks'
 import type { TaskStore, SvcError } from './types'
 import { parseDeps, depsSatisfied } from './deps'
-import { tooLongError, epicError, MAX_TITLE, MAX_AGENT } from './validation'
+import { requiredError, tooLongError, epicError } from './validation'
 import { RESERVED_PROJECT_SLUG } from './projects'
+
+// Only the reads a guard performs: a guard never writes, so it cannot reach the mutating half.
+type GuardStore = Pick<TaskStore, 'batchTasks' | 'getTaskRow' | 'statusesOf' | 'nonTerminalChildCount'>
+type DepsStore = Pick<TaskStore, 'statusesOf'>
 
 export type CreateTaskInput = {
   title: string; description?: string; priority?: string; assignee?: string
@@ -17,20 +21,34 @@ export type UpdateStatusInput = {
   comment?: string; renew?: boolean; reset_attempts?: boolean
 }
 
-// -- length / required helpers (pure, no-store) -----------------------------
-// (moved to core/validation.ts)
+// -- claim-grade eligibility -------------------------------------------------
+
+// An epic is never leased. The exact wire string is written here once, so claim_task and the
+// update_status acquisition guard can never drift apart.
+export function epicNotClaimableError(task: Task): SvcError | null {
+  return task.is_epic ? { code: 'INVALID', message: `#${task.id} is an epic, not claimable` } : null
+}
+
+// The full claim precondition set: not an epic, deps satisfied.
+export function claimEligibilityError(task: Task, store: DepsStore): SvcError | null {
+  const epicErr = epicNotClaimableError(task)
+  if (epicErr) return epicErr
+  const deps = parseDeps(task.depends_on)
+  if (!depsSatisfied(store.statusesOf(deps), deps)) return { code: 'BLOCKED', message: 'dependencies not satisfied' }
+  return null
+}
 
 // -- create_task guard -------------------------------------------------------
 
 // Pure precondition set for create_task: title/actor lengths, the epic↔(epic_id|deps) conflicts,
 // the dep-on-epic rule, and the epic_id target shape. Returns the first failure or null.
-export function createTaskGuard(args: CreateTaskInput, store: TaskStore): SvcError | null {
-  if (!args.title.trim()) return { code: 'INVALID', message: 'title required' }
-  if (args.title.length > MAX_TITLE) return { code: 'INVALID', message: 'title too long' }
-  const reporterErr = tooLongError(args.reporter ?? args.defaultReporter, MAX_AGENT, 'reporter')
+export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcError | null {
+  const titleErr = requiredError(args.title, 'title') ?? tooLongError(args.title, MAX_TITLE_LENGTH, 'title')
+  if (titleErr) return titleErr
+  const reporterErr = tooLongError(args.reporter ?? args.defaultReporter, MAX_AGENT_LENGTH, 'reporter')
   if (reporterErr) return reporterErr
   if (args.assignee !== undefined) {
-    const assigneeErr = tooLongError(args.assignee, MAX_AGENT, 'assignee')
+    const assigneeErr = tooLongError(args.assignee, MAX_AGENT_LENGTH, 'assignee')
     if (assigneeErr) return assigneeErr
   }
   const deps = args.depends_on ?? []
@@ -72,7 +90,7 @@ export function createTaskGuard(args: CreateTaskInput, store: TaskStore): SvcErr
 // All refusals that do not touch the row: version CAS, the lease self-edge/renew rules, the
 // transition table, claim-grade eligibility for a non-renewal in_progress, the epic refund ban
 // and the epic terminal close-guard. Returns the first failure or null.
-export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: boolean, store: TaskStore): SvcError | null {
+export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: boolean, store: GuardStore): SvcError | null {
   // version is optional: when omitted the read-time check is skipped, but the write still CASes on
   // the version read here, so a concurrent modification between read and write refuses as CONFLICT.
   if (args.version !== undefined && task.version !== args.version) {
@@ -101,17 +119,15 @@ export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: b
   }
   // acquiring a lease is a claim-verb concern: update_status must not stay a second, unguarded
   // door to in_progress. The claimTask precondition set maps 1:1 — NOT_FOUND is covered by the
-  // row read, the status window by isValidTransition, so is_epic and deps are the only two
-  // missing checks. review -> in_progress is a deliberate superset (work sent back): its deps are
-  // provably still satisfied, because deps are immutable after create and terminal statuses have
-  // no outgoing edge.
+  // row read, the status window by isValidTransition, so is_epic and deps are the rest. Both use
+  // claimEligibilityError; review -> in_progress is a deliberate superset (work sent back) and asks
+  // only for the epic half, because its deps are provably still satisfied: deps are immutable after
+  // create and terminal statuses have no outgoing edge.
   if (args.status === 'in_progress' && !selfEdge) {
-    const epicErr = epicError(task, `#${task.id} is an epic, not claimable`)
-    if (epicErr) return epicErr
-    if (task.status === 'queued' || task.status === 'blocked') {
-      const deps = parseDeps(task.depends_on)
-      if (!depsSatisfied(store.statusesOf(deps), deps)) return { code: 'BLOCKED', message: 'dependencies not satisfied' }
-    }
+    const eligibilityErr = task.status === 'queued' || task.status === 'blocked'
+      ? claimEligibilityError(task, store)
+      : epicNotClaimableError(task)
+    if (eligibilityErr) return eligibilityErr
   }
   // an epic is never leased (the in_progress acquisition guard above), so its attempts is always 0 and
   // a refund here would be a no-op write with a misleading audit row. Terminal statuses need no guard:
