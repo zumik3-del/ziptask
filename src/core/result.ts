@@ -10,14 +10,6 @@ export function fail<T = never>(codeOrError: ErrorCode | SvcError, message = '')
   return { ok: false, error: typeof codeOrError === 'string' ? { code: codeOrError, message } : codeOrError }
 }
 
-export function mapResult<A, B>(result: SvcResult<A>, f: (data: A) => B): SvcResult<B> {
-  return result.ok ? ok(f(result.data)) : result
-}
-
-export function flatMapResult<A, B>(result: SvcResult<A>, f: (data: A) => SvcResult<B>): SvcResult<B> {
-  return result.ok ? f(result.data) : result
-}
-
 export function foldResult<A, B>(result: SvcResult<A>, onOk: (data: A) => B, onErr: (error: SvcError) => B): B {
   return result.ok ? onOk(result.data) : onErr(result.error)
 }

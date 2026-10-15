@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { ok, fail, mapResult, flatMapResult, foldResult, formatError } from './core/result'
+import { ok, fail, foldResult, formatError } from './core/result'
 
 describe('result helpers', () => {
   test('ok/fail build the tagged union (fail accepts code+message or an SvcError)', () => {
@@ -15,11 +15,7 @@ describe('result helpers', () => {
     expect(formatError({ code: 'CHILDREN', message: '2 sub-tasks not terminal' })).toBe('CHILDREN: 2 sub-tasks not terminal')
   })
 
-  test('map/flatMap/fold touch only the ok branch', () => {
-    expect(mapResult(ok(2), (n) => n * 3)).toEqual({ ok: true, data: 6 })
-    expect(mapResult(fail('EMPTY', 'x'), (n: number) => n)).toEqual({ ok: false, error: { code: 'EMPTY', message: 'x' } })
-    expect(flatMapResult(ok(2), (n) => ok(n + 1))).toEqual({ ok: true, data: 3 })
-    expect(flatMapResult(fail('EMPTY', 'x'), (n: number) => ok(n))).toEqual({ ok: false, error: { code: 'EMPTY', message: 'x' } })
+  test('fold touches only the ok branch', () => {
     expect(foldResult(ok(2), (n) => `v${n}`, () => 'err')).toBe('v2')
     expect(foldResult(fail<number>('EMPTY', 'x'), (n) => `v${n}`, (e) => e.code)).toBe('EMPTY')
   })
