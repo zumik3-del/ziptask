@@ -1,7 +1,6 @@
 export const SECOND_MS = 1000
 export const MINUTE_MS = 60_000
 export const HOUR_MS = 3_600_000
-export const DAY_MINUTES = 1440
 
 export const DEFAULT_DB_PATH = './data/ziptask.db'
 export const DEFAULT_HOST = '127.0.0.1'
@@ -24,5 +23,4 @@ export const CANDIDATES_PAGE_SIZE = 100
 export const TERMINAL_STATUS_VALUES = Object.freeze(['done', 'failed', 'canceled'] as const)
 export const TERMINAL_STATUSES_SQL = `(${TERMINAL_STATUS_VALUES.map(status => `'${status}'`).join(', ')})`
 export const SESSION_CLEANUP_INTERVAL_MS = MINUTE_MS
-export const DEFAULT_METRICS_PERIOD_HOURS = 24
 export const TASK_PRIORITIES = Object.freeze(['p0', 'p1', 'p2', 'p3'] as const)

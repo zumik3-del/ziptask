@@ -1,10 +1,13 @@
 import type { Task, TaskStatus } from './tasks'
-import { isValidTransition, TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './tasks'
-import type { TaskStore, TimelineRow, CommentRow, SvcResult, SvcError, UpdateStatusData } from './types'
+import { TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit } from './tasks'
+import type { ProjectListItem, ProjectRow, TaskStore, TimelineRow, CommentRow, SvcResult, SvcError, UpdateStatusData } from './types'
 import { parseDeps, createsCycle, depsSatisfied } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
 import { LeaseReaper } from './reaper'
+import { createTaskGuard, updateStatusGuard } from './guards'
+import { requiredError, tooLongError, epicError, MAX_AGENT, MAX_CONTENT } from './validation'
+import { resolveProject, createProject, updateProject, deleteProject } from './projects'
 import {
   MINUTE_MS, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
   DEFAULT_AUDIT_LOG, DEFAULT_REAP_COOLDOWN_SEC, DEFAULT_AUTO_CLAIM_CEILING, DEFAULT_PRIORITY,
@@ -13,12 +16,20 @@ import {
 
 type CreateTaskArgs = {
   title: string; description?: string; priority?: string; assignee?: string
-  depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
+  depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number; project?: string
+}
+
+type ListTasksArgs = {
+  assignee?: string; status?: string; updated_since?: number; epic_id?: number
+  limit?: number; ids?: number[]; project?: string
 }
 
 type UpdateStatusArgs = {
   id: number; agent: string; status: TaskStatus; version?: number; comment?: string; renew?: boolean; reset_attempts?: boolean
 }
+
+type ListQueueArgs = { limit?: number; project?: string }
+type ClaimTaskArgs = { agent: string; taskId?: number; leaseTtlMin?: number; project?: string }
 
 export class TaskService {
   private readonly leaseTtlMin: number
@@ -30,11 +41,13 @@ export class TaskService {
   private readonly listLimit: number
   private readonly timelineLimit: number
   private readonly queueLimit: number
+  private readonly scope: string | undefined
   private readonly reaper: LeaseReaper
 
   constructor(private store: TaskStore, opts?: {
     leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number
     defaultPriority?: string; defaultReporter?: string; listLimit?: number; timelineLimit?: number; queueLimit?: number
+    scope?: string
   }) {
     this.leaseTtlMin = opts?.leaseTtlMin ?? DEFAULT_LEASE_TTL_MIN
     this.maxAttempts = opts?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
@@ -45,6 +58,7 @@ export class TaskService {
     this.listLimit = opts?.listLimit ?? DEFAULT_LIST_LIMIT
     this.timelineLimit = opts?.timelineLimit ?? DEFAULT_TIMELINE_LIMIT
     this.queueLimit = opts?.queueLimit ?? DEFAULT_QUEUE_LIMIT
+    this.scope = opts?.scope
     this.reaper = new LeaseReaper(store, opts?.reapCooldownSec ?? DEFAULT_REAP_COOLDOWN_SEC, this.auditLog)
   }
 
@@ -52,66 +66,43 @@ export class TaskService {
     return new Date(Date.now() + ttlMin * MINUTE_MS).toISOString()
   }
 
-  private _requiredError(value: string, field: string): SvcError | null {
-    return value.trim() ? null : { code: 'INVALID', message: `${field} required` }
-  }
-
-  private _tooLongError(value: string, max: number, field: string): SvcError | null {
-    return value.length > max ? { code: 'INVALID', message: `${field} too long` } : null
-  }
-
   private _agentError(agent: string): SvcError | null {
-    return this._requiredError(agent, 'agent') ?? this._tooLongError(agent, MAX_AGENT_LENGTH, 'agent')
+    return requiredError(agent, 'agent') ?? tooLongError(agent, MAX_AGENT, 'agent')
   }
 
   private _contentError(content: string): SvcError | null {
-    return this._requiredError(content, 'content') ?? this._tooLongError(content, MAX_CONTENT_LENGTH, 'content')
+    return requiredError(content, 'content') ?? tooLongError(content, MAX_CONTENT, 'content')
   }
 
-  // The per-door wording differs (claim, renew, refund), so the caller supplies it verbatim;
-  // only the epic predicate and the rejection shape are centralized.
   private _epicError(task: Task, message: string): SvcError | null {
-    return task.is_epic ? { code: 'INVALID', message } : null
+    return epicError(task, message)
   }
 
   private _atomic<T>(fn: () => T): T {
     return this.store.transaction(fn)
   }
 
+  // The single resolution point: every enumerating call funnels its `project` (or the test-only
+  // `scope` fallback) through here, so a missing or unknown slug refuses identically everywhere.
+  private _resolveProject(project?: string): SvcResult<ProjectRow> {
+    return resolveProject(this.store, project ?? this.scope)
+  }
+
   // Pure precondition set for create_task: title/actor lengths, the epic↔(epic_id|deps) conflicts,
-  // the dep-on-epic rule, and the epic_id target shape. Returns the first failure or null.
-  private _createTaskGuard(args: CreateTaskArgs): SvcError | null {
-    if (!args.title.trim()) return { code: 'INVALID', message: 'title required' }
-    if (args.title.length > MAX_TITLE_LENGTH) return { code: 'INVALID', message: 'title too long' }
-    const reporterErr = this._tooLongError(args.reporter ?? this.defaultReporter, MAX_AGENT_LENGTH, 'reporter')
-    if (reporterErr) return reporterErr
-    if (args.assignee !== undefined) {
-      const assigneeErr = this._tooLongError(args.assignee, MAX_AGENT_LENGTH, 'assignee')
-      if (assigneeErr) return assigneeErr
-    }
-    const deps = args.depends_on ?? []
-    // D5: epic cannot coexist with epic_id or depends_on
-    if (args.epic && args.epic_id !== undefined) return { code: 'INVALID', message: 'epic cannot have a parent epic' }
-    if (args.epic && deps.length > 0) return { code: 'INVALID', message: 'epic cannot have depends_on' }
-    // D5: rejects depends_on pointing at an epic
-    if (deps.length > 0) {
-      const batch = this.store.batchTasks(deps)
-      for (const [d, t] of batch) {
-        if (t?.is_epic) return { code: 'INVALID', message: `dependencies on epic tasks not allowed (#${d})` }
-      }
-    }
-    // D5: epic_id target must exist, be non-terminal, and have epic_id IS NULL
-    if (args.epic_id !== undefined) {
-      const target = this.store.getTaskRow(args.epic_id)
-      if (!target) return { code: 'NOT_FOUND', message: '' }
-      if (TERMINAL_STATUSES.includes(target.status)) return { code: 'INVALID', message: 'cannot attach to a terminal task' }
-      if (target.epic_id !== null) return { code: 'INVALID', message: 'cannot attach to a sub-task (no nesting)' }
-    }
-    return null
+  // the dep-on-epic rule, the epic_id target shape, and the project scope. Returns the first failure or null.
+  private _createTaskGuard(args: CreateTaskArgs, project: ProjectRow): SvcError | null {
+    return createTaskGuard({
+      ...args,
+      defaultReporter: this.defaultReporter,
+      project: project.slug,
+      projectArchived: project.archived_at !== null
+    }, this.store)
   }
 
   createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' }> {
-    const guard = this._createTaskGuard(args)
+    const project = this._resolveProject(args.project)
+    if (!project.ok) return fail(project.error)
+    const guard = this._createTaskGuard(args, project.data)
     if (guard) return fail(guard)
     const deps = args.depends_on ?? []
     const reporter = args.reporter ?? this.defaultReporter
@@ -128,7 +119,8 @@ export class TaskService {
         now,
         maxAttempts: this.maxAttempts,
         epicId: epicId ?? undefined,
-        isEpic: args.epic
+        isEpic: args.epic,
+        projectId: project.data.id
       })
       if (createsCycle((depId) => this.store.depsOf(depId), id, deps)) {
         this.store.deleteTask(id)
@@ -166,28 +158,39 @@ export class TaskService {
     return ok({ task, blockedBy })
   }
 
-  listTasks(args: { assignee?: string; status?: string; updated_since?: number; epic_id?: number; limit?: number; ids?: number[] }): { tasks: ReadonlyArray<Readonly<Task>>; total: number } | { items: Array<{ id: number; task: Readonly<Task> | null }>; total: number } {
-    this.reaper.reapIfStale()
+  listTasks(args: ListTasksArgs): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number } | { items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
     if (args.ids !== undefined && args.ids.length > 0) {
+      this.reaper.reapIfStale()
       const batch = this.store.batchTasks(args.ids)
-      return {
+      return ok({
         items: args.ids.map(id => ({ id, task: batch.get(id) ?? null })),
         total: args.ids.length
-      }
+      })
     }
+    const project = this._resolveProject(args.project)
+    if (!project.ok) return fail(project.error)
+    this.reaper.reapIfStale()
     const { rows, total } = this.store.listTasks({
       assignee: args.assignee,
       status: args.status,
       updatedSinceIso: args.updated_since !== undefined ? new Date(args.updated_since).toISOString() : undefined,
       epicId: args.epic_id,
-      limit: clampLimit(args.limit, this.listLimit)
+      limit: clampLimit(args.limit, this.listLimit),
+      projectId: project.data.id
     })
-    return { tasks: rows, total }
+    return ok({ tasks: rows, total })
   }
 
-  claimTask(args: { agent: string; taskId?: number; leaseTtlMin?: number }): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> {
+  claimTask(args: ClaimTaskArgs): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> {
     const agentErr = this._agentError(args.agent)
     if (agentErr) return fail(agentErr)
+    // Only the auto-pick branch enumerates, so only it resolves a scope; a by-id claim stays unscoped.
+    let projectId: number | undefined
+    if (args.taskId === undefined) {
+      const project = this._resolveProject(args.project)
+      if (!project.ok) return fail(project.error)
+      projectId = project.data.id
+    }
     this.reaper.reap()
     let task: Task | null = null
 
@@ -199,8 +202,8 @@ export class TaskService {
       if (epicErr) return fail(epicErr)
       const deps = parseDeps(task.depends_on)
       if (!depsSatisfied(this.store.statusesOf(deps), deps)) return fail('BLOCKED', 'dependencies not satisfied')
-    } else {
-      task = readyCandidates(this.store, 1, this.autoClaimCeiling)[0] ?? null
+    } else if (projectId !== undefined) {
+      task = readyCandidates(this.store, 1, this.autoClaimCeiling, projectId)[0] ?? null
     }
 
     if (!task) return fail('EMPTY', 'no claimable tasks')
@@ -238,59 +241,7 @@ export class TaskService {
   // transition table, claim-grade eligibility for a non-renewal in_progress, the epic refund ban
   // and the epic terminal close-guard. Returns the first failure or null.
   private _updateStatusGuard(args: UpdateStatusArgs, task: Task, refund: boolean): SvcError | null {
-    // version is optional: when omitted the read-time check is skipped, but the write still CASes on
-    // the version read here, so a concurrent modification between read and write refuses as CONFLICT.
-    if (args.version !== undefined && task.version !== args.version) {
-      return { code: 'CONFLICT', message: `expected version ${task.version}, got ${args.version}` }
-    }
-
-    // Lease heartbeat: only the holder re-arms its own in_progress lease. The reap above is the fence,
-    // so a late heartbeat sees a requeued task and fails here instead of resurrecting the lease.
-    const selfEdge = task.status === 'in_progress' && args.status === 'in_progress'
-    const renewal = selfEdge && args.renew === true
-    if (args.renew === true && !selfEdge) {
-      return { code: 'INVALID', message: 'renew requires status=in_progress on an in_progress task' }
-    }
-    // the self-edge exists in VALID_TRANSITIONS; without the flag it stays unreachable so a
-    // typo'd in_progress cannot silently become a lease bump
-    if (selfEdge && !renewal) {
-      return { code: 'INVALID', message: 'in_progress → in_progress requires renew: true' }
-    }
-    if (!isValidTransition(task.status, args.status)) {
-      return { code: 'INVALID', message: `${task.status} → ${args.status}` }
-    }
-    if (renewal) {
-      const epicErr = this._epicError(task, `#${task.id} is an epic`)
-      if (epicErr) return epicErr
-      if (task.assignee !== args.agent) return { code: 'CONFLICT', message: `lease held by ${task.assignee}` }
-    }
-    // acquiring a lease is a claim-verb concern: update_status must not stay a second, unguarded
-    // door to in_progress. The claimTask precondition set maps 1:1 — NOT_FOUND is covered by the
-    // row read, the status window by isValidTransition, so is_epic and deps are the only two
-    // missing checks. review -> in_progress is a deliberate superset (work sent back): its deps are
-    // provably still satisfied, because deps are immutable after create and terminal statuses have
-    // no outgoing edge.
-    if (args.status === 'in_progress' && !selfEdge) {
-      const epicErr = this._epicError(task, `#${task.id} is an epic, not claimable`)
-      if (epicErr) return epicErr
-      if (task.status === 'queued' || task.status === 'blocked') {
-        const deps = parseDeps(task.depends_on)
-        if (!depsSatisfied(this.store.statusesOf(deps), deps)) return { code: 'BLOCKED', message: 'dependencies not satisfied' }
-      }
-    }
-    // an epic is never leased (the in_progress acquisition guard above), so its attempts is always 0 and
-    // a refund here would be a no-op write with a misleading audit row. Terminal statuses need no guard:
-    // they have no outgoing edge, so isValidTransition refuses them all.
-    if (refund) {
-      const epicErr = this._epicError(task, `cannot reset attempts on epic #${task.id}`)
-      if (epicErr) return epicErr
-    }
-    // D3: epic terminal guard — reject done/failed while non-terminal children exist
-    if (task.is_epic && TERMINAL_STATUSES.includes(args.status)) {
-      const open = this.store.nonTerminalChildCount(args.id)
-      if (open > 0) return { code: 'CHILDREN', message: `${open} sub-tasks not terminal` }
-    }
-    return null
+    return updateStatusGuard(args, task, refund, this.store)
   }
 
   private _applyTransition(args: UpdateStatusArgs, task: Task, refund: boolean): SvcResult<UpdateStatusData> {
@@ -339,10 +290,28 @@ export class TaskService {
     })
   }
 
-  listQueue(args: { limit?: number }): ReadonlyArray<Readonly<Task>> {
+  listQueue(args: ListQueueArgs): SvcResult<ReadonlyArray<Readonly<Task>>> {
+    const project = this._resolveProject(args.project)
+    if (!project.ok) return fail(project.error)
     this.reaper.reapIfStale()
     const limit = clampLimit(args.limit, this.queueLimit)
-    return readyCandidates(this.store, limit, this.autoClaimCeiling)
+    return ok(readyCandidates(this.store, limit, this.autoClaimCeiling, project.data.id))
+  }
+
+  createProject(args: { slug?: string; folder_path?: string }): SvcResult<{ slug: string }> {
+    return createProject(this.store, args)
+  }
+
+  listProjects(): ReadonlyArray<ProjectListItem> {
+    return this.store.listProjects()
+  }
+
+  updateProject(args: { project: string; slug?: string; folder_path?: string; archived?: boolean }): SvcResult<{ slug: string }> {
+    return updateProject(this.store, args)
+  }
+
+  deleteProject(project: string): SvcResult<{ deleted: string }> {
+    return deleteProject(this.store, project)
   }
 
   addComment(args: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {

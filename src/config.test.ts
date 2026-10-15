@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { loadSettings, DEFAULTS, type Settings } from './config'
 import { createLogger } from './logger'
 import { TaskService } from './core/service'
+import { projectStoreStubs } from './test-context'
 
 const TMP = '/tmp/opencode'
 
@@ -371,8 +372,9 @@ describe('maxAttempts flow', () => {
         nonTerminalChildCount: () => 0,
        childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
         promoteEpicWithMirror: () => {},
-       appendEpicAuditMirror: () => {}
-     }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts })
+        appendEpicAuditMirror: () => {},
+        ...projectStoreStubs()
+     }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
 
     const result = svc.createTask({ title: 'Flow test', reporter: 'tester' })
     expect(result.ok).toBe(true)
@@ -405,8 +407,9 @@ describe('maxAttempts flow', () => {
         nonTerminalChildCount: () => 0,
        childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
         promoteEpicWithMirror: () => {},
-       appendEpicAuditMirror: () => {}
-     }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts })
+        appendEpicAuditMirror: () => {},
+        ...projectStoreStubs()
+     }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
 
     const result = svc.createTask({ title: 'Default flow', reporter: 'tester' })
     expect(result.ok).toBe(true)

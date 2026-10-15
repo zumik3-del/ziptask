@@ -3,15 +3,15 @@ import type { TaskStore } from './types'
 import { parseDeps, depsSatisfied } from './deps'
 import { CANDIDATES_PAGE_SIZE } from '../defaults'
 
-// Deps-satisfied queued tasks in claim order. Paginated so a long tail of unsatisfied
-// candidates never loads the whole table; `ceiling` bounds the scan for a pathological queue.
-export function readyCandidates(store: TaskStore, limit: number, ceiling: number): Task[] {
+// Deps-satisfied queued tasks in claim order, scoped to one project. Paginated so a long tail of
+// unsatisfied candidates never loads the whole table; `ceiling` bounds the scan for a pathological queue.
+export function readyCandidates(store: TaskStore, limit: number, ceiling: number, projectId: number): Task[] {
   const ready: Task[] = []
   if (limit <= 0) return ready
   const depCache = new Map<number, number[]>()
   let offset = 0
   while (ready.length < limit && offset < ceiling) {
-    const page = store.queuedCandidates(CANDIDATES_PAGE_SIZE, offset)
+    const page = store.queuedCandidates(CANDIDATES_PAGE_SIZE, projectId, offset)
     if (page.length === 0) break
     const allDeps = new Set<number>()
     for (const row of page) {

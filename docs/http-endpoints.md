@@ -18,7 +18,7 @@ A provisional, read-only endpoint that is **an intentional integration endpoint 
 
 ```jsonc
 {
-  "task": { "id": 42, "title": "…", "description": "…", "status": "in_progress", "priority": "p2", "…": "…" },
+  "task": { "id": 42, "title": "…", "description": "…", "status": "in_progress", "priority": "p2", "project": "myproj", "…": "…" },
   "blocked_by": [7],                 // dependency ids that are not terminal yet
   "subtasks": { "total": 3, "open": 1, "done": 2, "failed": 0, "canceled": 0 },
   "comments": [ { "id": 1, "agent": "developer", "content": "…", "type": "comment", "created_at": "…" } ]
@@ -26,9 +26,11 @@ A provisional, read-only endpoint that is **an intentional integration endpoint 
 ```
 
 - `task` is the **whole task row**, including `description`. This is the key difference from the token-minimal MCP `get_task`, which omits `description` unless it is requested explicitly via `fields`.
+- `project` on the task row is the project **slug** (`null` for a row that has no `project_id` — a fresh DB has no projects). The internal integer `project_id` is never serialized.
 - `blocked_by` lists the dependency ids that are not terminal.
 - `subtasks` is present only when the task is an epic with at least one child — the same derived roll-up as `get_task fields:["subtasks"]`.
 - `comments` holds the task's comment and resolution rows, oldest first (the same rows the MCP `get_timeline` surfaces).
+- The endpoint is **by id and unscoped**: it takes no project argument and is unaffected by the scope rule that governs the enumerating MCP tools ([Projects and scope](mcp-tools.md#projects-and-scope)).
 
 Errors:
 

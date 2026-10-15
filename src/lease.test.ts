@@ -2,7 +2,6 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { isValidTransition, nowIso } from './core/tasks'
 import { TaskRepo } from './db/repo'
-import { MetricsRepo } from './db/metrics-repo'
 import { TaskService } from './core/service'
 import { formatError } from './core/result'
 import {
@@ -16,9 +15,8 @@ import { createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, drive
 
 let db: Database
 let repo: TaskRepo
-let metrics: MetricsRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); metrics = new MetricsRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15 }) })
+beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
 afterEach(() => { closeTestDb(db) })
 const createTaskRow = (title: string) => insertTaskRow(repo, { title, reporter: 'dev' })
 
@@ -549,88 +547,61 @@ describe('reaper policy: a heartbeat is liveness, not progress (D-F3-5)', () => 
   })
 })
 
-describe('metrics: a heartbeat must not cut the in_progress segment (D-F2-3)', () => {
-  // statusDurations builds segments from audit actions claim/update_status/lease_expired and reads
-  // new_value as the status. Timestamps are pinned to a synthetic day so the minutes are exact;
-  // the actions under test are the ones the production heartbeat really wrote.
-  const DAY = '2020-01-01T'
-  function retime(id: number): void {
-    const stamp = (action: string, at: string, nth = 0) => {
-      const rows = db.query('SELECT id FROM audit_log WHERE task_id = ? AND action = ? ORDER BY id').all(id, action) as Array<{ id: number }>
-      if (rows[nth]) db.run('UPDATE audit_log SET created_at = ? WHERE id = ?', [at, rows[nth].id])
-    }
-    stamp('create', `${DAY}00:00:00.000Z`)
-    stamp('claim', `${DAY}00:10:00.000Z`)
-    stamp('update_status', `${DAY}00:40:00.000Z`, 0)
-    stamp('update_status', `${DAY}00:50:00.000Z`, 1)
-    db.run('UPDATE tasks SET created_at = ?, updated_at = ?, completed_at = ? WHERE id = ?',
-      [`${DAY}00:00:00.000Z`, `${DAY}00:50:00.000Z`, `${DAY}00:50:00.000Z`, id])
-  }
+describe('a heartbeat must not cut the in_progress segment (D-F2-3)', () => {
+  // The regression signature: a lease_renewed row audited as update_status would carry an ISO
+  // lease timestamp as new_value — a "status" name that does not exist. Assert the audit rows
+  // directly instead of measuring segment minutes through them.
   const driveToDone = (id: number, beats: number) => {
     claimOrThrow(id, HOLDER)
     for (let beat = 0; beat < beats; beat++) leaseField(id, HOLDER, versionOf(id))
     handleUpdateStatus(svc, { id, agent: HOLDER, status: 'review', version: versionOf(id) })
     handleUpdateStatus(svc, { id, agent: HOLDER, status: 'done', version: versionOf(id) })
-    retime(id)
   }
-  const durations = () => Object.fromEntries(
-    metrics.statusDurations('0000-01-01T00:00:00.000Z', '2100-01-01T00:00:00.000Z')
-      .map(r => [r.status, Math.round(r.minutes)])
-  )
-  const SYNTHETIC = { queued: 10, in_progress: 30, review: 10 }
+  const updateStatusValues = (id: number): string[] =>
+    (db.query("SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'update_status' ORDER BY id").all(id) as Array<{ new_value: string | null }>)
+      .map(r => r.new_value ?? '')
 
-  test('baseline: a task that never heartbeats owns 30 in_progress minutes', () => {
+  test('baseline: a task that never heartbeats writes claim + two update_status rows', () => {
     const quiet = createTaskRow('Quiet')
     driveToDone(quiet, 0)
 
     expect(countAudit(quiet, 'lease_renewed')).toBe(0)
     expect(auditActions(quiet)).toEqual(['claim', 'update_status', 'update_status'])
-    expect(durations()).toEqual(SYNTHETIC)
+    expect(updateStatusValues(quiet)).toEqual(['review', 'done'])
   })
 
-  test('three heartbeats leave the same in_progress minutes (no new segment, no bogus status)', () => {
+  test('three heartbeats audit as lease_renewed, never as update_status with an ISO new_value', () => {
     const beating = createTaskRow('Beating')
     driveToDone(beating, 3)
 
     expect(countAudit(beating, 'lease_renewed')).toBe(3)
     expect(countAudit(beating, 'update_status')).toBe(2)
     expect(auditActions(beating)).toEqual(['claim', 'lease_renewed', 'lease_renewed', 'lease_renewed', 'update_status', 'update_status'])
-    // A lease_renewed row audited as update_status would carry an ISO lease as new_value, i.e. a
-    // status name that does not exist and a 5-minute in_progress segment instead of 30.
-    expect(durations()).toEqual(SYNTHETIC)
+    expect(updateStatusValues(beating)).toEqual(['review', 'done'])
   })
 
-  test('a lease_renewed audit row is invisible to statusDurations by action name', () => {
+  test('a lease_renewed row carries the lease timestamp, not a status name', () => {
     const id = createTaskRow('OnlyHeartbeats')
     claimOrThrow(id, HOLDER)
     leaseField(id, HOLDER, versionOf(id))
-    retime(id)
 
-    const rows = metrics.statusDurations('0000-01-01T00:00:00.000Z', '2100-01-01T00:00:00.000Z')
+    const rows = db.query("SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'lease_renewed'").all(id) as Array<{ new_value: string | null }>
     expect(countAudit(id, 'lease_renewed')).toBe(1)
-    expect(rows.map(r => r.status).sort()).toEqual(['in_progress', 'queued'])
-    // in_progress started at 00:10 and is still open, so the only minutes it can own are the
-    // 30 minutes up to the (real-now) clamp — never a heartbeat-shaped extra segment.
-    expect(Math.round(rows.find(r => r.status === 'in_progress')!.minutes)).toBeGreaterThanOrEqual(30)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].new_value).toMatch(/^\d{4}-\d{2}-\d{2}T/)
   })
 
-  test('a refused acquisition contributes no in_progress minutes', () => {
-    // The metrics window is a parameter, so the in_progress segment a *successful* acquisition would
-    // have opened is exactly one hour wide: the control's 30 are all a refusal can leave behind.
+  test('a refused acquisition contributes no update_status row', () => {
     const control = createTaskRow('Control')
     driveToDone(control, 0)
-    expect(durations()).toEqual(SYNTHETIC)
+    expect(auditActions(control)).toEqual(['claim', 'update_status', 'update_status'])
 
     const dep = createTaskRow('Dep')
     const subject = createDepTask('Subject', [dep])
-    db.run("UPDATE tasks SET created_at = ?, updated_at = ? WHERE id = ?", [`${DAY}00:00:00.000Z`, `${DAY}00:00:00.000Z`, subject])
 
     const refused = handleUpdateStatus(svc, { id: subject, agent: HOLDER, status: 'in_progress', version: versionOf(subject) })
     expect(text(refused)).toBe('BLOCKED: dependencies not satisfied')
     expect(countAudit(subject, 'update_status')).toBe(0)
-
-    const rows = metrics.statusDurations('0000-01-01T00:00:00.000Z', new Date(Date.now() + 3600_000).toISOString())
-    expect(Math.round(rows.find(r => r.status === 'in_progress')!.minutes)).toBe(30)
   })
 })
 

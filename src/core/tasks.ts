@@ -21,6 +21,7 @@ export interface Task {
   completed_at: string | null
   epic_id: number | null
   is_epic: boolean
+  project: string | null
 }
 
 export const STATUS_CODES: Record<TaskStatus | 'not_found', number> = Object.freeze({
@@ -54,6 +55,10 @@ export function pipeJoin(...fields: Array<string | number>): string {
 export type CommentType = 'comment' | 'resolution'
 
 export const TERMINAL_STATUSES: readonly TaskStatus[] = Object.freeze([...TERMINAL_STATUS_VALUES])
+
+// SQL CASE expression for ORDER BY priority (low number = high priority).
+// Kept in core so the db layer does not import from defaults directly.
+export const PRIORITY_ORDER_SQL = `CASE priority ${TASK_PRIORITIES.map((p, i) => `WHEN '${p}' THEN ${i}`).join(' ')} END`
 
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = Object.freeze({
   queued: ['in_progress', 'blocked', 'canceled'],

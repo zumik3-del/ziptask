@@ -94,6 +94,8 @@ describe('schema guard (v1.6)', () => {
       db2.run('DROP INDEX IF EXISTS idx_tasks_epic_id')
       db2.run('ALTER TABLE tasks DROP COLUMN epic_id')
       db2.run('ALTER TABLE tasks DROP COLUMN is_epic')
+      db2.run('DROP INDEX IF EXISTS idx_tasks_project_status_priority')
+      db2.run('ALTER TABLE tasks DROP COLUMN project_id')
       db2.run('DELETE FROM schema_version')
       db2.run('INSERT INTO schema_version (version) VALUES (?)', [2])
       db2.close()
