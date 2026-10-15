@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { nowIso } from './core/tasks'
+import type { TaskPriority } from './core/tasks'
 import { openDatabase } from './db/db'
 import type { ProjectRow, TaskStore } from './core/types'
 import type { TaskRepo } from './db/repo'
@@ -13,7 +14,7 @@ import {
 export type CreateTaskRowOpts = {
   title: string
   reporter: string
-  priority?: string
+  priority?: TaskPriority
   depends_on?: number[]
 }
 

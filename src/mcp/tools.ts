@@ -304,7 +304,7 @@ export function handleGetTask(svc: TaskService, args: { id: number; fields?: str
 
 export function handleListTasks(svc: TaskService, args: {
   assignee?: string
-  status?: string
+  status?: TaskStatus
   fields?: string[]
   limit?: number
   updated_since?: number

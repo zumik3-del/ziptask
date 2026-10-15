@@ -28,9 +28,10 @@ function applyMigrations(db: Database) {
   if (current > migrationCount) {
     throw new Error(`SCHEMA: database schema version ${current} is newer than this binary supports (${migrationCount}); upgrade ziptask or restore the database from backup`)
   }
+  let step = current
   const migrate = db.transaction(() => {
-    for (let i = current; i < migrationCount; i++) {
-      db.exec(MIGRATIONS[i])
+    for (step = current; step < migrationCount; step++) {
+      db.exec(MIGRATIONS[step])
     }
     db.run('DELETE FROM schema_version')
     db.run('INSERT INTO schema_version (version) VALUES (?)', [migrationCount])
@@ -39,6 +40,6 @@ function applyMigrations(db: Database) {
     migrate()
   } catch (err) {
     const detail = err instanceof Error ? `${err.message}` : String(err)
-    throw new Error(`SCHEMA: migration to version ${migrationCount} failed at step ${current + 1} (from ${current}); original: ${detail}`)
+    throw new Error(`SCHEMA: migration to version ${migrationCount} failed at step ${step + 1} (from ${current}); original: ${detail}`)
   }
 }
