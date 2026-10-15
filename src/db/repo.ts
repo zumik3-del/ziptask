@@ -1,6 +1,6 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
 import type { Task, TaskStatus, CommentType } from '../core/tasks'
-import { PRIORITY_ORDER_SQL, clampLimit } from '../core/tasks'
+import { PRIORITY_ORDER_SQL, clampLimit, monotonicNowMs } from '../core/tasks'
 import type { CommentRow, ProjectListItem, ProjectRow, TaskStore } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS, TERMINAL_STATUSES_SQL } from '../defaults'
 
@@ -23,15 +23,15 @@ function toTask(row: TaskRow): Task {
 }
 
 export class TaskRepo implements TaskStore {
+  // Mirrors the value the shared clock returned for this repo's last stamp (pin #795); the
+  // ordering guarantee itself is process-wide, not per instance.
   private lastTimestampMs = 0
 
   constructor(private db: Database) {}
 
   private monotonicIso(): string {
-    const now = Date.now()
-    const t = now > this.lastTimestampMs ? now : this.lastTimestampMs + 1
-    this.lastTimestampMs = t
-    return new Date(t).toISOString()
+    this.lastTimestampMs = monotonicNowMs()
+    return new Date(this.lastTimestampMs).toISOString()
   }
 
   transaction<T>(fn: () => T): T {

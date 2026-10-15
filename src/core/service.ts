@@ -1,5 +1,5 @@
 import type { Task, TaskStatus } from './tasks'
-import { TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit } from './tasks'
+import { TERMINAL_STATUSES, nowIso, isoFromNow, sanitizePipe, clampLimit } from './tasks'
 import type { ProjectListItem, ProjectRow, TaskStore, TimelineRow, CommentRow, SvcResult, SvcError, UpdateStatusData } from './types'
 import { parseDeps, createsCycle, depsSatisfied } from './deps'
 import { readyCandidates } from './candidates'
@@ -63,7 +63,7 @@ export class TaskService {
   }
 
   private _leaseUntil(ttlMin: number = this.leaseTtlMin): string {
-    return new Date(Date.now() + ttlMin * MINUTE_MS).toISOString()
+    return isoFromNow(ttlMin * MINUTE_MS)
   }
 
   private _agentError(agent: string): SvcError | null {

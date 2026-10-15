@@ -74,8 +74,23 @@ export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
   return VALID_TRANSITIONS[from]?.includes(to) ?? false
 }
 
+// The single time source: every stamp is strictly greater than the previous one, even when two
+// calls land in the same millisecond, so no ordering invariant depends on the wall clock ticking.
+let lastTimestampMs = 0
+
+export function monotonicNowMs(): number {
+  const now = Date.now()
+  const next = now > lastTimestampMs ? now : lastTimestampMs + 1
+  lastTimestampMs = next
+  return next
+}
+
 export function nowIso(): string {
-  return new Date().toISOString()
+  return new Date(monotonicNowMs()).toISOString()
+}
+
+export function isoFromNow(offsetMs: number): string {
+  return new Date(monotonicNowMs() + offsetMs).toISOString()
 }
 
 export const MAX_TITLE_LENGTH = 200
