@@ -38,11 +38,11 @@ export interface Logger {
  * "fallback" so the caller decides what a fallback means; `matched` is present exactly when
  * the configured value was recognised.
  */
-export type LogLevelResolution =
+type LogLevelResolution =
   | { matched: true; level: LogLevel }
   | { matched: false; level: LogLevel; requested: string }
 
-export function resolveLogLevel(raw: string): LogLevelResolution {
+function resolveLogLevel(raw: string): LogLevelResolution {
   const level = matchLogLevel(raw)
   return level === undefined ? { matched: false, level: DEFAULT_LOG_LEVEL, requested: raw } : { matched: true, level }
 }
@@ -54,7 +54,7 @@ export function parseLogLevel(raw: string): LogLevel {
 
 // Reserved keys are dropped rather than spread: a call-site or child-context `logger`/`ts`/
 // `level`/`msg` field must not be able to forge record metadata.
-export function stripReservedKeys(fields: LogFields): LogFields {
+function stripReservedKeys(fields: LogFields): LogFields {
   const out: LogFields = {}
   for (const [key, value] of Object.entries(fields)) {
     if (!RESERVED_KEYS.has(key)) out[key] = value
@@ -62,11 +62,11 @@ export function stripReservedKeys(fields: LogFields): LogFields {
   return out
 }
 
-export function mergeContext(ctx: LogFields, fields: LogFields): LogFields {
+function mergeContext(ctx: LogFields, fields: LogFields): LogFields {
   return { ...stripReservedKeys(ctx), ...stripReservedKeys(fields) }
 }
 
-export function serializeRecord(record: LogRecord): string {
+function serializeRecord(record: LogRecord): string {
   try {
     return JSON.stringify(record)
   } catch (err) {

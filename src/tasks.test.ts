@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { isValidTransition, STATUS_CODES, TASK_STATUSES, TERMINAL_STATUSES, TERMINAL_STATUS_VALUES, nowIso } from './core/tasks'
+import { isValidTransition, STATUS_CODES, TASK_STATUSES, TERMINAL_STATUSES, nowIso } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { TERMINAL_STATUSES_SQL } from './db/sql'
@@ -362,7 +362,6 @@ describe('terminal-status single source (#1445)', () => {
   test('TERMINAL_STATUSES (TS) and TERMINAL_STATUSES_SQL (SQL) describe the same set', () => {
     const parsedSql = TERMINAL_STATUSES_SQL.replace(/[()']/g, '').split(', ')
     expect(parsedSql).toEqual([...TERMINAL_STATUSES])
-    expect([...TERMINAL_STATUSES]).toEqual([...TERMINAL_STATUS_VALUES])
   })
 
   test('TERMINAL_STATUSES is exactly the set of statuses with no outgoing transition', () => {

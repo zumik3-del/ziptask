@@ -1,5 +1,3 @@
-import { TASK_PRIORITIES } from '../defaults'
-
 // The one status list: the union type, the enum, the codes, the terminal set and the SQL list
 // are all derived from it (the SQL text itself lives in src/db/sql.ts).
 export const TASK_STATUS_VALUES = Object.freeze([
@@ -48,7 +46,6 @@ export const STATUS_CODES = Object.freeze(
 
 // The canonical tuple under its historical name: callers pass it to z.enum and iterate it.
 export const TASK_STATUSES = TASK_STATUS_VALUES
-export { TASK_PRIORITIES }
 
 export function statusToCode(status: TaskStatus | 'not_found'): number {
   return STATUS_CODES[status]
@@ -79,9 +76,6 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = Object.freeze({
 export const TERMINAL_STATUSES: readonly TaskStatus[] = Object.freeze(
   TASK_STATUS_VALUES.filter(status => VALID_TRANSITIONS[status].length === 0)
 )
-
-// Historical name for the same tuple, kept so existing importers (src/tasks.test.ts) keep working.
-export const TERMINAL_STATUS_VALUES: readonly TaskStatus[] = TERMINAL_STATUSES
 
 export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
   return VALID_TRANSITIONS[from]?.includes(to) ?? false
