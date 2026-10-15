@@ -178,14 +178,14 @@ function handleGetTemplate(args: { name: TemplateName }): ToolResult {
 export function handleListProjects(svc: TaskService, args: object): ToolResult {
   const unknown = rejectUnknownArgs('list_projects', LIST_PROJECTS_SHAPE, args)
   if (unknown) return unknown
-  const lines = svc.listProjects().map(p => pipeJoin(p.slug, sanitizePipe(p.folder_path), p.open))
+  const lines = svc.projects.list().map(p => pipeJoin(p.slug, sanitizePipe(p.folder_path), p.open))
   return textResult(lines.join('\n'))
 }
 
 export function handleCreateProject(svc: TaskService, args: { slug?: string; folder_path: string }): ToolResult {
   const unknown = rejectUnknownArgs('create_project', CREATE_PROJECT_SHAPE, args)
   if (unknown) return unknown
-  return toToolResult(svc.createProject(args))
+  return toToolResult(svc.projects.create(args))
 }
 
 export function handleUpdateProject(svc: TaskService, args: {
@@ -193,13 +193,13 @@ export function handleUpdateProject(svc: TaskService, args: {
 }): ToolResult {
   const unknown = rejectUnknownArgs('update_project', UPDATE_PROJECT_SHAPE, args)
   if (unknown) return unknown
-  return toToolResult(svc.updateProject(args))
+  return toToolResult(svc.projects.update(args))
 }
 
 export function handleDeleteProject(svc: TaskService, args: { project: string }): ToolResult {
   const unknown = rejectUnknownArgs('delete_project', DELETE_PROJECT_SHAPE, args)
   if (unknown) return unknown
-  return toToolResult(svc.deleteProject(args.project))
+  return toToolResult(svc.projects.delete(args.project))
 }
 
 export function registerAllTools(server: McpServer, svc: TaskService) {
@@ -316,22 +316,28 @@ export function handleListTasks(svc: TaskService, args: {
   if (unknown) return unknown
   if (args.ids !== undefined && args.ids.length > 0) {
     const withAssignee = args.fields?.includes('assignee') ?? false
-    const batch = svc.listTasks({ ids: args.ids })
-    if (!batch.ok) return errorTool(batch.error)
-    if (!('items' in batch.data)) return errorResult('INVALID: ids batch mode')
-    const lines = batch.data.items.map(({ id, task }) => {
-      if (!task) return withAssignee ? pipeJoin(id, 0, '-') : pipeJoin(id, 0)
-      const code = statusToCode(task.status)
-      return withAssignee ? pipeJoin(id, code, task.assignee ?? '-') : pipeJoin(id, code)
-    })
-    return textResult(lines.join('\n'))
+    return foldResult(svc.getTasksByIds(args.ids), ({ items }) => {
+      const lines = items.map(({ id, task }) => {
+        if (!task) return withAssignee ? pipeJoin(id, 0, '-') : pipeJoin(id, 0)
+        const code = statusToCode(task.status)
+        return withAssignee ? pipeJoin(id, code, task.assignee ?? '-') : pipeJoin(id, code)
+      })
+      return textResult(lines.join('\n'))
+    }, errorTool)
   }
-  const result = svc.listTasks(args)
-  if (!result.ok) return errorTool(result.error)
-  if ('items' in result.data) return errorResult('INVALID: unexpected batch mode')
+  const filters = {
+    assignee: args.assignee,
+    status: args.status,
+    updated_since: args.updated_since,
+    epic_id: args.epic_id,
+    limit: args.limit,
+    project: args.project
+  }
   const fields = args.fields ?? ['id', 'title', 'status', 'priority', 'assignee']
-  const tasks = result.data.tasks.map((task) => pickFields(task, fields))
-  return jsonResult({ tasks, total: result.data.total })
+  return foldResult(svc.listTasks(filters), (data) => {
+    const tasks = data.tasks.map((task) => pickFields(task, fields))
+    return jsonResult({ tasks, total: data.total })
+  }, errorTool)
 }
 
 export function handleClaimTask(svc: TaskService, args: {
