@@ -30,30 +30,42 @@ export const DEFAULTS = Object.freeze({
   auditLog: DEFAULT_AUDIT_LOG
 } as const)
 
+// Object-level partiality: each top-level key and the two nested groups may be omitted or
+// partial, exactly like the hand-written schema before.
+const partialGroup = <T extends z.ZodRawShape>(shape: T) => z.object(shape).partial()
+
+const boundaries = {
+  dbPath: z.string(),
+  host: z.string(),
+  port: z.number().int().nonnegative(),
+  leaseTtlMin: z.number().int().positive(),
+  maxAttempts: z.number().int().positive(),
+  reapCooldownSec: z.number().int().positive(),
+  autoClaimCeiling: z.number().int().positive(),
+  http: partialGroup({ maxSessions: z.number().int().positive(), sessionTtlMs: z.number().int().positive() }),
+  defaults: partialGroup({
+    priority: z.enum(TASK_PRIORITIES),
+    reporter: z.string(),
+    listLimit: z.number().int().positive(),
+    timelineLimit: z.number().int().positive(),
+    queueLimit: z.number().int().positive()
+  })
+}
+
 const SettingsSchema = z.object({
-  dbPath: z.string().optional(),
-  host: z.string().optional(),
-  port: z.number().int().nonnegative().optional(),
-  leaseTtlMin: z.number().int().positive().optional(),
-  maxAttempts: z.number().int().positive().optional(),
-  reapCooldownSec: z.number().int().positive().optional(),
-  autoClaimCeiling: z.number().int().positive().optional(),
-  http: z.object({
-    maxSessions: z.number().int().positive().optional(),
-    sessionTtlMs: z.number().int().positive().optional()
-  }).optional(),
-  defaults: z.object({
-    priority: z.enum(TASK_PRIORITIES).optional(),
-    reporter: z.string().optional(),
-    listLimit: z.number().int().positive().optional(),
-    timelineLimit: z.number().int().positive().optional(),
-    queueLimit: z.number().int().positive().optional()
-  }).optional(),
-  logging: z.object({
-    level: z.enum(LEVELS).optional()
-  }).optional(),
-  auditLog: z.boolean().optional()
-})
+  ...boundaries,
+  logging: partialGroup({ level: z.enum(LEVELS) }),
+  auditLog: z.boolean()
+}).partial()
+
+// The env layer is the last word, so the merged result is re-validated against the same
+// boundaries minus logging.level: that one stays a raw string on purpose (the logger parses
+// it and warns about an unknown level, see src/logger.ts).
+const MergedSettingsSchema = z.object({
+  ...boundaries,
+  logging: partialGroup({ level: z.string() }),
+  auditLog: z.boolean()
+}).partial()
 
 export type Settings = z.infer<typeof SettingsSchema> & {
   dbPath: string
@@ -72,7 +84,7 @@ export type Settings = z.infer<typeof SettingsSchema> & {
 // Level parsing is the logger's job: the raw ZIPTASK_LOG_LEVEL string reaches createLogger
 // so it can warn about an unknown level. settings.json keeps the closed enum instead, so a
 // bad value in the file still fails startup loudly.
-export type EnvType = 'string' | 'int' | 'float' | 'bool'
+export type EnvType = 'string' | 'int' | 'bool'
 
 export interface EnvMapping {
   env: string
@@ -103,9 +115,26 @@ function parseValue(raw: string, type: EnvType): string | number | boolean {
   switch (type) {
     case 'string': return raw
     case 'int': return parseInt(raw, 10)
-    case 'float': return parseFloat(raw)
     case 'bool': return raw === 'true'
   }
+}
+
+function formatIssues(error: z.ZodError): string {
+  return error.issues
+    .map(issue => `${issue.path.length > 0 ? issue.path.join('.') : '<root>'}: ${issue.message}`)
+    .join('; ')
+}
+
+// A bare `--settings` (no next argv, or a flag-like next argv) is a user mistake: returning
+// undefined here would silently fall back to ZIPTASK_SETTINGS/defaults.
+function settingsPathFromArgv(argv: string[]): string | undefined {
+  const i = argv.indexOf('--settings')
+  if (i === -1) return undefined
+  const value = argv[i + 1]
+  if (!value || value.startsWith('-')) {
+    throw new Error(`Missing path for --settings${value ? ` (got '${value}')` : ''}`)
+  }
+  return value
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -145,8 +174,7 @@ export function loadSettings(opts?: {
   const env = opts?.env ?? process.env
   const argv = opts?.argv ?? process.argv
 
-  const cliSettingsIdx = argv.indexOf('--settings')
-  const cliSettingsPath = cliSettingsIdx !== -1 ? argv[cliSettingsIdx + 1] : undefined
+  const cliSettingsPath = settingsPathFromArgv(argv)
 
   let settingsPath: string | null = null
   if (opts?.path) {
@@ -185,7 +213,7 @@ export function loadSettings(opts?: {
     if (raw === undefined) continue
     const value = parseValue(raw, type)
     if (typeof value === 'number' && Number.isNaN(value)) {
-      // A typo in an int/float env var must not silently vanish: keep the previous value
+      // A typo in an int env var must not silently vanish: keep the previous value
       // (settings.json or default) but surface the ignored override to the caller's logger.
       opts?.warn?.(`ignoring invalid ${envName} value`, { value: raw })
       continue
@@ -193,5 +221,10 @@ export function loadSettings(opts?: {
     setNested(merged, path, value)
   }
 
-  return merged as unknown as Settings
+  const validated = MergedSettingsSchema.safeParse(merged)
+  if (!validated.success) {
+    throw new Error(`Invalid configuration after env overrides: ${formatIssues(validated.error)}`)
+  }
+
+  return validated.data as unknown as Settings
 }
