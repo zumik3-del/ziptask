@@ -1,7 +1,7 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { openDatabase, closeDatabase } from './db/db'
 import { TaskRepo } from './db/repo'
-import { TaskService } from './core/service'
+import { TaskService, type TaskServiceOptions } from './core/service'
 import { createMcpServer } from './mcp/server'
 import { startHttp } from './server'
 import { loadSettings } from './config'
@@ -30,7 +30,7 @@ if (wantsVersion) {
 
 try {
   const db = openDatabase(settings.dbPath)
-  const svc = new TaskService(new TaskRepo(db), {
+  const serviceOptions: TaskServiceOptions = {
     leaseTtlMin: settings.leaseTtlMin,
     maxAttempts: settings.maxAttempts,
     auditLog: settings.auditLog,
@@ -41,7 +41,8 @@ try {
     listLimit: settings.defaults.listLimit,
     timelineLimit: settings.defaults.timelineLimit,
     queueLimit: settings.defaults.queueLimit
-  })
+  }
+  const svc = new TaskService(new TaskRepo(db), serviceOptions)
 
   function startStdio() {
     const server = createMcpServer(svc)

@@ -660,7 +660,7 @@ describe('projects: no configured default project (ADR D2 rule 2, D6, R1)', () =
       expect(bare.claimTask({ agent: 'dev' })).toEqual({ ok: false, error: { code: 'INVALID', message: 'project required' } })
       // only the by-id and ids escapes stay open without a scope
       const id = createIn('a1', 'alpha')
-      expect(bare.listTasks({ ids: [id] }).ok).toBe(true)
+      expect(bare.getTasksByIds([id]).ok).toBe(true)
       expect(bare.claimTask({ agent: 'dev', taskId: id }).ok).toBe(true)
     } finally { delete process.env.ZIPTASK_PROJECT }
   })
