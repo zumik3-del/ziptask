@@ -25,8 +25,6 @@ export const LEVELS: readonly LogLevel[] = LOG_LEVELS
 export const DEFAULT_AUDIT_LOG = true
 export const SQLITE_BUSY_TIMEOUT_MS = 5000
 export const CANDIDATES_PAGE_SIZE = 100
-export const TERMINAL_STATUS_VALUES = Object.freeze(['done', 'failed', 'canceled'] as const)
-export const TERMINAL_STATUSES_SQL = `(${TERMINAL_STATUS_VALUES.map(status => `'${status}'`).join(', ')})`
 export const SESSION_CLEANUP_INTERVAL_MS = MINUTE_MS
 export const TASK_PRIORITIES = Object.freeze(['p0', 'p1', 'p2', 'p3'] as const)
 
