@@ -13,9 +13,9 @@ ziptask exposes 13 tools:
 | `add_comment` | Append a comment to a task |
 | `get_timeline` | Merged audit log + comments feed. Epics show `subtask_add`/`subtask_done`/`subtask_failed` mirror rows — history reads as `create → subtask_add… → subtask_done… → resolution` |
 | `get_template` | Fetch a markdown template (task description, comments) |
-| `create_project` | Register a project. `folder_path` is required and recorded as an annotation — normalized to an absolute path, never checked for existence, not unique, and used to derive the slug when that is omitted. Output `{slug}`, never the row — the internal `id` does not cross the tool boundary |
+| `create_project` | Register a project. `folder_path` is required and must be **absolute** — a relative input is refused with `INVALID: folder_path must be an absolute path` (never resolved against the server's cwd, which would record a path the caller never named) — and it is recorded as an annotation: normalized (trailing slash stripped), never checked for existence, not unique, and used to derive the slug when that is omitted. Output `{slug}`, never the row — the internal `id` does not cross the tool boundary |
 | `list_projects` | Pipe lines `slug|folder|open`, ordered by `slug` ASC — `open` counts the project's non-terminal tasks. Archived projects are listed identically (there is no archived column, and `legacy` is listed too); an empty table produces empty text |
-| `update_project` | Update a project by slug: `project`, plus any of `slug?`, `folder_path?`, `archived?`. Output `{slug}`. `archived: false` is **idempotent** — a live project accepts it and the only effect is the `updated_at` bump, so un-archiving needs no out-of-band knowledge of the flag. `INVALID: nothing to update` fires only when the call carries **no optional argument at all** (`{project}` alone), never because a supplied value already equals the stored one |
+| `update_project` | Update a project by slug: `project`, plus any of `slug?`, `folder_path?` (absolute only, as in `create_project`), `archived?`. Output `{slug}`. `archived: false` is **idempotent** — a live project accepts it and the only effect is the `updated_at` bump, so un-archiving needs no out-of-band knowledge of the flag. `INVALID: nothing to update` fires only when the call carries **no optional argument at all** (`{project}` alone), never because a supplied value already equals the stored one |
 | `delete_project` | Delete a project that holds no tasks. Output `{deleted:<slug>}`; a project with tasks refuses with `CONFLICT: project 'x' has N tasks; archive it instead` |
 
 ## Projects and scope
@@ -32,7 +32,7 @@ ziptask exposes 13 tools:
 
 - The slug is resolved once, against `projects.slug`; an unknown slug lists the known slugs, so a typo is self-correcting in one round trip.
 - **No default project and no all-projects mode.** An enumerating call without `project` is refused — never defaulted, never silently widened. `project: "*"` and `project: ""` are ordinary unknown slugs: a cross-project read is N+1 calls, one per project.
-- By-id calls stay unscoped on purpose (ids are global and sequential). A by-id tool does not declare the argument at all — passing `project` to `get_task` answers `INVALID: unknown argument project on get_task (accepted: fields, id)` — while a `claim_task` that carries `task_id`/`id` accepts `project` and does not consult it.
+- By-id calls stay unscoped on purpose (ids are global and sequential). A by-id tool does not declare the argument at all — passing `project` to `get_task`, `update_status`, `add_comment`, `get_timeline` or `get_template` answers `INVALID: unknown argument project on <tool> (accepted: …)`, e.g. `INVALID: unknown argument project on get_task (accepted: fields, id)`. `claim_task` is the exception: **one input shape serves both branches**, so it declares `project` (auto-pick needs it), and on the by-id branch the value is **ignored and never validated** — `claim_task({task_id: 999, project: 'no-such-slug'})` reaches `NOT_FOUND:`, never `INVALID: unknown project`.
 - `create_task` requires `project` even when `epic_id` is given, and the sub-task's project must equal its epic's: inheritance is equality, never a lookup that would quietly resolve the scope from the epic.
 - Consequence in practice: **auto-claim is orchestrator-only**, because a subagent holds no slug — it is handed a `task_id`, which is the by-id path.
 - `list_queue`, `list_tasks` and `claim_task` on an **archived** project succeed (existing work stays readable and claimable); only `create_task` is refused.
@@ -51,6 +51,7 @@ ziptask exposes 13 tools:
 | Project tool refusal | Result |
 |---|---|
 | `create_project` without `folder_path` | `INVALID: folder_path required` |
+| `create_project` / `update_project` with a relative `folder_path` | `INVALID: folder_path must be an absolute path` |
 | `create_project` with a malformed explicit `slug` | `INVALID: slug must match ^[a-z0-9][a-z0-9._-]{0,31}$` |
 | `create_project` / `update_project` with `slug: 'legacy'` | `INVALID: 'legacy' is a reserved project slug` |
 | `create_project` whose folder name cannot yield a valid slug | `INVALID: slug required (cannot derive from folder name)` |
@@ -59,7 +60,7 @@ ziptask exposes 13 tools:
 | `update_project` with no optional argument | `INVALID: nothing to update` |
 | `delete_project` on a project that has tasks | `CONFLICT: project 'x' has N tasks; archive it instead` |
 
-A duplicate `folder_path` is **not** an error: it is a caller-side annotation with no uniqueness constraint, recorded by the host that created the row (`create_project` normalizes it to an absolute path but the server never resolves or checks it, and the slug — not the path — is the identity). Deleting `legacy` is allowed only while it holds no tasks; as a *creation* target the slug stays reserved.
+A duplicate `folder_path` is **not** an error: it is a caller-side annotation with no uniqueness constraint, recorded by the host that created the row (`create_project` and `update_project` accept an absolute path and normalize it — trailing slash stripped — but the server never resolves it against its own cwd, never checks it for existence, and never looks a project up by it; the slug — not the path — is the identity). Deleting `legacy` is allowed only while it holds no tasks; as a *creation* target the slug stays reserved.
 
 The normative one-screen version of this rule ships inside the server itself, as the `Projects` section of the MCP `instructions` (`src/mcp/instructions.md`) that every client receives on initialize.
 

@@ -9,7 +9,7 @@ Scoping is a **filter, not a token**: the slug narrows a query, grants nothing, 
 - Lowercase ASCII, `^[a-z0-9][a-z0-9._-]{0,31}$` (at most 32 characters).
 - `create_project` derives it from the folder name when `slug` is omitted: lowercased, every other character mapped to `-`, leading non-alphanumerics stripped. Two folders with the same basename therefore want the same slug — the second is refused with `CONFLICT: project 'x' already exists`, so pass an explicit `slug` when that is the intent. A folder name that cannot yield a valid slug needs an explicit one: `INVALID: slug required (cannot derive from folder name)`.
 - `legacy` is reserved (see below), and the pattern freely rejects `|` and `/`, so a slug is safe in any pipe row.
-- `folder_path` is required, but it is a **caller-side annotation**: it is normalized to an absolute path and recorded by the host that created the row, never checked for existence, not unique, and not used by any code to find or verify a project. The slug is the identity.
+- `folder_path` is required and must be **absolute**: a relative input is refused with `INVALID: folder_path must be an absolute path` (`create_project` and `update_project` alike), so the server never resolves it against its own cwd and never records a path the caller did not name. It stays a **caller-side annotation**: normalized (trailing slash stripped) and recorded by the host that created the row, never checked for existence, not unique, and not used by any code to find or verify a project. The slug is the identity.
 - The internal integer `id` never crosses the tool boundary — every call speaks the slug.
 
 ## Creating and listing
@@ -23,13 +23,13 @@ list_projects                                      → myproj|/srv/work/myproj|0
 
 ## The scope rule
 
-`project` is required — fail closed, never defaulted — on the four enumerating calls: `create_task` (always), `list_queue` (always), `list_tasks` (unless `ids` is non-empty) and `claim_task`'s auto-pick (unless `task_id`/`id` is given). The by-id tools (`get_task`, `update_status`, `add_comment`, `get_timeline`, `get_template`) do not take the argument at all and stay unscoped: ids are global and sequential.
+`project` is required — fail closed, never defaulted — on the four enumerating calls: `create_task` (always), `list_queue` (always), `list_tasks` (unless `ids` is non-empty) and `claim_task`'s auto-pick (unless `task_id`/`id` is given). The by-id tools (`get_task`, `update_status`, `add_comment`, `get_timeline`, `get_template`) do not take the argument at all and stay unscoped: ids are global and sequential. `claim_task` is the one tool that declares `project` on both branches — a single input shape serves auto-pick and by-id — and on the by-id branch the value is ignored and never validated: a bogus slug there is not an error.
 
 There is **no default project and no all-projects mode**: a missing slug is `INVALID: project required`, an unknown one lists the known slugs so a typo is one round trip, and `project: "*"` (like `""`) is just another unknown slug — a cross-project read is one call per project, never a server-side widening.
 
 In practice the orchestrator reads the slug from the project's `AGENTS.md` (next to its SynaptoMind slug) and hands a subagent a `task_id`; a subagent holds no slug, so auto-claim is orchestrator-only.
 
-The full table plus every refusal string: [MCP tools → Projects and scope](mcp-tools.md#projects-and-scope). The normative wire version ships inside the server itself, as the `Projects` section of the MCP `instructions`.
+The full table plus every refusal string: [MCP tools → Projects and scope](mcp-tools.md#projects-and-scope). The normative wire version ships inside the server itself, as the `Projects` section of the MCP `instructions` (`src/mcp/instructions.md`).
 
 ## Archiving and deleting
 
