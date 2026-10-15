@@ -362,10 +362,6 @@ describe('canceled children do not block epic closure (#112)', () => {
 })
 
 describe('atomic epic promotion (#108)', () => {
-  test('promoteEpicWithMirror exists on TaskStore', () => {
-    expect(typeof (svc as any).store.promoteEpicWithMirror).toBe('function')
-  })
-
   test('subtask attach atomically promotes epic and adds mirror', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Pre-Epic', reporter: 'dev' })).id
     const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
@@ -379,10 +375,6 @@ describe('atomic epic promotion (#108)', () => {
     expect(mirrors.length).toBe(1)
     expect(mirrors[0].new_value).toContain(`#${subId}`)
     expect(mirrors[0].new_value).toContain('Sub')
-  })
-
-  test('standalone appendEpicAuditMirror still exists', () => {
-    expect(typeof (svc as any).store.appendEpicAuditMirror).toBe('function')
   })
 
   test('direct promoteEpicWithMirror call is atomic (both or neither)', () => {

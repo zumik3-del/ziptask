@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { isValidTransition, nowIso } from './core/tasks'
+import { isValidTransition } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { formatError } from './core/result'
@@ -649,7 +649,11 @@ describe('reap invariants untouched by F2/F3 (D-F3-5: zero diff in _doReap)', ()
     expect(res.isError).toBeUndefined()
     expect(json(res).version).toBe(before.version + 1)
     expect(row(id).updated_at >= before.updated_at).toBe(true)
-    expect(nowIso() > row(id).created_at).toBe(true)
+    // created_at is set once at insert; a heartbeat must leave it byte-identical. Comparing the
+    // row against the clock instead is a race between three time sources — the repo's monotonic
+    // clock (insert), the SQLite write, and nowIso() here — and fails whenever the heartbeat
+    // lands in the same millisecond, because the monotonic bump puts created_at one ms ahead.
+    expect(row(id).created_at).toBe(before.created_at)
   })
 })
 

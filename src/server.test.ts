@@ -10,6 +10,7 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { VERSION } from './version'
 import { createLogger, type Logger } from './logger'
+import { SESSION_CLEANUP_INTERVAL_MS } from './defaults'
 import { seedProject } from './test-context'
 
 const TMP = '/tmp/opencode'
@@ -34,6 +35,14 @@ function getId(result: ReturnType<TaskService['createTask']>): number {
 
 function getVersion(db: ReturnType<typeof openDatabase>, id: number): number {
   return (db.query('SELECT version FROM tasks WHERE id = ?').get(id) as { version: number }).version
+}
+
+// Event ids are addressed individually, so a replay answers two questions at once: whether the
+// anchor is still in the store (a named stream id) and which events follow it (the ids sent).
+async function replayIds(store: InMemoryEventStore, anchor: string) {
+  const ids: string[] = []
+  const streamId = await store.replayEventsAfter(anchor, { send: async (eventId) => { ids.push(eventId) } })
+  return { streamId, ids }
 }
 
 describe('GET /api/task/:id HTTP endpoint', () => {
@@ -527,10 +536,14 @@ describe('session keep-alive fix (#753/#754)', () => {
     expect(wrapped.headers.get('content-type')).toBe('text/event-stream; charset=utf-8')
 
     // Consume the body to trigger the TransformStream
+    const before = Date.now()
     const reader = wrapped.body!.getReader()
     const { value } = await reader.read()
     expect(value).toEqual(encoder.encode('data: hello\n\n'))
-    expect(session.lastAccess).toBeGreaterThan(0)
+    // The refresh is a real clock read, not a non-zero sentinel: a chunk must move lastAccess
+    // into the window this read happened in.
+    expect(session.lastAccess).toBeGreaterThanOrEqual(before)
+    expect(session.lastAccess).toBeLessThanOrEqual(Date.now())
   })
 
   test('trackStreamActivity passes through non-SSE responses unchanged', () => {
@@ -551,43 +564,94 @@ describe('session keep-alive fix (#753/#754)', () => {
     expect(session.lastAccess).toBe(0)
   })
 
-  test('existing-session path refreshes lastAccess on request and wraps SSE body', async () => {
+  // The session sweeper is driven directly instead of waited for: it runs on a 60s interval, so
+  // any wall-clock wait short enough for a test would only prove the interval had not fired yet.
+  function captureSessionSweeper() {
+    const sweeps: Array<() => void> = []
+    const realSetInterval = globalThis.setInterval
+    const spy = spyOn(globalThis, 'setInterval').mockImplementation(((
+      fn: () => void,
+      ms?: number
+    ) => {
+      if (ms === SESSION_CLEANUP_INTERVAL_MS) sweeps.push(fn)
+      return realSetInterval(fn, ms as number)
+    }) as unknown as typeof setInterval)
+    return {
+      run: () => { for (const sweep of sweeps) sweep() },
+      restore: () => spy.mockRestore()
+    }
+  }
+
+  function connectClient(port: number | undefined, name: string) {
+    const client = new Client({ name, version: '1.0.0' })
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`))
+    return client.connect(transport).then(() => ({ client, transport }))
+  }
+
+  function postStatus(port: number | undefined, sessionId: string): Promise<number> {
+    return fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': sessionId,
+        'mcp-protocol-version': '2025-06-18'
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 4711, method: 'tools/list', params: {} })
+    }).then(res => res.status)
+  }
+
+  test('a request on an existing session refreshes lastAccess', async () => {
+    const serverModule = await import('./server')
+    const activity = spyOn(serverModule, 'trackStreamActivity')
     const srv = makeServerWithLogger()
+    try {
+      const { client, transport } = await connectClient(srv.port, 'keepalive-agent')
+      const sessionId = transport.sessionId
+      // The spy hands over the live Session the server keeps in its map, so the refresh is read
+      // directly instead of being inferred from a second call merely succeeding.
+      const session = activity.mock.calls.at(-1)?.[1]
+      expect(session).toBeDefined()
+      if (!session) throw new Error('trackStreamActivity was never called')
+      const stale = session.lastAccess
+      await Bun.sleep(5)
 
-    // Connect client to create a session
-    const client = new Client({ name: 'keepalive-agent', version: '1.0.0' })
-    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${srv.port}/mcp`))
-    await client.connect(transport)
+      const result = await client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
+      expect(result).toBeDefined()
 
-    // Make an MCP call — exercises existing-session path
-    const result = await client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
-    expect(result).toBeDefined()
-
-    // Session should still exist (no drop)
-    const res2 = await client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
-    expect(res2).toBeDefined()
-
-    await client.close()
-    srv.stop()
+      expect(transport.sessionId).toBe(sessionId) // the existing session was reused, not re-initialized
+      expect(activity.mock.calls.at(-1)?.[1]).toBe(session) // one shared Session object, all along
+      expect(session.lastAccess).toBeGreaterThan(stale)
+      await client.close()
+    } finally {
+      activity.mockRestore()
+      srv.stop()
+    }
   })
 
-  test('session not swept during quiet window with short TTL', async () => {
-    const srv = makeServerWithLogger(5_000)
+  test('the sweeper drops an idle session and spares one whose lastAccess a request refreshed', async () => {
+    const sweeper = captureSessionSweeper()
+    const srv = makeServerWithLogger(200)
+    try {
+      const active = await connectClient(srv.port, 'keepalive-agent')
+      const idle = await connectClient(srv.port, 'quiet-agent')
 
-    const client = new Client({ name: 'quiet-agent', version: '1.0.0' })
-    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${srv.port}/mcp`))
-    await client.connect(transport)
+      // Both sessions are now older than the 200ms TTL, so both are sweep-eligible before the
+      // request below: the surviving session is spared by the refresh, not by an inert sweep.
+      await Bun.sleep(300)
+      const result = await active.client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
+      expect(result).toBeDefined()
 
-    // Wait 3s — less than TTL, but sweeper runs every 60s so this mainly verifies
-    // the session is alive and lastAccess is current after the connect
-    await Bun.sleep(3_000)
+      sweeper.run()
 
-    // Make a call — should succeed, session still alive
-    const result = await client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
-    expect(result).toBeDefined()
-
-    await client.close()
-    srv.stop()
+      expect(await postStatus(srv.port, idle.transport.sessionId as string)).toBe(404)
+      expect(await postStatus(srv.port, active.transport.sessionId as string)).toBe(200)
+      await active.client.close()
+      await idle.client.close()
+    } finally {
+      sweeper.restore()
+      srv.stop()
+    }
   })
 })
 
@@ -655,14 +719,29 @@ describe('stale session recovery', () => {
 })
 
 describe('event store pruning on session close (#767)', () => {
-  test('InMemoryEventStore implements SDK EventStore without as any', () => {
-    // Compile-time check: InMemoryEventStore is instantiated in server.ts without `as any`.
-    // If the type were wrong, tsc would fail. We verify the runtime behavior instead.
-    // The transport.onclose → eventStore.clear() callback is wired in server.ts:191.
-    expect(true).toBe(true) // compile-time assertion via tsc
-  })
-
+  // "InMemoryEventStore implements SDK EventStore" needs no test of its own: the declaration is
+  // checked by tsc, and store/replay/eviction behaviour is asserted in the bounded event store
+  // suite below. What was untested is the wiring that clears the store when a session closes.
   test('event store entries are cleared when session closes', async () => {
+    const { InMemoryEventStore } = await import('./server')
+    const realStoreEvent = InMemoryEventStore.prototype.storeEvent
+    const realClear = InMemoryEventStore.prototype.clear
+    const stores: InMemoryEventStore[] = []
+    const storedIds: string[] = []
+    let clearCalls = 0
+    const storeSpy = spyOn(InMemoryEventStore.prototype, 'storeEvent').mockImplementation(
+      async function (this: InMemoryEventStore, streamId: string, message: Parameters<InMemoryEventStore['storeEvent']>[1]) {
+        if (!stores.includes(this)) stores.push(this)
+        const eventId = await realStoreEvent.call(this, streamId, message)
+        storedIds.push(eventId)
+        return eventId
+      }
+    )
+    const clearSpy = spyOn(InMemoryEventStore.prototype, 'clear').mockImplementation(function (this: InMemoryEventStore) {
+      clearCalls++
+      realClear.call(this)
+    })
+
     const dbPath = join(TMP, `event-store-test-${Date.now()}.db`)
     const db = openDatabase(dbPath)
     seedProject(db)
@@ -671,26 +750,42 @@ describe('event store pruning on session close (#767)', () => {
     const server = startHttp({ svc, port: 0, host: '127.0.0.1', dbPath, logger })
     const port = server.port
 
-    const client = new Client({ name: 'event-agent', version: '1.0.0' })
-    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`))
-    await client.connect(transport)
+    try {
+      const client = new Client({ name: 'event-agent', version: '1.0.0' })
+      const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`))
+      await client.connect(transport)
 
-    // Make an MCP call to populate the event store
-    const result = await client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
-    expect(result).toBeDefined()
+      // Make an MCP call to populate the event store
+      const result = await client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
+      expect(result).toBeDefined()
 
-    // Close the session
-    await client.close()
+      const store = stores[0]
+      const anchor = storedIds[0]
+      expect(store).toBeDefined()
+      expect(anchor).toBeDefined()
 
-    // The session should be cleaned up
-    const res = await fetch(`http://127.0.0.1:${port}/health`)
-    expect(res.status).toBe(200)
+      // While the session is live the anchor is in the store: the stream is named and its tail is
+      // replayed. Only a store that really held the event can go on to fail the check below.
+      const live = await replayIds(store, anchor)
+      expect(live.streamId).not.toBe('')
+      expect(live.ids.length).toBeGreaterThan(0)
 
-    server.stop()
-    db.close()
-    try { rmSync(dbPath) } catch {}
-    try { rmSync(dbPath + '-wal') } catch {}
-    try { rmSync(dbPath + '-shm') } catch {}
+      // Closing a session is a DELETE on it; client.close() only drops the client socket.
+      await transport.terminateSession()
+
+      const afterClose = await replayIds(store, anchor)
+      expect(afterClose.streamId).toBe('')
+      expect(afterClose.ids).toEqual([])
+      expect(clearCalls).toBe(1)
+    } finally {
+      storeSpy.mockRestore()
+      clearSpy.mockRestore()
+      server.stop()
+      db.close()
+      try { rmSync(dbPath) } catch {}
+      try { rmSync(dbPath + '-wal') } catch {}
+      try { rmSync(dbPath + '-shm') } catch {}
+    }
   })
 })
 
