@@ -1,9 +1,9 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { isValidTransition, STATUS_CODES, TASK_STATUSES, TERMINAL_STATUSES, nowIso } from './core/tasks'
+import { isValidTransition, STATUS_CODES, TASK_STATUSES, TERMINAL_STATUSES, TERMINAL_STATUS_VALUES, nowIso } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
-import { TERMINAL_STATUSES_SQL, TERMINAL_STATUS_VALUES } from './defaults'
+import { TERMINAL_STATUSES_SQL } from './db/sql'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus, handleListTasks
 } from './mcp/tools'

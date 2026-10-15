@@ -1,8 +1,9 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
 import type { Task, TaskStatus, TaskPriority, CommentType } from '../core/tasks'
-import { PRIORITY_ORDER_SQL, clampLimit, monotonicNowMs } from '../core/tasks'
+import { clampLimit, monotonicNowMs } from '../core/tasks'
 import type { CommentRow, ProjectListItem, ProjectRow, TaskStore } from '../core/types'
-import { DEFAULT_MAX_ATTEMPTS, TERMINAL_STATUSES_SQL } from '../defaults'
+import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
+import { PRIORITY_ORDER_SQL, TASK_SELECT, TERMINAL_STATUSES_SQL } from './sql'
 
 type SqlParam = string | number | null
 
@@ -10,9 +11,6 @@ type SqlParam = string | number | null
 function bindParams(params: SqlParam[]): SQLQueryBindings[] {
   return params as SQLQueryBindings[]
 }
-
-// The LEFT JOIN carries the slug; project_id stays internal and is dropped by toTask.
-const TASK_SELECT = `SELECT t.*, p.slug AS project FROM tasks t LEFT JOIN projects p ON p.id = t.project_id`
 
 type TaskRow = Omit<Task, 'is_epic'> & { is_epic: number; project_id: number | null }
 
