@@ -118,7 +118,7 @@ const LIST_QUEUE_SHAPE = {
 
 const CREATE_PROJECT_SHAPE = {
   slug: z.string().optional().describe('lowercase ^[a-z0-9][a-z0-9._-]{0,31}$; defaults to the normalized folder name'),
-  folder_path: z.string().describe('absolute path of the project folder on the host that creates the row (an annotation; the server never resolves it)')
+  folder_path: z.string().describe('absolute path of the project folder on the host that creates the row (an annotation; normalized, never checked for existence, never resolved against the server cwd). A relative path is refused: INVALID: folder_path must be an absolute path')
 }
 
 const LIST_PROJECTS_SHAPE = {}
@@ -126,7 +126,7 @@ const LIST_PROJECTS_SHAPE = {}
 const UPDATE_PROJECT_SHAPE = {
   project: z.string().describe('slug of the project to update'),
   slug: z.string().optional(),
-  folder_path: z.string().optional(),
+  folder_path: z.string().optional().describe('absolute path; a relative one is refused: INVALID: folder_path must be an absolute path'),
   archived: z.boolean().optional().describe('true stamps archived_at (create_task refuses); false clears it and is idempotent')
 }
 
@@ -260,7 +260,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleUpdateProject(svc, args))
 
   server.registerTool('delete_project', {
-    description: 'Delete a project that has no tasks; a project with tasks refuses with CONFLICT (archive it instead). Output {deleted}',
+    description: 'Delete a project that has no tasks; a project with tasks refuses with CONFLICT (archive it instead). Output {deleted:<slug>}',
     inputSchema: z.object(DELETE_PROJECT_SHAPE).catchall(z.unknown())
   }, async (args) => handleDeleteProject(svc, args))
 }

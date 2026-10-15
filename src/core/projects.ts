@@ -1,4 +1,4 @@
-import { basename, resolve } from 'node:path'
+import { basename, isAbsolute, resolve } from 'node:path'
 import type { ProjectRow, SvcError, SvcResult, TaskStore } from './types'
 import { fail, ok } from './result'
 import { requiredError } from './validation'
@@ -17,8 +17,11 @@ export function normalizeSlug(input: string): string {
     .slice(0, PROJECT_SLUG_MAX)
 }
 
-export function normalizeFolderPath(input: string): string {
-  return resolve(input)
+// RL1: `folder_path` is a caller-side annotation, so a relative input is refused instead of being
+// resolved against the server's own cwd (which would record a path the caller never named).
+export function normalizeFolderPath(input: string): SvcResult<string> {
+  if (!isAbsolute(input)) return fail('INVALID', 'folder_path must be an absolute path')
+  return ok(resolve(input))
 }
 
 function slugError(slug: string): SvcError | null {
@@ -52,14 +55,16 @@ export function createProject(store: TaskStore, args: { slug?: string; folder_pa
   const folderPath = args.folder_path ?? ''
   const folderErr = requiredError(folderPath, 'folder_path')
   if (folderErr) return fail(folderErr)
-  const slug = args.slug ?? normalizeSlug(basename(normalizeFolderPath(folderPath)))
+  const normalized = normalizeFolderPath(folderPath)
+  if (!normalized.ok) return fail(normalized.error)
+  const slug = args.slug ?? normalizeSlug(basename(normalized.data))
   if (args.slug === undefined && !PROJECT_SLUG_PATTERN.test(slug)) {
     return fail('INVALID', 'slug required (cannot derive from folder name)')
   }
   const invalid = slugError(slug)
   if (invalid) return fail(invalid)
   if (store.projectBySlug(slug)) return fail('CONFLICT', `project '${slug}' already exists`)
-  store.insertProject({ slug, folderPath: normalizeFolderPath(folderPath), now: nowIso() })
+  store.insertProject({ slug, folderPath: normalized.data, now: nowIso() })
   return ok({ slug })
 }
 
@@ -82,7 +87,9 @@ export function updateProject(store: TaskStore, args: {
   if (args.folder_path !== undefined) {
     const folderErr = requiredError(args.folder_path, 'folder_path')
     if (folderErr) return fail(folderErr)
-    patch.folderPath = normalizeFolderPath(args.folder_path)
+    const normalized = normalizeFolderPath(args.folder_path)
+    if (!normalized.ok) return fail(normalized.error)
+    patch.folderPath = normalized.data
   }
   if (args.archived !== undefined) patch.archived = args.archived
   store.updateProject(found.data.id, patch, nowIso())
