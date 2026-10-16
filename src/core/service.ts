@@ -1,12 +1,12 @@
-import type { Task, TaskStatus } from './tasks'
-import { TERMINAL_STATUSES, nowIso, sanitizePipe, clampLimit } from './tasks'
+import type { Task, TaskStatus, TaskPriority } from './tasks'
+import { TERMINAL_STATUSES, nowIso, isoFromNow, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './tasks'
 import type { ProjectListItem, ProjectRow, TaskStore, TimelineRow, CommentRow, SvcResult, SvcError, UpdateStatusData } from './types'
-import { parseDeps, createsCycle, depsSatisfied } from './deps'
+import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
 import { LeaseReaper } from './reaper'
-import { createTaskGuard, updateStatusGuard } from './guards'
-import { requiredError, tooLongError, epicError, MAX_AGENT, MAX_CONTENT } from './validation'
+import { createTaskGuard, updateStatusGuard, claimEligibilityError } from './guards'
+import { requiredError, tooLongError } from './validation'
 import { resolveProject, createProject, updateProject, deleteProject } from './projects'
 import {
   MINUTE_MS, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
@@ -15,13 +15,13 @@ import {
 } from '../defaults'
 
 type CreateTaskArgs = {
-  title: string; description?: string; priority?: string; assignee?: string
+  title: string; description?: string; priority?: TaskPriority; assignee?: string
   depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number; project?: string
 }
 
 type ListTasksArgs = {
-  assignee?: string; status?: string; updated_since?: number; epic_id?: number
-  limit?: number; ids?: number[]; project?: string
+  assignee?: string; status?: TaskStatus; updated_since?: number; epic_id?: number
+  limit?: number; project?: string
 }
 
 type UpdateStatusArgs = {
@@ -31,61 +31,81 @@ type UpdateStatusArgs = {
 type ListQueueArgs = { limit?: number; project?: string }
 type ClaimTaskArgs = { agent: string; taskId?: number; leaseTtlMin?: number; project?: string }
 
-export class TaskService {
-  private readonly leaseTtlMin: number
-  private readonly maxAttempts: number
-  private readonly auditLog: boolean
-  private readonly autoClaimCeiling: number
-  private readonly defaultPriority: string
-  private readonly defaultReporter: string
-  private readonly listLimit: number
-  private readonly timelineLimit: number
-  private readonly queueLimit: number
-  private readonly scope: string | undefined
-  private readonly reaper: LeaseReaper
+export type TaskServiceOptions = {
+  leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number
+  defaultPriority?: TaskPriority; defaultReporter?: string; listLimit?: number; timelineLimit?: number; queueLimit?: number
+  scope?: string
+}
 
-  constructor(private store: TaskStore, opts?: {
-    leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number
-    defaultPriority?: string; defaultReporter?: string; listLimit?: number; timelineLimit?: number; queueLimit?: number
-    scope?: string
-  }) {
-    this.leaseTtlMin = opts?.leaseTtlMin ?? DEFAULT_LEASE_TTL_MIN
-    this.maxAttempts = opts?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
-    this.auditLog = opts?.auditLog ?? DEFAULT_AUDIT_LOG
-    this.autoClaimCeiling = opts?.autoClaimCeiling ?? DEFAULT_AUTO_CLAIM_CEILING
-    this.defaultPriority = opts?.defaultPriority ?? DEFAULT_PRIORITY
-    this.defaultReporter = opts?.defaultReporter ?? DEFAULT_REPORTER
-    this.listLimit = opts?.listLimit ?? DEFAULT_LIST_LIMIT
-    this.timelineLimit = opts?.timelineLimit ?? DEFAULT_TIMELINE_LIMIT
-    this.queueLimit = opts?.queueLimit ?? DEFAULT_QUEUE_LIMIT
-    this.scope = opts?.scope
-    this.reaper = new LeaseReaper(store, opts?.reapCooldownSec ?? DEFAULT_REAP_COOLDOWN_SEC, this.auditLog)
-  }
+type ResolvedOptions = Required<Omit<TaskServiceOptions, 'scope'>> & Pick<TaskServiceOptions, 'scope'>
 
-  private _leaseUntil(ttlMin: number = this.leaseTtlMin): string {
-    return new Date(Date.now() + ttlMin * MINUTE_MS).toISOString()
+// The single defaults merge: undefined means "unset", so a partially filled options object never
+// needs a per-field fallback at the point of use.
+function resolveOptions(opts: TaskServiceOptions): ResolvedOptions {
+  return {
+    leaseTtlMin: opts.leaseTtlMin ?? DEFAULT_LEASE_TTL_MIN,
+    maxAttempts: opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+    auditLog: opts.auditLog ?? DEFAULT_AUDIT_LOG,
+    reapCooldownSec: opts.reapCooldownSec ?? DEFAULT_REAP_COOLDOWN_SEC,
+    autoClaimCeiling: opts.autoClaimCeiling ?? DEFAULT_AUTO_CLAIM_CEILING,
+    defaultPriority: opts.defaultPriority ?? DEFAULT_PRIORITY,
+    defaultReporter: opts.defaultReporter ?? DEFAULT_REPORTER,
+    listLimit: opts.listLimit ?? DEFAULT_LIST_LIMIT,
+    timelineLimit: opts.timelineLimit ?? DEFAULT_TIMELINE_LIMIT,
+    queueLimit: opts.queueLimit ?? DEFAULT_QUEUE_LIMIT,
+    scope: opts.scope
   }
+}
 
-  private _agentError(agent: string): SvcError | null {
-    return requiredError(agent, 'agent') ?? tooLongError(agent, MAX_AGENT, 'agent')
-  }
-
-  private _contentError(content: string): SvcError | null {
-    return requiredError(content, 'content') ?? tooLongError(content, MAX_CONTENT, 'content')
-  }
-
-  private _epicError(task: Task, message: string): SvcError | null {
-    return epicError(task, message)
-  }
-
-  private _atomic<T>(fn: () => T): T {
-    return this.store.transaction(fn)
-  }
+// Project administration is its own seam: the MCP layer drives these verbs through this façade,
+// while TaskService reaches projects only through resolve(), for the scope of its enumerating calls.
+export class ProjectService {
+  constructor(private readonly store: TaskStore, private readonly scope?: string) {}
 
   // The single resolution point: every enumerating call funnels its `project` (or the test-only
   // `scope` fallback) through here, so a missing or unknown slug refuses identically everywhere.
-  private _resolveProject(project?: string): SvcResult<ProjectRow> {
+  resolve(project?: string): SvcResult<ProjectRow> {
     return resolveProject(this.store, project ?? this.scope)
+  }
+
+  create(args: { slug?: string; folder_path?: string }): SvcResult<{ slug: string }> {
+    return createProject(this.store, args)
+  }
+
+  list(): ReadonlyArray<ProjectListItem> {
+    return this.store.listProjects()
+  }
+
+  update(args: { project: string; slug?: string; folder_path?: string; archived?: boolean }): SvcResult<{ slug: string }> {
+    return updateProject(this.store, args)
+  }
+
+  delete(project: string): SvcResult<{ deleted: string }> {
+    return deleteProject(this.store, project)
+  }
+}
+
+export class TaskService {
+  private readonly opts: ResolvedOptions
+  private readonly reaper: LeaseReaper
+  readonly projects: ProjectService
+
+  constructor(private store: TaskStore, opts: TaskServiceOptions = {}) {
+    this.opts = resolveOptions(opts)
+    this.reaper = new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog)
+    this.projects = new ProjectService(store, this.opts.scope)
+  }
+
+  private _leaseUntil(ttlMin: number = this.opts.leaseTtlMin): string {
+    return isoFromNow(ttlMin * MINUTE_MS)
+  }
+
+  private _agentError(agent: string): SvcError | null {
+    return requiredError(agent, 'agent') ?? tooLongError(agent, MAX_AGENT_LENGTH, 'agent')
+  }
+
+  private _contentError(content: string): SvcError | null {
+    return requiredError(content, 'content') ?? tooLongError(content, MAX_CONTENT_LENGTH, 'content')
   }
 
   // Pure precondition set for create_task: title/actor lengths, the epic↔(epic_id|deps) conflicts,
@@ -93,31 +113,31 @@ export class TaskService {
   private _createTaskGuard(args: CreateTaskArgs, project: ProjectRow): SvcError | null {
     return createTaskGuard({
       ...args,
-      defaultReporter: this.defaultReporter,
+      defaultReporter: this.opts.defaultReporter,
       project: project.slug,
       projectArchived: project.archived_at !== null
     }, this.store)
   }
 
   createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' }> {
-    const project = this._resolveProject(args.project)
+    const project = this.projects.resolve(args.project)
     if (!project.ok) return fail(project.error)
     const guard = this._createTaskGuard(args, project.data)
     if (guard) return fail(guard)
     const deps = args.depends_on ?? []
-    const reporter = args.reporter ?? this.defaultReporter
+    const reporter = args.reporter ?? this.opts.defaultReporter
     const now = nowIso()
     const epicId = args.epic_id ?? null
-    return this._atomic((): SvcResult<{ id: number; status: 'queued' }> => {
+    return this.store.transaction((): SvcResult<{ id: number; status: 'queued' }> => {
       const id = this.store.insertTask({
         title: args.title,
         description: args.description ?? null,
-        priority: args.priority ?? this.defaultPriority,
+        priority: args.priority ?? this.opts.defaultPriority,
         assignee: args.assignee ?? null,
         reporter,
         depends_on: JSON.stringify(deps),
         now,
-        maxAttempts: this.maxAttempts,
+        maxAttempts: this.opts.maxAttempts,
         epicId: epicId ?? undefined,
         isEpic: args.epic,
         projectId: project.data.id
@@ -126,12 +146,12 @@ export class TaskService {
         this.store.deleteTask(id)
         return fail('CYCLE', 'dependency graph contains a cycle')
       }
-      if (this.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
+      if (this.opts.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
 
       // D2: auto-promote target epic and D6: mirror subtask_add (same transaction)
       if (epicId !== null) {
         this.store.promoteEpicWithMirror(epicId, reporter, 'subtask_add',
-          `#${id} ${sanitizePipe(args.title)}`, now, this.auditLog)
+          `#${id} ${sanitizePipe(args.title)}`, now, this.opts.auditLog)
       }
 
       return ok({ id, status: 'queued' as const })
@@ -144,10 +164,7 @@ export class TaskService {
     if (!task) return fail('NOT_FOUND')
     const deps = parseDeps(task.depends_on)
     const depStatuses = this.store.statusesOf(deps)
-    const blockedBy = deps.filter(d => {
-      const s = depStatuses.get(d)
-      return s === undefined || !TERMINAL_STATUSES.includes(s)
-    })
+    const blockedBy = blockingDeps(depStatuses, deps)
     // D3: derived roll-up for epics
     if (task.is_epic) {
       const counts = this.store.childStatusCounts(id)
@@ -158,16 +175,8 @@ export class TaskService {
     return ok({ task, blockedBy })
   }
 
-  listTasks(args: ListTasksArgs): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number } | { items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
-    if (args.ids !== undefined && args.ids.length > 0) {
-      this.reaper.reapIfStale()
-      const batch = this.store.batchTasks(args.ids)
-      return ok({
-        items: args.ids.map(id => ({ id, task: batch.get(id) ?? null })),
-        total: args.ids.length
-      })
-    }
-    const project = this._resolveProject(args.project)
+  listTasks(args: ListTasksArgs): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number }> {
+    const project = this.projects.resolve(args.project)
     if (!project.ok) return fail(project.error)
     this.reaper.reapIfStale()
     const { rows, total } = this.store.listTasks({
@@ -175,10 +184,19 @@ export class TaskService {
       status: args.status,
       updatedSinceIso: args.updated_since !== undefined ? new Date(args.updated_since).toISOString() : undefined,
       epicId: args.epic_id,
-      limit: clampLimit(args.limit, this.listLimit),
+      limit: clampLimit(args.limit, this.opts.listLimit),
       projectId: project.data.id
     })
     return ok({ tasks: rows, total })
+  }
+
+  getTasksByIds(ids: number[]): SvcResult<{ items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
+    this.reaper.reapIfStale()
+    const batch = this.store.batchTasks(ids)
+    return ok({
+      items: ids.map(id => ({ id, task: batch.get(id) ?? null })),
+      total: ids.length
+    })
   }
 
   claimTask(args: ClaimTaskArgs): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> {
@@ -187,7 +205,7 @@ export class TaskService {
     // Only the auto-pick branch enumerates, so only it resolves a scope; a by-id claim stays unscoped.
     let projectId: number | undefined
     if (args.taskId === undefined) {
-      const project = this._resolveProject(args.project)
+      const project = this.projects.resolve(args.project)
       if (!project.ok) return fail(project.error)
       projectId = project.data.id
     }
@@ -198,24 +216,22 @@ export class TaskService {
       task = this.store.getTaskRow(args.taskId)
       if (!task) return fail('NOT_FOUND')
       if (task.status !== 'queued' && task.status !== 'blocked') return fail('CONFLICT', `status=${task.status}`)
-      const epicErr = this._epicError(task, `#${task.id} is an epic, not claimable`)
-      if (epicErr) return fail(epicErr)
-      const deps = parseDeps(task.depends_on)
-      if (!depsSatisfied(this.store.statusesOf(deps), deps)) return fail('BLOCKED', 'dependencies not satisfied')
+      const claimErr = claimEligibilityError(task, this.store)
+      if (claimErr) return fail(claimErr)
     } else if (projectId !== undefined) {
-      task = readyCandidates(this.store, 1, this.autoClaimCeiling, projectId)[0] ?? null
+      task = readyCandidates(this.store, 1, this.opts.autoClaimCeiling, projectId)[0] ?? null
     }
 
     if (!task) return fail('EMPTY', 'no claimable tasks')
 
     const now = nowIso()
     // a per-claim override lives only for this call: the instance default is never mutated
-    const leaseTtlMin = args.leaseTtlMin ?? this.leaseTtlMin
+    const leaseTtlMin = args.leaseTtlMin ?? this.opts.leaseTtlMin
     const leaseUntil = this._leaseUntil(leaseTtlMin)
     const changes = this.store.markClaimed(task.id, task.version, args.agent, leaseUntil, now)
     const updated = this.store.getTaskRow(task.id)
     if (changes !== 1 || !updated) return fail('CONFLICT', 'version mismatch')
-    if (this.auditLog) this.store.auditAppend(task.id, args.agent, 'claim', task.status, 'in_progress')
+    if (this.opts.auditLog) this.store.auditAppend(task.id, args.agent, 'claim', task.status, 'in_progress')
     return ok({ id: task.id, leaseTtlMin, task: updated })
   }
 
@@ -232,16 +248,9 @@ export class TaskService {
     this.reaper.reap()
     const task = this.store.getTaskRow(args.id)
     if (!task) return fail('NOT_FOUND')
-    const guard = this._updateStatusGuard(args, task, refund)
+    const guard = updateStatusGuard(args, task, refund, this.store)
     if (guard) return fail(guard)
     return this._applyTransition(args, task, refund)
-  }
-
-  // All refusals that do not touch the row: version CAS, the lease self-edge/renew rules, the
-  // transition table, claim-grade eligibility for a non-renewal in_progress, the epic refund ban
-  // and the epic terminal close-guard. Returns the first failure or null.
-  private _updateStatusGuard(args: UpdateStatusArgs, task: Task, refund: boolean): SvcError | null {
-    return updateStatusGuard(args, task, refund, this.store)
   }
 
   private _applyTransition(args: UpdateStatusArgs, task: Task, refund: boolean): SvcResult<UpdateStatusData> {
@@ -252,7 +261,7 @@ export class TaskService {
     // D6: mirror subtask_done/subtask_failed onto the parent epic
     const subtaskMirror = args.status === 'done' ? 'subtask_done' : args.status === 'failed' ? 'subtask_failed' : null
 
-    return this._atomic((): SvcResult<UpdateStatusData> => {
+    return this.store.transaction((): SvcResult<UpdateStatusData> => {
       // CAS on the version read in the guard when the caller omitted it, so an omitted version is not a
       // lost update: a write landing between the read and here still fails as CONFLICT.
       const expectedVersion = args.version ?? task.version
@@ -260,7 +269,7 @@ export class TaskService {
       if (changes !== 1) return fail('CONFLICT', 'concurrent modification')
       const updated = this.store.getTaskRow(args.id)
       if (!updated) return fail('CONFLICT', 'concurrent modification')
-      if (this.auditLog) {
+      if (this.opts.auditLog) {
         // a pure renewal audits as lease_renewed: an update_status row would cut the in_progress
         // segment in statusDurations at every heartbeat
         if (renewal) {
@@ -279,7 +288,7 @@ export class TaskService {
       // PRAGMA foreign_keys = ON rejects a child whose parent is missing, and the only deleteTask
       // call site (createTask cycle rollback) removes a just-inserted task by its own id — never a
       // parent some child still references.
-      if (task.epic_id !== null && subtaskMirror !== null && this.auditLog) {
+      if (task.epic_id !== null && subtaskMirror !== null && this.opts.auditLog) {
         this.store.appendEpicAuditMirror(task.epic_id, args.agent, subtaskMirror,
           `#${task.id} ${sanitizePipe(task.title)}`)
       }
@@ -291,27 +300,11 @@ export class TaskService {
   }
 
   listQueue(args: ListQueueArgs): SvcResult<ReadonlyArray<Readonly<Task>>> {
-    const project = this._resolveProject(args.project)
+    const project = this.projects.resolve(args.project)
     if (!project.ok) return fail(project.error)
     this.reaper.reapIfStale()
-    const limit = clampLimit(args.limit, this.queueLimit)
-    return ok(readyCandidates(this.store, limit, this.autoClaimCeiling, project.data.id))
-  }
-
-  createProject(args: { slug?: string; folder_path?: string }): SvcResult<{ slug: string }> {
-    return createProject(this.store, args)
-  }
-
-  listProjects(): ReadonlyArray<ProjectListItem> {
-    return this.store.listProjects()
-  }
-
-  updateProject(args: { project: string; slug?: string; folder_path?: string; archived?: boolean }): SvcResult<{ slug: string }> {
-    return updateProject(this.store, args)
-  }
-
-  deleteProject(project: string): SvcResult<{ deleted: string }> {
-    return deleteProject(this.store, project)
+    const limit = clampLimit(args.limit, this.opts.queueLimit)
+    return ok(readyCandidates(this.store, limit, this.opts.autoClaimCeiling, project.data.id))
   }
 
   addComment(args: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
@@ -330,7 +323,7 @@ export class TaskService {
     this.reaper.reapIfStale()
     const task = this.store.getTaskRow(id)
     if (!task) return fail('NOT_FOUND')
-    const limitN = clampLimit(limit, this.timelineLimit)
+    const limitN = clampLimit(limit, this.opts.timelineLimit)
     const rows = this.store.timelineEntries(id, limitN)
     return ok(rows)
   }

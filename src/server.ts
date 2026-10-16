@@ -7,13 +7,10 @@ import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
 import { createLogger, normalizeError } from './logger'
 import { VERSION } from './version'
+import { SessionRegistry, type Session } from './session-registry'
 import { DEFAULT_HTTP_MAX_SESSIONS, DEFAULT_HTTP_SESSION_TTL_MS, SESSION_CLEANUP_INTERVAL_MS } from './defaults'
 
-export interface Session {
-  transport: WebStandardStreamableHTTPServerTransport
-  lastAccess: number
-  agent: string
-}
+export type { Session } from './session-registry'
 
 export const SSE_KEEPALIVE_MS = 10_000
 export const HTTP_IDLE_TIMEOUT_SEC = 60
@@ -122,25 +119,32 @@ const JSONRPC_BAD_REQUEST = -32000
 const SESSION_NOT_FOUND = { jsonrpc: '2.0', error: { code: JSONRPC_SESSION_NOT_FOUND, message: 'Session not found' }, id: null }
 const SESSION_REQUIRED = { jsonrpc: '2.0', error: { code: JSONRPC_BAD_REQUEST, message: 'Bad Request: Mcp-Session-Id header is required' }, id: null }
 
+// EXPERIMENTAL: provisional read-only endpoint, response shape subject to change.
+function handleTaskView(svc: TaskService, pathname: string): Response {
+  const rawId = pathname.slice('/api/task/'.length)
+  const id = Number(rawId)
+  if (rawId.length === 0 || !Number.isInteger(id)) {
+    return Response.json({ error: 'Invalid task id' }, { status: 400 })
+  }
+  const view = svc.getTaskView(id)
+  if (!view.ok) {
+    return Response.json({ error: formatError(view.error) }, { status: 404 })
+  }
+  const comments = svc.listComments(id)
+  return Response.json({
+    task: view.data.task,
+    blocked_by: view.data.blockedBy,
+    ...(view.data.subtasks !== undefined ? { subtasks: view.data.subtasks } : {}),
+    comments: comments.ok ? comments.data : []
+  })
+}
+
 export function startHttp(opts: StartHttpOptions) {
   const { svc, port, host, dbPath, maxSessions = DEFAULT_HTTP_MAX_SESSIONS, sessionTtlMs = DEFAULT_HTTP_SESSION_TTL_MS, logger, onShutdown } = opts
   const svcLogger = logger ?? createLogger('http', 'off')
-  const sessions = new Map<string, Session>()
-  let reservedSessions = 0
-  const logSessionClose = (id: string, agent: string) => {
-    svcLogger.child({ session: id, agent }).info('session close')
-  }
+  const registry = new SessionRegistry({ logger: svcLogger, maxSessions, sessionTtlMs })
 
-  const cleanup = setInterval(() => {
-    const now = Date.now()
-    for (const [id, session] of sessions) {
-      if (now - session.lastAccess > sessionTtlMs) {
-        logSessionClose(id, session.agent)
-        session.transport.close().catch(() => {})
-        sessions.delete(id)
-      }
-    }
-  }, SESSION_CLEANUP_INTERVAL_MS)
+  const cleanup = setInterval(() => registry.sweep(), SESSION_CLEANUP_INTERVAL_MS)
 
   const server = Bun.serve({
     port,
@@ -154,24 +158,8 @@ export function startHttp(opts: StartHttpOptions) {
           return Response.json({ ok: true, version: VERSION })
         }
 
-        // EXPERIMENTAL: provisional read-only endpoint, response shape subject to change.
         if (req.method === 'GET' && url.pathname.startsWith('/api/task/')) {
-          const rawId = url.pathname.slice('/api/task/'.length)
-          const id = Number(rawId)
-          if (rawId.length === 0 || !Number.isInteger(id)) {
-            return Response.json({ error: 'Invalid task id' }, { status: 400 })
-          }
-          const view = svc.getTaskView(id)
-          if (!view.ok) {
-            return Response.json({ error: formatError(view.error) }, { status: 404 })
-          }
-          const comments = svc.listComments(id)
-          return Response.json({
-            task: view.data.task,
-            blocked_by: view.data.blockedBy,
-            ...(view.data.subtasks !== undefined ? { subtasks: view.data.subtasks } : {}),
-            comments: comments.ok ? comments.data : []
-          })
+          return handleTaskView(svc, url.pathname)
         }
 
         if (url.pathname !== '/mcp') {
@@ -181,7 +169,7 @@ export function startHttp(opts: StartHttpOptions) {
         const sessionId = req.headers.get('mcp-session-id')
 
         if (sessionId) {
-          const session = sessions.get(sessionId)
+          const session = registry.get(sessionId)
           if (!session) {
             return Response.json(SESSION_NOT_FOUND, { status: 404 })
           }
@@ -189,10 +177,9 @@ export function startHttp(opts: StartHttpOptions) {
           return trackStreamActivity(await session.transport.handleRequest(req), session)
         }
 
-        if (sessions.size + reservedSessions >= maxSessions) {
+        if (!registry.reserve()) {
           return Response.json({ error: 'Too many sessions' }, { status: 429 })
         }
-        reservedSessions++
         try {
           const { request, agentName, isInitialize } = await peekInitialize(req, svcLogger)
           if (!isInitialize) {
@@ -206,20 +193,17 @@ export function startHttp(opts: StartHttpOptions) {
             keepAliveMs: SSE_KEEPALIVE_MS,
             eventStore,
             onsessioninitialized: (id) => {
-              sessions.set(id, { transport, lastAccess: Date.now(), agent: agentName })
-              svcLogger.child({ session: id, agent: agentName }).info('session open')
+              registry.open(id, { transport, lastAccess: Date.now(), agent: agentName })
             },
             onsessionclosed: (id) => {
-              const session = sessions.get(id)
-              logSessionClose(id, session?.agent ?? 'unknown')
-              sessions.delete(id)
+              registry.close(id)
             }
           })
           transport.onclose = () => eventStore.clear()
 
           await mcpServer.connect(transport)
           const response = await transport.handleRequest(request)
-          const session = transport.sessionId ? sessions.get(transport.sessionId) : undefined
+          const session = transport.sessionId ? registry.get(transport.sessionId) : undefined
           if (!session) {
             transport.close().catch(() => {})
             mcpServer.close().catch(() => {})
@@ -227,7 +211,7 @@ export function startHttp(opts: StartHttpOptions) {
           }
           return trackStreamActivity(response, session)
         } finally {
-          reservedSessions--
+          registry.release()
         }
       } catch (err) {
         svcLogger.error('http handler error', normalizeError(err))
@@ -238,11 +222,7 @@ export function startHttp(opts: StartHttpOptions) {
 
   const shutdown = () => {
     clearInterval(cleanup)
-    for (const [id, session] of sessions) {
-      logSessionClose(id, session.agent)
-      session.transport.close().catch(() => {})
-    }
-    sessions.clear()
+    registry.closeAll()
     server.stop(true)
     onShutdown?.()
     process.exit(0)

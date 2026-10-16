@@ -64,20 +64,24 @@ function pickFields(src: Task, fields: string[]): Record<string, unknown> {
 // text) and enforced in the service; by-id shapes do not declare it at all.
 const PROJECT_ARG = z.string().optional().describe('project slug; required on every enumerating call (no default, no all-projects mode)')
 
+// Shared by every task-id-ish argument, so a fractional or non-positive id is refused by the
+// schema instead of reaching the service and surfacing as NOT_FOUND.
+const TaskId = z.number().int().positive()
+
 const CREATE_TASK_SHAPE = {
   title: z.string().describe('English, <=200 chars'),
   description: z.string().optional().describe('English; fill get_template("task") or "epic" first'),
   priority: z.enum(TASK_PRIORITIES).optional(),
   assignee: z.string().optional(),
-  depends_on: z.array(z.number()).optional(),
+  depends_on: z.array(z.number().int()).optional(),
   reporter: z.string().optional(),
   epic: z.boolean().optional().describe('Create as an epic (not claimable); description follows get_template("epic") with required Source'),
-  epic_id: z.number().optional().describe('Attach as sub-task to an existing task'),
+  epic_id: TaskId.optional().describe('Attach as sub-task to an existing task'),
   project: PROJECT_ARG
 }
 
 const GET_TASK_SHAPE = {
-  id: z.number(),
+  id: TaskId,
   fields: z.array(z.string()).optional()
 }
 
@@ -87,25 +91,25 @@ const LIST_TASKS_SHAPE = {
   fields: z.array(z.string()).optional(),
   limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional(),
   updated_since: z.number().finite().min(-MAX_SAFE_TIMESTAMP_MS).max(MAX_SAFE_TIMESTAMP_MS).optional(),
-  epic_id: z.number().optional(),
-  ids: z.array(z.number()).optional(),
+  epic_id: TaskId.optional(),
+  ids: z.array(z.number().int()).optional(),
   project: PROJECT_ARG
 }
 
 const CLAIM_TASK_SHAPE = {
   agent: z.string().optional().describe('agent name; defaults to "unknown" when omitted'),
-  task_id: z.number().int().positive().optional(),
-  id: z.number().int().positive().optional().describe('alias of task_id'),
+  task_id: TaskId.optional(),
+  id: TaskId.optional().describe('alias of task_id'),
   include: z.array(z.string()).optional(),
   lease_ttl_min: z.number().int().positive().optional().describe('lease TTL in minutes for this claim; overrides the server default for this claim only'),
   project: PROJECT_ARG
 }
 
 const UPDATE_STATUS_SHAPE = {
-  id: z.number(),
+  id: TaskId,
   agent: z.string(),
   status: z.enum(TASK_STATUSES),
-  version: z.number().optional().describe('optimistic lock; omit to skip the version check (a stale version still refuses)'),
+  version: z.number().int().optional().describe('optimistic lock; omit to skip the version check (a stale version still refuses)'),
   comment: z.string().optional().describe('typed resolution when done/failed/canceled'),
   renew: z.boolean().optional().describe('with status=in_progress on an in_progress task: re-arm your own lease (heartbeat, ~lease_ttl_min/3)'),
   reset_attempts: z.boolean().optional().describe('with any legal transition: zero attempts (refund a budget spent on accidents); requires comment, max_attempts untouched, echoes attempts in the response; not on epics, not on terminal tasks')
@@ -135,7 +139,7 @@ const DELETE_PROJECT_SHAPE = {
 }
 
 const ADD_COMMENT_SHAPE = {
-  id: z.number(),
+  id: TaskId,
   agent: z.string(),
   content: z.string().optional().describe('English; fill get_template("comment-success") or "comment-failure"'),
   text: z.string().optional().describe('alias of content'),
@@ -143,7 +147,7 @@ const ADD_COMMENT_SHAPE = {
 }
 
 const GET_TIMELINE_SHAPE = {
-  id: z.number(),
+  id: TaskId,
   limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional()
 }
 
@@ -163,7 +167,7 @@ function rejectUnknownArgs(tool: string, shape: object, args: object): ToolResul
   )
 }
 
-function handleGetTemplate(_svc: TaskService, args: { name: TemplateName }): ToolResult {
+function handleGetTemplate(args: { name: TemplateName }): ToolResult {
   const unknown = rejectUnknownArgs('get_template', GET_TEMPLATE_SHAPE, args)
   if (unknown) return unknown
   const template = TEMPLATES[args.name]
@@ -174,14 +178,14 @@ function handleGetTemplate(_svc: TaskService, args: { name: TemplateName }): Too
 export function handleListProjects(svc: TaskService, args: object): ToolResult {
   const unknown = rejectUnknownArgs('list_projects', LIST_PROJECTS_SHAPE, args)
   if (unknown) return unknown
-  const lines = svc.listProjects().map(p => pipeJoin(p.slug, sanitizePipe(p.folder_path), p.open))
+  const lines = svc.projects.list().map(p => pipeJoin(p.slug, sanitizePipe(p.folder_path), p.open))
   return textResult(lines.join('\n'))
 }
 
 export function handleCreateProject(svc: TaskService, args: { slug?: string; folder_path: string }): ToolResult {
   const unknown = rejectUnknownArgs('create_project', CREATE_PROJECT_SHAPE, args)
   if (unknown) return unknown
-  return toToolResult(svc.createProject(args))
+  return toToolResult(svc.projects.create(args))
 }
 
 export function handleUpdateProject(svc: TaskService, args: {
@@ -189,13 +193,13 @@ export function handleUpdateProject(svc: TaskService, args: {
 }): ToolResult {
   const unknown = rejectUnknownArgs('update_project', UPDATE_PROJECT_SHAPE, args)
   if (unknown) return unknown
-  return toToolResult(svc.updateProject(args))
+  return toToolResult(svc.projects.update(args))
 }
 
 export function handleDeleteProject(svc: TaskService, args: { project: string }): ToolResult {
   const unknown = rejectUnknownArgs('delete_project', DELETE_PROJECT_SHAPE, args)
   if (unknown) return unknown
-  return toToolResult(svc.deleteProject(args.project))
+  return toToolResult(svc.projects.delete(args.project))
 }
 
 export function registerAllTools(server: McpServer, svc: TaskService) {
@@ -242,7 +246,7 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
   server.registerTool('get_template', {
     description: 'Return a markdown template by name',
     inputSchema: z.object(GET_TEMPLATE_SHAPE).catchall(z.unknown())
-  }, async (args) => handleGetTemplate(svc, args))
+  }, async (args) => handleGetTemplate(args))
 
   server.registerTool('create_project', {
     description: 'Create a project; slug? derives from the folder name and must match ^[a-z0-9][a-z0-9._-]{0,31}$ ("legacy" is reserved). Output {slug}',
@@ -300,7 +304,7 @@ export function handleGetTask(svc: TaskService, args: { id: number; fields?: str
 
 export function handleListTasks(svc: TaskService, args: {
   assignee?: string
-  status?: string
+  status?: TaskStatus
   fields?: string[]
   limit?: number
   updated_since?: number
@@ -312,22 +316,28 @@ export function handleListTasks(svc: TaskService, args: {
   if (unknown) return unknown
   if (args.ids !== undefined && args.ids.length > 0) {
     const withAssignee = args.fields?.includes('assignee') ?? false
-    const batch = svc.listTasks({ ids: args.ids })
-    if (!batch.ok) return errorTool(batch.error)
-    if (!('items' in batch.data)) return errorResult('INVALID: ids batch mode')
-    const lines = batch.data.items.map(({ id, task }) => {
-      if (!task) return withAssignee ? pipeJoin(id, 0, '-') : pipeJoin(id, 0)
-      const code = statusToCode(task.status)
-      return withAssignee ? pipeJoin(id, code, task.assignee ?? '-') : pipeJoin(id, code)
-    })
-    return textResult(lines.join('\n'))
+    return foldResult(svc.getTasksByIds(args.ids), ({ items }) => {
+      const lines = items.map(({ id, task }) => {
+        if (!task) return withAssignee ? pipeJoin(id, 0, '-') : pipeJoin(id, 0)
+        const code = statusToCode(task.status)
+        return withAssignee ? pipeJoin(id, code, task.assignee ?? '-') : pipeJoin(id, code)
+      })
+      return textResult(lines.join('\n'))
+    }, errorTool)
   }
-  const result = svc.listTasks(args)
-  if (!result.ok) return errorTool(result.error)
-  if ('items' in result.data) return errorResult('INVALID: unexpected batch mode')
+  const filters = {
+    assignee: args.assignee,
+    status: args.status,
+    updated_since: args.updated_since,
+    epic_id: args.epic_id,
+    limit: args.limit,
+    project: args.project
+  }
   const fields = args.fields ?? ['id', 'title', 'status', 'priority', 'assignee']
-  const tasks = result.data.tasks.map((task) => pickFields(task, fields))
-  return jsonResult({ tasks, total: result.data.total })
+  return foldResult(svc.listTasks(filters), (data) => {
+    const tasks = data.tasks.map((task) => pickFields(task, fields))
+    return jsonResult({ tasks, total: data.total })
+  }, errorTool)
 }
 
 export function handleClaimTask(svc: TaskService, args: {

@@ -3,7 +3,7 @@ import type { Database } from 'bun:sqlite'
 import { isValidTransition, STATUS_CODES, TASK_STATUSES, TERMINAL_STATUSES, nowIso } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
-import { TERMINAL_STATUSES_SQL, TERMINAL_STATUS_VALUES } from './defaults'
+import { TERMINAL_STATUSES_SQL } from './db/sql'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus, handleListTasks
 } from './mcp/tools'
@@ -362,7 +362,6 @@ describe('terminal-status single source (#1445)', () => {
   test('TERMINAL_STATUSES (TS) and TERMINAL_STATUSES_SQL (SQL) describe the same set', () => {
     const parsedSql = TERMINAL_STATUSES_SQL.replace(/[()']/g, '').split(', ')
     expect(parsedSql).toEqual([...TERMINAL_STATUSES])
-    expect([...TERMINAL_STATUSES]).toEqual([...TERMINAL_STATUS_VALUES])
   })
 
   test('TERMINAL_STATUSES is exactly the set of statuses with no outgoing transition', () => {
@@ -650,8 +649,8 @@ describe('lease_expires_at cleared on exit from in_progress (#767)', () => {
   })
 })
 
-describe('monotonicIso per-repo (#795)', () => {
-  test('two separate TaskRepo instances have independent monotonic clocks', () => {
+describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
+  test('two TaskRepo instances share one monotonic clock, so repo B inherits repo A\'s advance', () => {
     const dbA = createTestDb()
     const repoA = new TaskRepo(dbA)
     const dbB = createTestDb()
@@ -664,26 +663,34 @@ describe('monotonicIso per-repo (#795)', () => {
         repoA.insertComment(idA, 'a', `ca${i}`)
         repoB.insertComment(idB, 'b', `cb${i}`)
       }
-      // Advance repoA's clock far ahead (500ms) by bulk-inserting comments
+      // Advance the shared clock far ahead (≈500ms) with a burst through repoA
       for (let i = 0; i < 500; i++) {
         repoA.insertComment(idA, 'a', `ca-adv${i}`)
       }
-      // repoB's internal lastTimestampMs must NOT have been updated by repoA's advances —
-      // if clocks were shared, repoB.lastTimestampMs would equal repoA.lastTimestampMs (≈ now+500ms)
-      // Under independent clocks, repoB.lastTimestampMs stays at its own baseline (~now+5ms)
-      const tsA = (repoA as any).lastTimestampMs as number
-      const tsB = (repoB as any).lastTimestampMs as number
-      expect(tsA - tsB).toBeGreaterThan(100)
+      // Shipped contract (#1608): every stamp comes from one process-wide monotonic clock
+      // (monotonicNowMs in src/core/tasks.ts), so the two repos are NOT independent — repoB
+      // inherits repoA's advance. This supersedes the per-instance independence that #795
+      // pinned when TaskRepo still owned its own clock.
+      // Hence this probe through repoB must be stamped AFTER repoA's last burst stamp, not at
+      // an independent wall clock ~500 ms behind it. Reading the stored created_at keeps this a
+      // black-box check of the same property.
+      repoB.insertComment(idB, 'b', 'cb-probe')
       // Verify repo A's entries are internally monotonic
       const rowsA = dbA.query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC').all(idA) as any[]
       for (let i = 1; i < rowsA.length; i++) {
         expect(rowsA[i].created_at > rowsA[i - 1].created_at).toBe(true)
       }
       // Verify repo B's entries are internally monotonic
-      const rowsB = dbB.query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC').all(idB) as any[]
+      const rowsB = dbB.query('SELECT created_at, content FROM comments WHERE task_id = ? ORDER BY id ASC').all(idB) as any[]
       for (let i = 1; i < rowsB.length; i++) {
         expect(rowsB[i].created_at > rowsB[i - 1].created_at).toBe(true)
       }
+      expect(rowsB.at(-1)!.content).toBe('cb-probe')
+      // The shared-clock probe: the counter is strictly increasing process-wide, so repoB's
+      // last stamp lands strictly after repoA's last burst stamp (a per-instance clock would
+      // put it ~500 ms earlier here).
+      const bMinusA = new Date(rowsB.at(-1)!.created_at).getTime() - new Date(rowsA.at(-1)!.created_at).getTime()
+      expect(bMinusA).toBeGreaterThan(0)
     } finally {
       closeTestDb(dbA)
       closeTestDb(dbB)

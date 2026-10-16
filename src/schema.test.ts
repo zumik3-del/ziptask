@@ -1,10 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { mkdirSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
 import { openDatabase } from './db/db'
 import { MIGRATIONS } from './db/migrations'
-import { createTestDb, closeTestDb } from './test-context'
+import { createTestDb, closeTestDb, makeTempDbPath, removeTempDb } from './test-context'
 
 let db: Database
 beforeEach(() => { db = createTestDb() })
@@ -58,35 +56,23 @@ describe('schema cascade (v4)', () => {
 })
 
 describe('schema guard (v1.6)', () => {
-  function makeTempDbPath(): string {
-    const dir = '/tmp/opencode'
-    mkdirSync(dir, { recursive: true })
-    return join(dir, `ziptask-schema-guard-${Date.now()}-${Math.random().toString(36).slice(2)}.db`)
-  }
-
   function openAndClose(path: string) {
     const db = openDatabase(path)
     db.close()
   }
 
-  function rmTempDb(path: string) {
-    try { rmSync(path) } catch {}
-    try { rmSync(path + '-wal') } catch {}
-    try { rmSync(path + '-shm') } catch {}
-  }
-
   test('fresh empty DB opens and stamps MIGRATIONS.length', () => {
-    const path = makeTempDbPath()
+    const path = makeTempDbPath('schema-guard')
     try {
       const db = openDatabase(path)
       const row = db.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | null
       expect(row?.version).toBe(MIGRATIONS.length)
       db.close()
-    } finally { rmTempDb(path) }
+    } finally { removeTempDb(path) }
   })
 
   test('V < L upgrades: applies missing migrations and stamps L', () => {
-    const path = makeTempDbPath()
+    const path = makeTempDbPath('schema-guard')
     try {
       const db = openDatabase(path)
       db.close()
@@ -109,11 +95,11 @@ describe('schema guard (v1.6)', () => {
       expect(idx).toContain('idx_comments_task_id')
       expect(idx).toContain('idx_tasks_status_completed')
       db3.close()
-    } finally { rmTempDb(path) }
+    } finally { removeTempDb(path) }
   })
 
   test('V > L throws exact R4 message, DB unchanged', () => {
-    const path = makeTempDbPath()
+    const path = makeTempDbPath('schema-guard')
     try {
       openAndClose(path)
       const db = openDatabase(path)
@@ -132,11 +118,11 @@ describe('schema guard (v1.6)', () => {
       const int = raw.query('SELECT * FROM sqlite_master').all() as { type: string; name: string }[]
       expect(int.some(r => r.type === 'table' && r.name === 'tasks')).toBe(true)
       raw.close()
-    } finally { rmTempDb(path) }
+    } finally { removeTempDb(path) }
   })
 
   test('divergent DB stamps a lower version on full schema fires R5', () => {
-    const path = makeTempDbPath()
+    const path = makeTempDbPath('schema-guard')
     try {
       openAndClose(path)
       const db = openDatabase(path)
@@ -152,13 +138,13 @@ describe('schema guard (v1.6)', () => {
       const ver = raw.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | null
       expect(ver?.version).toBe(2)
       raw.close()
-    } finally { rmTempDb(path) }
+    } finally { removeTempDb(path) }
   })
 
   test('v3 -> v4 rebuild preserves child rows and adds ON DELETE CASCADE', () => {
     // 12 = statements before the v4 rebuild block; pinning it keeps the v3->v4 boundary explicit
     const V3_STATEMENT_COUNT = 12
-    const path = makeTempDbPath()
+    const path = makeTempDbPath('schema-guard')
     try {
       const raw = new Database(path)
       raw.exec('PRAGMA foreign_keys = ON')
@@ -181,6 +167,6 @@ describe('schema guard (v1.6)', () => {
       db.run('DELETE FROM tasks WHERE id = ?', [id])
       expect((db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }).n).toBe(0)
       db.close()
-    } finally { rmTempDb(path) }
+    } finally { removeTempDb(path) }
   })
 })

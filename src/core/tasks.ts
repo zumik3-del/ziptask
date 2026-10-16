@@ -1,6 +1,16 @@
-import { TERMINAL_STATUS_VALUES, TASK_PRIORITIES } from '../defaults'
+// The one status list: the union type, the enum, the codes, the terminal set and the SQL list
+// are all derived from it (the SQL text itself lives in src/db/sql.ts).
+export const TASK_STATUS_VALUES = Object.freeze([
+  'queued',
+  'in_progress',
+  'review',
+  'done',
+  'failed',
+  'blocked',
+  'canceled'
+] as const)
 
-export type TaskStatus = 'queued' | 'in_progress' | 'review' | 'done' | 'failed' | 'blocked' | 'canceled'
+export type TaskStatus = (typeof TASK_STATUS_VALUES)[number]
 export type TaskPriority = 'p0' | 'p1' | 'p2' | 'p3'
 
 export interface Task {
@@ -24,24 +34,21 @@ export interface Task {
   project: string | null
 }
 
-export const STATUS_CODES: Record<TaskStatus | 'not_found', number> = Object.freeze({
-  not_found: 0,
-  queued: 1,
-  in_progress: 2,
-  review: 3,
-  done: 4,
-  failed: 5,
-  blocked: 6,
-  canceled: 7
-})
+// Codes are the 1-based position in the canonical list; not_found is the only code outside it.
+// Object.fromEntries cannot carry the key union, so the assertion restores the type the source
+// list already proves (the keys are TASK_STATUS_VALUES plus not_found, nothing else).
+export const STATUS_CODES = Object.freeze(
+  Object.fromEntries([
+    ['not_found', 0],
+    ...TASK_STATUS_VALUES.map((status, index) => [status, index + 1])
+  ])
+) as Record<TaskStatus | 'not_found', number>
 
-export const TASK_STATUSES = Object.keys(STATUS_CODES).filter(
-  (status): status is TaskStatus => status !== 'not_found'
-) as [TaskStatus, ...TaskStatus[]]
-export { TASK_PRIORITIES }
+// The canonical tuple under its historical name: callers pass it to z.enum and iterate it.
+export const TASK_STATUSES = TASK_STATUS_VALUES
 
 export function statusToCode(status: TaskStatus | 'not_found'): number {
-  return STATUS_CODES[status] ?? 0
+  return STATUS_CODES[status]
 }
 
 export function sanitizePipe(text: string): string {
@@ -54,12 +61,6 @@ export function pipeJoin(...fields: Array<string | number>): string {
 
 export type CommentType = 'comment' | 'resolution'
 
-export const TERMINAL_STATUSES: readonly TaskStatus[] = Object.freeze([...TERMINAL_STATUS_VALUES])
-
-// SQL CASE expression for ORDER BY priority (low number = high priority).
-// Kept in core so the db layer does not import from defaults directly.
-export const PRIORITY_ORDER_SQL = `CASE priority ${TASK_PRIORITIES.map((p, i) => `WHEN '${p}' THEN ${i}`).join(' ')} END`
-
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = Object.freeze({
   queued: ['in_progress', 'blocked', 'canceled'],
   in_progress: ['in_progress', 'review', 'failed', 'blocked', 'canceled'],
@@ -70,12 +71,33 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = Object.freeze({
   canceled: []
 })
 
+// Terminal means "no outgoing transition": the transition table is the only place that says so,
+// so a new status cannot be added to one list and forgotten in the other.
+export const TERMINAL_STATUSES: readonly TaskStatus[] = Object.freeze(
+  TASK_STATUS_VALUES.filter(status => VALID_TRANSITIONS[status].length === 0)
+)
+
 export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
   return VALID_TRANSITIONS[from]?.includes(to) ?? false
 }
 
+// The single time source: every stamp is strictly greater than the previous one, even when two
+// calls land in the same millisecond, so no ordering invariant depends on the wall clock ticking.
+let lastTimestampMs = 0
+
+export function monotonicNowMs(): number {
+  const now = Date.now()
+  const next = now > lastTimestampMs ? now : lastTimestampMs + 1
+  lastTimestampMs = next
+  return next
+}
+
 export function nowIso(): string {
-  return new Date().toISOString()
+  return new Date(monotonicNowMs()).toISOString()
+}
+
+export function isoFromNow(offsetMs: number): string {
+  return new Date(monotonicNowMs() + offsetMs).toISOString()
 }
 
 export const MAX_TITLE_LENGTH = 200

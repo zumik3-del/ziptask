@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { loadSettings, DEFAULTS, type Settings } from './config'
 import { createLogger } from './logger'
 import { TaskService } from './core/service'
-import { projectStoreStubs } from './test-context'
+import { taskStoreStubs } from './test-context'
 
 const TMP = '/tmp/opencode'
 
@@ -182,6 +182,56 @@ describe('loadSettings env overrides', () => {
     ])
   })
 
+  test('a parsed but out-of-range int env value is refused, not warned and skipped', () => {
+    expect(() => loadSettings({ env: { ZIPTASK_PORT: '-1' }, argv: [] }))
+      .toThrow(/Invalid configuration after env overrides: port: /)
+  })
+
+  test('every non-positive int env var is refused and named', () => {
+    const cases: Array<[string, string]> = [
+      ['ZIPTASK_LEASE_TTL_MIN', 'leaseTtlMin'],
+      ['ZIPTASK_MAX_ATTEMPTS', 'maxAttempts'],
+      ['ZIPTASK_REAP_COOLDOWN_SEC', 'reapCooldownSec'],
+      ['ZIPTASK_AUTO_CLAIM_CEILING', 'autoClaimCeiling'],
+      ['ZIPTASK_HTTP_MAX_SESSIONS', 'http.maxSessions'],
+      ['ZIPTASK_HTTP_SESSION_TTL_MS', 'http.sessionTtlMs'],
+      ['ZIPTASK_DEFAULTS_LIST_LIMIT', 'defaults.listLimit'],
+      ['ZIPTASK_DEFAULTS_TIMELINE_LIMIT', 'defaults.timelineLimit'],
+      ['ZIPTASK_DEFAULTS_QUEUE_LIMIT', 'defaults.queueLimit']
+    ]
+    for (const [envName, path] of cases) {
+      const err = (() => {
+        try { loadSettings({ env: { [envName]: '0' }, argv: [] }); return '' } catch (e) { return (e as Error).message }
+      })()
+      expect(err).toContain(`Invalid configuration after env overrides: ${path}: `)
+    }
+  })
+
+  test('an invalid priority enum from env is refused with the key named', () => {
+    expect(() => loadSettings({ env: { ZIPTASK_DEFAULTS_PRIORITY: 'p9' }, argv: [] }))
+      .toThrow(/Invalid configuration after env overrides: defaults\.priority: /)
+  })
+
+  test('an env override above settings.json is still validated against the schema', () => {
+    const settingsPath = writeSettingsJson(testDir, { port: 7000, defaults: { priority: 'p1' } })
+    expect(() => loadSettings({ path: settingsPath, env: { ZIPTASK_PORT: '-1' }, argv: [] }))
+      .toThrow(/Invalid configuration after env overrides: port: /)
+    expect(() => loadSettings({ path: settingsPath, env: { ZIPTASK_DEFAULTS_PRIORITY: 'p9' }, argv: [] }))
+      .toThrow(/Invalid configuration after env overrides: defaults\.priority: /)
+    // the same file without a bad override still loads
+    expect(loadSettings({ path: settingsPath, env: { ZIPTASK_PORT: '8080' }, argv: [] }).port).toBe(8080)
+  })
+
+  test('all-valid env overrides pass the post-merge validation', () => {
+    const s = loadSettings({
+      env: { ZIPTASK_PORT: '0', ZIPTASK_DEFAULTS_PRIORITY: 'p0', ZIPTASK_AUDIT_LOG: 'false' },
+      argv: []
+    })
+    expect(s.port).toBe(0)
+    expect(s.defaults.priority).toBe('p0')
+    expect(s.auditLog).toBe(false)
+  })
+
   test('a valid env value emits no warning', () => {
     const warnings: string[] = []
     loadSettings({ env: { ZIPTASK_PORT: '1234' }, argv: [], warn: (message) => warnings.push(message) })
@@ -298,6 +348,35 @@ describe('loadSettings CLI flag', () => {
     const s = loadSettings({ env, argv: ['node', '--settings', cliPath] })
     expect(s.port).toBe(5555)
   })
+
+  test('a bare --settings throws instead of falling back to ZIPTASK_SETTINGS or defaults', () => {
+    const envFile = join(testDir, 'env-settings.json')
+    writeFileSync(envFile, JSON.stringify({ port: 6666 }))
+    const env = { ZIPTASK_SETTINGS: envFile }
+    expect(() => loadSettings({ env, argv: ['node', '--settings'] }))
+      .toThrow(/Missing path for --settings/)
+    expect(() => loadSettings({ env: {}, argv: ['node', '--settings'] }))
+      .toThrow(/Missing path for --settings/)
+  })
+
+  test('a flag-like --settings value throws instead of being read as a file', () => {
+    expect(() => loadSettings({ env: {}, argv: ['node', '--settings', '--stdio'] }))
+      .toThrow(/Missing path for --settings \(got '--stdio'\)/)
+    expect(() => loadSettings({ env: {}, argv: ['node', '--settings', ''] }))
+      .toThrow(/Missing path for --settings/)
+  })
+
+  test('--settings with a positional path still works', () => {
+    const cliPath = writeSettingsJson(testDir, { port: 4321 })
+    expect(loadSettings({ env: {}, argv: ['node', '--settings', cliPath] }).port).toBe(4321)
+  })
+
+  test('a missing --settings path is not masked by opts.path', () => {
+    const envFile = join(testDir, 'env-settings.json')
+    writeFileSync(envFile, JSON.stringify({ port: 6666 }))
+    expect(() => loadSettings({ path: envFile, env: {}, argv: ['node', '--settings'] }))
+      .toThrow(/Missing path for --settings/)
+  })
 })
 
 describe('loadSettings error cases', () => {
@@ -348,33 +427,12 @@ describe('maxAttempts flow', () => {
     const settingsPath = writeSettingsJson(testDir, { maxAttempts: 5 })
     const s = loadSettings({ path: settingsPath, env: {}, argv: [] })
     // Build a minimal in-memory service to verify the value propagates
-    const svc = new TaskService({
-      getTaskRow: () => null,
+    const svc = new TaskService(taskStoreStubs({
       insertTask: (t) => {
         expect(t.maxAttempts).toBe(5)
         return 1
-      },
-      deleteTask: () => {},
-      listTasks: () => ({ rows: [], total: 0 }),
-      queuedCandidates: () => [],
-      depsOf: () => null,
-      statusesOf: () => new Map(),
-      batchTasks: () => new Map(),
-      markClaimed: () => 0,
-      transitionStatus: () => 0,
-      transaction: <T>(fn: () => T) => fn(),
-      expiredLeases: () => [],
-      reapTransition: () => 0,
-       insertComment: () => 1,
-       auditAppend: () => {},
-        timelineEntries: () => [],
-        commentsOf: () => [],
-        nonTerminalChildCount: () => 0,
-       childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
-        promoteEpicWithMirror: () => {},
-        appendEpicAuditMirror: () => {},
-        ...projectStoreStubs()
-     }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
+      }
+    }), { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
 
     const result = svc.createTask({ title: 'Flow test', reporter: 'tester' })
     expect(result.ok).toBe(true)
@@ -383,33 +441,12 @@ describe('maxAttempts flow', () => {
   test('default maxAttempts is 3 when not configured', () => {
     const s = loadSettings({ env: {}, argv: [] })
     expect(s.maxAttempts).toBe(3)
-    const svc = new TaskService({
-      getTaskRow: () => null,
+    const svc = new TaskService(taskStoreStubs({
       insertTask: (t) => {
         expect(t.maxAttempts).toBe(3)
         return 1
-      },
-      deleteTask: () => {},
-      listTasks: () => ({ rows: [], total: 0 }),
-      queuedCandidates: () => [],
-      depsOf: () => null,
-      statusesOf: () => new Map(),
-      batchTasks: () => new Map(),
-      markClaimed: () => 0,
-      transitionStatus: () => 0,
-      transaction: <T>(fn: () => T) => fn(),
-      expiredLeases: () => [],
-      reapTransition: () => 0,
-       insertComment: () => 1,
-       auditAppend: () => {},
-        timelineEntries: () => [],
-        commentsOf: () => [],
-        nonTerminalChildCount: () => 0,
-       childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
-        promoteEpicWithMirror: () => {},
-        appendEpicAuditMirror: () => {},
-        ...projectStoreStubs()
-     }, { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
+      }
+    }), { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
 
     const result = svc.createTask({ title: 'Default flow', reporter: 'tester' })
     expect(result.ok).toBe(true)

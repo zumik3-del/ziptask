@@ -29,10 +29,15 @@ export function createsCycle(depsOf: (id: number) => string | null, taskId: numb
   return false
 }
 
-export function depsSatisfied(statuses: Map<number, TaskStatus>, dependsOn: number[]): boolean {
-  for (const depId of dependsOn) {
+// The single source of the dependency-satisfaction rule: a dep is blocking while it is unknown or
+// non-terminal. `depsSatisfied` and the `blocked_by` view are both derived from this list.
+export function blockingDeps(statuses: Map<number, TaskStatus>, dependsOn: number[]): number[] {
+  return dependsOn.filter(depId => {
     const status = statuses.get(depId)
-    if (!status || !TERMINAL_STATUSES.includes(status)) return false
-  }
-  return true
+    return status === undefined || !TERMINAL_STATUSES.includes(status)
+  })
+}
+
+export function depsSatisfied(statuses: Map<number, TaskStatus>, dependsOn: number[]): boolean {
+  return blockingDeps(statuses, dependsOn).length === 0
 }
