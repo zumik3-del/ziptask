@@ -12,6 +12,7 @@ ziptask ships an example multi-agent workflow: one **orchestrator** (the primary
 | `developer.md` | Implementation, refactoring, bugfixes |
 | `tester.md` | Test writing/runs, coverage audits, the smoke suite |
 | `docwriter.md` | README/docs/ADR/changelog/docstring work |
+| `reviewer.md` | Code review (five axes), doubt-driven checks, verification audits |
 | `devops.md` | CI pipelines, Docker/compose, deploy scripts, configs |
 | `git.md` | Commits, pushes, branches, issues, PRs — deliberately **not** a tracker client |
 
@@ -29,7 +30,7 @@ ziptask ships an example multi-agent workflow: one **orchestrator** (the primary
    - Per-project: `.opencode/agents/`
 
    ```bash
-   cp docs/agents_examples/{analyst,architect,developer,tester,docwriter,devops,git}.md ~/.config/opencode/agents/
+   cp docs/agents_examples/{analyst,architect,developer,tester,docwriter,devops,git,reviewer}.md ~/.config/opencode/agents/
    ```
 
 2. **Orchestrator rules** — `agents_examples/AGENTS.md` is a *global*-style rules file. Copy it to `~/.config/opencode/AGENTS.md`, or merge its sections into your project's root `AGENTS.md`. The orchestrator (your primary agent) reads it; subagents read the project's own `AGENTS.md`.

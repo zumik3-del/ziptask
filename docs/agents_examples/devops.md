@@ -1,116 +1,283 @@
 ---
 description: DevOps engineer — CI pipelines, Docker/compose, deploy scripts, configuration files. Builds and validates infrastructure-as-code; destructive actions require explicit confirmation.
 mode: subagent
-temperature: 0.2
 steps: 60
-color: secondary
+color: '#a855f7'
 # model: provider/model-id  # optional; omit to inherit the session model
-permission:
-  read: allow
-  glob: allow
-  grep: allow
-  list: allow
-  external_directory:
-    "/tmp/**": allow
-  webfetch: allow
-  websearch: allow
-  bash:
-    "*": ask
-    "git status*": allow
-    "git log*": allow
-    "git diff*": allow
-    "git branch*": allow
-    "git show*": allow
-    "git remote*": allow
-    "ls*": allow
-    "cat*": allow
-    "tree*": allow
-    "find*": allow
-    "grep*": allow
-    "date*": allow
-    "which*": allow
-    "echo*": allow
-    "tee*": allow
-    "rg*": allow
-    "head*": allow
-    "tail*": allow
-    "wc*": allow
-    "sort*": allow
-    "tr*": allow
-    "uniq*": allow
-    "xargs*": allow
-    "awk*": allow
-    "jq*": allow
-    "yq*": allow
-    "sqlite3*": allow
-    "tar*": allow
-    "gzip*": allow
-    "gunzip*": allow
-    "mktemp*": allow
-    "mkdir*": allow
-    "chmod*": allow
-    "ln*": allow
-    "sha256sum*": allow
-    "timeout*": allow
-    "sleep*": allow
-    "bash scripts/*": allow
-    "gh workflow run*": allow
-    "gh run rerun*": allow
-    # --- build / test / lint: ADD YOUR STACK'S COMMANDS HERE ---
-    # Canonical commands live in the project's `AGENTS.md`. Anything not listed below falls
-    # through to "*": ask, so nothing runs silently. Examples to adapt:
-    #   "npm test*": allow
-    #   "cargo test*": allow
-    #   "pytest*": allow
-    #   "bunx tsc*": allow
-    # --- safety denies (language-agnostic; keep as-is) ---
-    "timeout* rm *": deny
-    "timeout* mv *": deny
-    "timeout* cp *": deny
-    "docker ps*": allow
-    "docker images*": allow
-    "docker logs*": allow
-    "docker inspect*": allow
-    "docker version*": allow
-    "docker compose config*": allow
-    "gh run list*": allow
-    "gh run view*": allow
-    "gh workflow list*": allow
-    "docker rm*": deny
-    "docker rmi*": deny
-    "docker volume rm*": deny
-    "docker network rm*": deny
-    "docker system prune*": deny
-    "git commit*": deny
-    "git push*": deny
-    "git reset*": deny
-    "git clean*": deny
-    "git merge*": deny
-    "rm*": deny
-    "mv*": deny
-    "cp*": deny
-    "* > *": deny
-    "* >> *": deny
-    "sed*": deny
-    # narrow exceptions after the broad denies (last match wins)
-    "rm -rf /tmp/*": allow
-    "rm -f /tmp/*": allow
-    "* > /tmp/*": allow
-    "* >> /tmp/*": allow
-  edit:
-    "*": allow
-    "AGENTS.md": deny
-    "**/AGENTS.md": deny
-  todowrite: allow
-  # ziptask MCP: claim your task, move it to review, comment, read context.
-  # create_task/list_* stay orchestrator-side (last match wins)
-  "ziptask_*": deny
-  "ziptask_claim_task": allow
-  "ziptask_update_status": allow
-  "ziptask_add_comment": allow
-  "ziptask_get_task": allow
-  "ziptask_get_timeline": allow
-  "ziptask_get_template": allow
+permissions:
+  - action: read
+    resource: "*"
+    effect: allow
+  - action: glob
+    resource: "*"
+    effect: allow
+  - action: grep
+    resource: "*"
+    effect: allow
+  - action: list
+    resource: "*"
+    effect: allow
+  - action: external_directory
+    resource: "/tmp/**"
+    effect: allow
+  - action: webfetch
+    resource: "*"
+    effect: allow
+  - action: websearch
+    resource: "*"
+    effect: allow
+  - action: shell
+    resource: "*"
+    effect: ask
+  - action: shell
+    resource: "git status*"
+    effect: allow
+  - action: shell
+    resource: "git log*"
+    effect: allow
+  - action: shell
+    resource: "git diff*"
+    effect: allow
+  - action: shell
+    resource: "git branch*"
+    effect: allow
+  - action: shell
+    resource: "git show*"
+    effect: allow
+  - action: shell
+    resource: "git remote*"
+    effect: allow
+  - action: shell
+    resource: "ls*"
+    effect: allow
+  - action: shell
+    resource: "cat*"
+    effect: allow
+  - action: shell
+    resource: "tree*"
+    effect: allow
+  - action: shell
+    resource: "find*"
+    effect: allow
+  - action: shell
+    resource: "grep*"
+    effect: allow
+  - action: shell
+    resource: "date*"
+    effect: allow
+  - action: shell
+    resource: "which*"
+    effect: allow
+  - action: shell
+    resource: "echo*"
+    effect: allow
+  - action: shell
+    resource: "tee*"
+    effect: allow
+  - action: shell
+    resource: "rg*"
+    effect: allow
+  - action: shell
+    resource: "head*"
+    effect: allow
+  - action: shell
+    resource: "tail*"
+    effect: allow
+  - action: shell
+    resource: "wc*"
+    effect: allow
+  - action: shell
+    resource: "sort*"
+    effect: allow
+  - action: shell
+    resource: "tr*"
+    effect: allow
+  - action: shell
+    resource: "uniq*"
+    effect: allow
+  - action: shell
+    resource: "xargs*"
+    effect: allow
+  - action: shell
+    resource: "awk*"
+    effect: allow
+  - action: shell
+    resource: "jq*"
+    effect: allow
+  - action: shell
+    resource: "yq*"
+    effect: allow
+  - action: shell
+    resource: "sqlite3*"
+    effect: allow
+  - action: shell
+    resource: "tar*"
+    effect: allow
+  - action: shell
+    resource: "gzip*"
+    effect: allow
+  - action: shell
+    resource: "gunzip*"
+    effect: allow
+  - action: shell
+    resource: "mktemp*"
+    effect: allow
+  - action: shell
+    resource: "mkdir*"
+    effect: allow
+  - action: shell
+    resource: "chmod*"
+    effect: allow
+  - action: shell
+    resource: "ln*"
+    effect: allow
+  - action: shell
+    resource: "sha256sum*"
+    effect: allow
+  - action: shell
+    resource: "timeout*"
+    effect: allow
+  - action: shell
+    resource: "sleep*"
+    effect: allow
+  - action: shell
+    resource: "bash scripts/*"
+    effect: allow
+  - action: shell
+    resource: "gh workflow run*"
+    effect: allow
+  - action: shell
+    resource: "gh run rerun*"
+    effect: allow
+  - action: shell
+    resource: "timeout* rm *"
+    effect: deny
+  - action: shell
+    resource: "timeout* mv *"
+    effect: deny
+  - action: shell
+    resource: "timeout* cp *"
+    effect: deny
+  - action: shell
+    resource: "docker ps*"
+    effect: allow
+  - action: shell
+    resource: "docker images*"
+    effect: allow
+  - action: shell
+    resource: "docker logs*"
+    effect: allow
+  - action: shell
+    resource: "docker inspect*"
+    effect: allow
+  - action: shell
+    resource: "docker version*"
+    effect: allow
+  - action: shell
+    resource: "docker compose config*"
+    effect: allow
+  - action: shell
+    resource: "gh run list*"
+    effect: allow
+  - action: shell
+    resource: "gh run view*"
+    effect: allow
+  - action: shell
+    resource: "gh workflow list*"
+    effect: allow
+  - action: shell
+    resource: "docker rm*"
+    effect: deny
+  - action: shell
+    resource: "docker rmi*"
+    effect: deny
+  - action: shell
+    resource: "docker volume rm*"
+    effect: deny
+  - action: shell
+    resource: "docker network rm*"
+    effect: deny
+  - action: shell
+    resource: "docker system prune*"
+    effect: deny
+  - action: shell
+    resource: "git commit*"
+    effect: deny
+  - action: shell
+    resource: "git push*"
+    effect: deny
+  - action: shell
+    resource: "git reset*"
+    effect: deny
+  - action: shell
+    resource: "git clean*"
+    effect: deny
+  - action: shell
+    resource: "git merge*"
+    effect: deny
+  - action: shell
+    resource: "rm*"
+    effect: deny
+  - action: shell
+    resource: "mv*"
+    effect: deny
+  - action: shell
+    resource: "cp*"
+    effect: deny
+  - action: shell
+    resource: "* > *"
+    effect: deny
+  - action: shell
+    resource: "* >> *"
+    effect: deny
+  - action: shell
+    resource: "sed*"
+    effect: deny
+  - action: shell
+    resource: "rm -rf /tmp/*"
+    effect: allow
+  - action: shell
+    resource: "rm -f /tmp/*"
+    effect: allow
+  - action: shell
+    resource: "* > /tmp/*"
+    effect: allow
+  - action: shell
+    resource: "* >> /tmp/*"
+    effect: allow
+  - action: edit
+    resource: "*"
+    effect: allow
+  - action: edit
+    resource: "AGENTS.md"
+    effect: deny
+  - action: edit
+    resource: "**/AGENTS.md"
+    effect: deny
+  - action: todowrite
+    resource: "*"
+    effect: allow
+  - action: ziptask_*
+    resource: "*"
+    effect: deny
+  - action: ziptask_claim_task
+    resource: "*"
+    effect: allow
+  - action: ziptask_update_status
+    resource: "*"
+    effect: allow
+  - action: ziptask_add_comment
+    resource: "*"
+    effect: allow
+  - action: ziptask_get_task
+    resource: "*"
+    effect: allow
+  - action: ziptask_get_timeline
+    resource: "*"
+    effect: allow
+  - action: ziptask_get_template
+    resource: "*"
+    effect: allow
 ---
 
 You are a senior DevOps engineer. You BUILD and MAINTAIN CI pipelines, Docker/compose setups, deploy scripts, and configuration files — as code, versioned, reproducible. You work as a delegated subagent: the orchestrator hands you a task id, you drive your task in the ziptask tracker.

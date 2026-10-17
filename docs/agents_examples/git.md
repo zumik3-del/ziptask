@@ -1,126 +1,331 @@
 ---
 description: Git operator — commits, pushes, reverts, branches, issues, PRs. GitHub-first via gh CLI. Auto-detects hosting from the remote URL. Does NOT edit files, NEVER runs tests/builds/linters/typechecks, and does NOT use ziptask — plain direct commands only.
 mode: subagent
-temperature: 0.2
 steps: 40
-color: warning
+color: '#f59e0b'
 # model: provider/model-id  # optional; omit to inherit the session model
-permission:
-  read: allow
-  glob: allow
-  grep: allow
-  list: allow
-  webfetch: allow
-  websearch: allow
-  todowrite: allow
-  edit: deny
-  bash:
-    "*": ask
-    "git status*": allow
-    "git diff*": allow
-    "git log*": allow
-    "git branch*": allow
-    "git show*": allow
-    "git remote*": allow
-    "git add*": allow
-    "git commit*": allow
-    "git pull*": ask
-    "git fetch*": ask
-    "git checkout*": allow
-    "git revert*": allow
-    "git reset*": ask
-    "git merge*": allow
-    "git tag*": allow
-    "git stash*": allow
-    "git cherry-pick*": allow
-    "git push*": allow
-    "git push * main*": deny
-    "git push *:main*": deny
-    "git push *--force*": deny
-    "git push *--force-with-lease*": deny
-    "git rebase*": deny
-    "git pull* --rebase*": deny
-    "git clean*": deny
-    "gh repo view*": allow
-    "gh issue list*": allow
-    "gh issue view*": allow
-    "gh issue close*": allow
-    "gh pr list*": allow
-    "gh pr view*": allow
-    "gh pr checkout*": allow
-    "gh pr merge*": deny
-    "gh pr close*": deny
-    "gh auth status*": allow
-    "ls*": allow
-    "cat*": allow
-    "date*": allow
-    "which*": allow
-    "echo*": allow
-    "head*": allow
-    "tail*": allow
-    "grep*": allow
-    "sort*": allow
-    "wc*": allow
-    "tr*": allow
-    "true*": allow
-    "command*": allow
-    "mkdir*": allow
-    "git rev-parse*": allow
-    "git ls-tree*": allow
-    "git ls-files*": allow
-    "git ls-remote*": allow
-    "git worktree*": allow
-    "git switch*": allow
-    "git config*": allow
-    "git describe*": allow
-    "git archive*": allow
-    "git cat-file*": allow
-    "git rm*": allow
-    "git restore*": allow
-    "gh label list*": allow
-    "gh label create*": allow
-    "gh label edit*": allow
-    "gh release list*": allow
-    "gh release view*": allow
-    "gh release edit*": allow
-    "gh release upload*": allow
-    "gh workflow list*": allow
-    "gh workflow view*": allow
-    # env-var prefixes defeat the plain patterns above (toolchain on PATH etc.)
-    "PATH=* git *": allow
-    "PATH=* gh *": allow
-    "GIT_PAGER=cat git add*": allow
-    "GIT_PAGER=cat git diff*": allow
-    "PATH=* git push * main*": deny
-    "PATH=* git push *:main*": deny
-    "PATH=* git push *--force*": deny
-    "PATH=* git push *--force-with-lease*": deny
-    "PATH=* git rebase*": deny
-    "PATH=* git pull * --rebase*": deny
-    "PATH=* git clean*": deny
-    "PATH=* git reset*": ask
-    "PATH=* gh pr merge*": deny
-    "PATH=* gh pr close*": deny
-    "rm*": deny
-    "mv*": deny
-    "cp*": deny
-    "sed*": deny
-    "* > *": deny
-    "* >> *": deny
-    # PR/issue/release bodies legitimately contain '>' — keep them out of the redirect guard
-    "gh issue create*": allow
-    "gh issue edit*": allow
-    "gh issue comment*": allow
-    "gh pr create*": allow
-    "gh pr edit*": allow
-    "gh release create*": allow
-    "gh api*": allow
-    # This agent NEVER runs tests/builds/linters/typechecks. Do not add such
-    # commands here — keep only git/gh tooling in this agent.
-  # ziptask is NOT used by this agent — no tasks are assigned; deny everything (last match wins)
-  "ziptask_*": deny
-  # Other hosting providers (GitLab, Bitbucket, self-hosted, ...) are not
-  # configured by default — add the matching MCP/tool permissions here.
+permissions:
+  - action: read
+    resource: "*"
+    effect: allow
+  - action: glob
+    resource: "*"
+    effect: allow
+  - action: grep
+    resource: "*"
+    effect: allow
+  - action: list
+    resource: "*"
+    effect: allow
+  - action: webfetch
+    resource: "*"
+    effect: allow
+  - action: websearch
+    resource: "*"
+    effect: allow
+  - action: todowrite
+    resource: "*"
+    effect: allow
+  - action: edit
+    resource: "*"
+    effect: deny
+  - action: shell
+    resource: "*"
+    effect: ask
+  - action: shell
+    resource: "git status*"
+    effect: allow
+  - action: shell
+    resource: "git diff*"
+    effect: allow
+  - action: shell
+    resource: "git log*"
+    effect: allow
+  - action: shell
+    resource: "git branch*"
+    effect: allow
+  - action: shell
+    resource: "git show*"
+    effect: allow
+  - action: shell
+    resource: "git remote*"
+    effect: allow
+  - action: shell
+    resource: "git add*"
+    effect: allow
+  - action: shell
+    resource: "git commit*"
+    effect: allow
+  - action: shell
+    resource: "git pull*"
+    effect: ask
+  - action: shell
+    resource: "git fetch*"
+    effect: ask
+  - action: shell
+    resource: "git checkout*"
+    effect: allow
+  - action: shell
+    resource: "git revert*"
+    effect: allow
+  - action: shell
+    resource: "git reset*"
+    effect: ask
+  - action: shell
+    resource: "git merge*"
+    effect: allow
+  - action: shell
+    resource: "git tag*"
+    effect: allow
+  - action: shell
+    resource: "git stash*"
+    effect: allow
+  - action: shell
+    resource: "git cherry-pick*"
+    effect: allow
+  - action: shell
+    resource: "git push*"
+    effect: allow
+  - action: shell
+    resource: "git push * main*"
+    effect: deny
+  - action: shell
+    resource: "git push *:main*"
+    effect: deny
+  - action: shell
+    resource: "git push *--force*"
+    effect: deny
+  - action: shell
+    resource: "git push *--force-with-lease*"
+    effect: deny
+  - action: shell
+    resource: "git rebase*"
+    effect: deny
+  - action: shell
+    resource: "git pull* --rebase*"
+    effect: deny
+  - action: shell
+    resource: "git clean*"
+    effect: deny
+  - action: shell
+    resource: "gh repo view*"
+    effect: allow
+  - action: shell
+    resource: "gh issue list*"
+    effect: allow
+  - action: shell
+    resource: "gh issue view*"
+    effect: allow
+  - action: shell
+    resource: "gh issue close*"
+    effect: allow
+  - action: shell
+    resource: "gh pr list*"
+    effect: allow
+  - action: shell
+    resource: "gh pr view*"
+    effect: allow
+  - action: shell
+    resource: "gh pr checkout*"
+    effect: allow
+  - action: shell
+    resource: "gh pr merge*"
+    effect: deny
+  - action: shell
+    resource: "gh pr close*"
+    effect: deny
+  - action: shell
+    resource: "gh auth status*"
+    effect: allow
+  - action: shell
+    resource: "ls*"
+    effect: allow
+  - action: shell
+    resource: "cat*"
+    effect: allow
+  - action: shell
+    resource: "date*"
+    effect: allow
+  - action: shell
+    resource: "which*"
+    effect: allow
+  - action: shell
+    resource: "echo*"
+    effect: allow
+  - action: shell
+    resource: "head*"
+    effect: allow
+  - action: shell
+    resource: "tail*"
+    effect: allow
+  - action: shell
+    resource: "grep*"
+    effect: allow
+  - action: shell
+    resource: "sort*"
+    effect: allow
+  - action: shell
+    resource: "wc*"
+    effect: allow
+  - action: shell
+    resource: "tr*"
+    effect: allow
+  - action: shell
+    resource: "true*"
+    effect: allow
+  - action: shell
+    resource: "command*"
+    effect: allow
+  - action: shell
+    resource: "mkdir*"
+    effect: allow
+  - action: shell
+    resource: "git rev-parse*"
+    effect: allow
+  - action: shell
+    resource: "git ls-tree*"
+    effect: allow
+  - action: shell
+    resource: "git ls-files*"
+    effect: allow
+  - action: shell
+    resource: "git ls-remote*"
+    effect: allow
+  - action: shell
+    resource: "git worktree*"
+    effect: allow
+  - action: shell
+    resource: "git switch*"
+    effect: allow
+  - action: shell
+    resource: "git config*"
+    effect: allow
+  - action: shell
+    resource: "git describe*"
+    effect: allow
+  - action: shell
+    resource: "git archive*"
+    effect: allow
+  - action: shell
+    resource: "git cat-file*"
+    effect: allow
+  - action: shell
+    resource: "git rm*"
+    effect: allow
+  - action: shell
+    resource: "git restore*"
+    effect: allow
+  - action: shell
+    resource: "gh label list*"
+    effect: allow
+  - action: shell
+    resource: "gh label create*"
+    effect: allow
+  - action: shell
+    resource: "gh label edit*"
+    effect: allow
+  - action: shell
+    resource: "gh release list*"
+    effect: allow
+  - action: shell
+    resource: "gh release view*"
+    effect: allow
+  - action: shell
+    resource: "gh release edit*"
+    effect: allow
+  - action: shell
+    resource: "gh release upload*"
+    effect: allow
+  - action: shell
+    resource: "gh workflow list*"
+    effect: allow
+  - action: shell
+    resource: "gh workflow view*"
+    effect: allow
+  - action: shell
+    resource: "PATH=* git *"
+    effect: allow
+  - action: shell
+    resource: "PATH=* gh *"
+    effect: allow
+  - action: shell
+    resource: "GIT_PAGER=cat git add*"
+    effect: allow
+  - action: shell
+    resource: "GIT_PAGER=cat git diff*"
+    effect: allow
+  - action: shell
+    resource: "PATH=* git push * main*"
+    effect: deny
+  - action: shell
+    resource: "PATH=* git push *:main*"
+    effect: deny
+  - action: shell
+    resource: "PATH=* git push *--force*"
+    effect: deny
+  - action: shell
+    resource: "PATH=* git push *--force-with-lease*"
+    effect: deny
+  - action: shell
+    resource: "PATH=* git rebase*"
+    effect: deny
+  - action: shell
+    resource: "PATH=* git pull * --rebase*"
+    effect: deny
+  - action: shell
+    resource: "PATH=* git clean*"
+    effect: deny
+  - action: shell
+    resource: "PATH=* git reset*"
+    effect: ask
+  - action: shell
+    resource: "PATH=* gh pr merge*"
+    effect: deny
+  - action: shell
+    resource: "PATH=* gh pr close*"
+    effect: deny
+  - action: shell
+    resource: "rm*"
+    effect: deny
+  - action: shell
+    resource: "mv*"
+    effect: deny
+  - action: shell
+    resource: "cp*"
+    effect: deny
+  - action: shell
+    resource: "sed*"
+    effect: deny
+  - action: shell
+    resource: "* > *"
+    effect: deny
+  - action: shell
+    resource: "* >> *"
+    effect: deny
+  - action: shell
+    resource: "gh issue create*"
+    effect: allow
+  - action: shell
+    resource: "gh issue edit*"
+    effect: allow
+  - action: shell
+    resource: "gh issue comment*"
+    effect: allow
+  - action: shell
+    resource: "gh pr create*"
+    effect: allow
+  - action: shell
+    resource: "gh pr edit*"
+    effect: allow
+  - action: shell
+    resource: "gh release create*"
+    effect: allow
+  - action: shell
+    resource: "gh api*"
+    effect: allow
+  - action: ziptask_*
+    resource: "*"
+    effect: deny
 ---
 
 You are the git operator subagent. You do exactly what the orchestrator asks — inspect, commit, push, revert, branches, issues, PRs. No task tracker protocol: you receive plain direct commands, you execute them, you report. GitHub-first (`gh` CLI).
