@@ -1745,7 +1745,7 @@ require_binary_platform() {
 # would run in a subshell, where cleanup_add() would not reach the caller's trap.
 STAGED_PAYLOAD=""
 binary_stage_payload() {
-  local asset url archive staging entry got f
+  local asset url archive staging entry got f checksum expected actual
   local -a entries=()
 
   asset="$(render_template "$ASSET_PATTERN")"
@@ -1757,11 +1757,49 @@ binary_stage_payload() {
   mkdir -p "$INSTALL_DIR" || error "cannot create ${INSTALL_DIR}"
   archive="${INSTALL_DIR}/.${APP_NAME}.$$.tar.gz"
   cleanup_add "$archive"
+  checksum="${archive}.sha256"
+  cleanup_add "$checksum"
   mktemp_owned staging -d "${INSTALL_DIR}/.stage.XXXXXX" \
     || error "cannot create a staging directory in ${INSTALL_DIR}"
 
   info "Downloading ${asset} ${TAG}..."
   url_get "$url" "$archive" || error "download failed: ${url}"
+
+  # SHA-256 checksum verification (issue #38). Download the checksum asset that
+  # corresponds to the resolved archive URL and verify the archive before it is
+  # ever extracted. A missing checksum (older releases) is a warning, not an
+  # error, so legacy assets keep installing. A present-but-mismatched hash
+  # aborts with a clear error.
+  if url_get "${url}.sha256" "$checksum" 2>/dev/null; then
+    # Accept either a bare hash or a sha256sum-style "<hash>  <name>" line.
+    expected="$(sed -n 's/^[[:space:]]*\([0-9a-fA-F]\{64\}\).*/\1/p' "$checksum" | head -n 1)"
+    expected="$(printf '%s' "$expected" | tr 'A-F' 'a-f')"
+    if [ -z "$expected" ]; then
+      warn "checksum file for ${asset} contained no parseable SHA-256; skipping verification"
+    else
+      actual=""
+      if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$archive" 2>/dev/null | awk '{print $1}')"
+      elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "$archive" 2>/dev/null | awk '{print $1}')"
+      elif command -v openssl >/dev/null 2>&1; then
+        actual="$(openssl dgst -sha256 "$archive" 2>/dev/null | sed -n 's/.*= *//p' | tr -d '[:space:]')"
+      else
+        warn "no sha256 tool (sha256sum/shasum/openssl) available; skipping checksum verification for ${asset}"
+        actual=""
+      fi
+      if [ -n "$actual" ]; then
+        actual="$(printf '%s' "$actual" | tr 'A-F' 'a-f')"
+        if [ "$actual" != "$expected" ]; then
+          error "checksum mismatch for ${asset}: expected ${expected}, got ${actual}"
+        fi
+        info "Checksum verified: ${asset} (${expected})"
+      fi
+    fi
+  else
+    warn "No checksum asset found for ${asset} (${TAG}); skipping verification (older release)"
+  fi
+
   # Never extract straight into INSTALL_DIR: a dedicated staging dir is what
   # makes a malformed archive harmless.
   tar -xzf "$archive" -C "$staging" --no-same-owner \
