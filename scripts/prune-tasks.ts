@@ -1,4 +1,5 @@
 import { openDatabase, closeDatabase } from '../src/db/db'
+import { parseDeps } from '../src/core/deps'
 
 function parseArg(name: string): string | undefined {
   const idx = process.argv.indexOf(name)
@@ -25,7 +26,7 @@ try {
   // that have no children of their own. comments/audit_log cascade on task delete (schema v4).
   const liveDeps = new Set<number>()
   for (const row of db.query("SELECT depends_on FROM tasks WHERE status NOT IN ('done','failed','canceled')").all() as Array<{ depends_on: string }>) {
-    for (const id of JSON.parse(row.depends_on) as number[]) liveDeps.add(id)
+    for (const id of parseDeps(row.depends_on)) liveDeps.add(id)
   }
   const candidates = db.query(
     `SELECT id, title, status, completed_at FROM tasks

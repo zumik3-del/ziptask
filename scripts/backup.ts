@@ -1,5 +1,5 @@
-import { execSync, spawnSync } from 'node:child_process'
-import { mkdirSync, rmSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 const DB_PATH = process.env.ZIPTASK_DB ?? './data/ziptask.db'
@@ -23,14 +23,19 @@ function doBackup(): void {
 
   // Pragma to truncate WAL before backup
   try {
-    execSync(`sqlite3 "${DB_PATH}" "PRAGMA wal_checkpoint(TRUNCATE);"`, { stdio: 'pipe' })
+    spawnSync('sqlite3', [DB_PATH, 'PRAGMA wal_checkpoint(TRUNCATE);'], { stdio: 'pipe' })
   } catch {
     // best-effort; continue
   }
 
   // Online backup via sqlite3 CLI .backup command
   try {
-    execSync(`sqlite3 "${DB_PATH}" ".backup '${backupPath}'"`, { stdio: 'pipe' })
+    const r = spawnSync('sqlite3', [DB_PATH, `.backup '${backupPath.replace(/'/g, "''")}'`], { stdio: 'pipe' })
+    if (r.error || r.status !== 0) {
+      const err = r.error?.message ?? (r.stderr?.toString().trim() || r.stdout?.toString().trim() || `code ${r.status}`)
+      log(`sqlite3 .backup failed: ${err}`)
+      process.exit(1)
+    }
   } catch (e) {
     log(`sqlite3 .backup failed: ${e}`)
     process.exit(1)
@@ -54,8 +59,10 @@ function doBackup(): void {
 
   // Clean old backups (keep RETAIN_COUNT)
   try {
-    const output = execSync(`ls -1 "${BACKUP_DIR}"/${BACKUP_PREFIX}-*.db.tar.gz 2>/dev/null || true`, { encoding: 'utf-8' })
-    const files = output.split('\n').filter(Boolean).sort()
+    const files = readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith(`${BACKUP_PREFIX}-`) && f.endsWith('.db.tar.gz'))
+      .sort()
+      .map(f => join(BACKUP_DIR, f))
     while (files.length > RETAIN_COUNT) {
       rmSync(files.shift()!)
     }
