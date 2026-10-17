@@ -89,6 +89,17 @@ The previous unit body is also kept at `/etc/systemd/system/ziptask.service.bak`
 
 **Schema guard on startup:** a fresh DB auto-initialises; an older DB (V < L) auto-migrates forward; a DB newer than the binary (V > L, i.e. you downgraded) refuses to start with `SCHEMA: database schema version <V> is newer than this binary supports (<L>); upgrade ziptask or restore the database from backup`, exit 1. Fix by re-upgrading to the newer binary or restoring the backup the pre-update hook wrote. `--version` does not touch the DB.
 
+## Script environment variables
+
+These apply only to the maintenance scripts, not the server.
+
+| Variable | Default | Description |
+|---|---|---|
+| `ZIPTASK_BACKUP_DIR` | `./backups` | Backup destination directory (`scripts/backup.ts`) |
+| `ZIPTASK_BACKUP_PREFIX` | `ziptask` | Backup filename prefix (`scripts/backup.ts`) |
+| `ZIPTASK_BACKUP_RETAIN` | `7` | Number of backups to retain (`scripts/backup.ts`) |
+| `PRUNE_OLDER_THAN_DAYS` | `30` | Age threshold for pruning terminal tasks (`scripts/prune-tasks.ts`) |
+
 ## Backups
 
 `bun run scripts/backup.ts` writes an online SQLite backup (`sqlite3 .backup`), compresses it to `*.db.tar.gz`, and deletes all but the newest `ZIPTASK_BACKUP_RETAIN` (default `7`). Env: `ZIPTASK_DB` (source DB, default `./data/ziptask.db`), `ZIPTASK_BACKUP_DIR` (default `./backups`), `ZIPTASK_BACKUP_PREFIX` (default `ziptask`). The update path also creates a pre-upgrade backup (see above).

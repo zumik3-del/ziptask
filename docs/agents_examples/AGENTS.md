@@ -1,10 +1,12 @@
-# Global rules
+# Global rules (generic template)
+
+> This is a **minimal, generic template**. Adapt paths, commands, and conventions to your project; it is not a verbatim copy of any specific project's rules.
 
 ## Workspace & communication
 
 - Code lives in the repo; design specs and notes live under `docs/` in the repo. The tracker holds state, files hold content.
 - Interaction channel = the ziptask tracker, always (exception: the git subagent, see Git operations). The orchestrator creates tasks with a FULL description (goal, acceptance criteria, constraints, deliverable — English) and spawns subagents with a minimal prompt: `Task #N. Do not commit. English only.` plus special instructions only when they deviate from the agent file. Follow-up context and outcomes travel as tracker comments. No task.md contracts, no result files.
-- Parallelism: repo mutators (developer, tester, docwriter, devops, git) — one at a time per project; readers (architect, analyst) — unlimited between themselves.
+- Parallelism: repo mutators (developer, tester, docwriter, devops, git) — up to 4 concurrent per project on disjoint files; readers (architect, analyst) — unlimited between themselves.
 
 ## Tracker — orchestrator duties
 
