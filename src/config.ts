@@ -148,19 +148,29 @@ function isDangerousKey(key: string): boolean {
 
 export function setNested(obj: Record<string, unknown>, path: string, value: unknown): void {
   const keys = path.split('.')
-  if (keys.some(isDangerousKey)) {
-    // Block dangerous property names to prevent prototype pollution.
+  if (keys.length === 0 || keys.some((k) => k.length === 0) || keys.some(isDangerousKey)) {
+    // Block dangerous property names and invalid segments to prevent prototype pollution.
     return
   }
-  let current = obj
+  let current: Record<string, unknown> = obj
   for (let i = 0; i < keys.length - 1; i++) {
     const key = keys[i]
-    if (!Object.hasOwn(current, key) || !isPlainObject(current[key])) {
+    if (!Object.hasOwn(current, key)) {
       current[key] = {}
+    } else {
+      const existing = current[key]
+      if (!isPlainObject(existing)) {
+        current[key] = {}
+      }
     }
-    current = current[key] as Record<string, unknown>
+    const next = current[key]
+    if (!isPlainObject(next)) {
+      return
+    }
+    current = next
   }
   const last = keys[keys.length - 1]
+  if (last.length === 0 || isDangerousKey(last)) return
   current[last] = value
 }
 
