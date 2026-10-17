@@ -237,13 +237,10 @@ export class TaskRepo implements TaskStore {
   }
 
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void {
-    const txn = this.db.transaction(() => {
-      this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
-      if (auditLog) {
-        this.auditAppend(id, agent, action, undefined, newValue)
-      }
-    })
-    txn()
+    this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
+    if (auditLog) {
+      this.auditAppend(id, agent, action, undefined, newValue)
+    }
   }
 
   appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void {
