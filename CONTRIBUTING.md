@@ -83,7 +83,8 @@ bun install
 bun test                    # run tests
 bunx biome check src/       # lint
 bunx tsc --noEmit           # type check
-bun run dev                 # start dev server
+bun run start               # start server (HTTP)
+bun run dev                 # watch mode (restart on change)
 ```
 
 ## Pull Request Guidelines

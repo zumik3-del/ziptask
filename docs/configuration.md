@@ -6,6 +6,8 @@ Layered: built-in defaults → `settings.json` → environment variables (env wi
 
 An optional JSON file; `settings.example.json` shows the full shape. Every key is optional and merged over the defaults, so a partial file is valid. The framework installer seeds **`/var/lib/ziptask/settings.json`** from that example (only when the file is absent) and passes `--settings` in the systemd unit and the printed stdio config, so it is always read. That path is `DATA_DIR` — the app's config home, beside its database (ADR addendum R1, epic #1105) — not `~/.ziptask`, which is the deploy framework's own state directory. Select a file with `--settings <path>` or the `ZIPTASK_SETTINGS` env var (`--settings` wins). The shipped example sets `dbPath` to an absolute path (`/var/lib/ziptask/ziptask.db`) so stdio clients don't create the DB under their own cwd. Keys mirror the environment variables below: `dbPath`, `host`, `port`, `leaseTtlMin`, `maxAttempts`, `reapCooldownSec`, `autoClaimCeiling`, `http.maxSessions`, `http.sessionTtlMs`, `defaults.priority`, `defaults.reporter`, `defaults.listLimit`, `defaults.timelineLimit`, `defaults.queueLimit`, `logging.level`, `auditLog`.
 
+> **Note:** `settings.example.json` is the installer's *seeded* configuration and its values are not the built-in defaults — e.g. `port: 3005` (built-in `0` = random) and `leaseTtlMin: 45` (built-in `15`). The built-in defaults are the **Default** column of the environment table below. A partial `settings.json` is still valid and merges over those built-in defaults.
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -27,6 +29,8 @@ An optional JSON file; `settings.example.json` shows the full shape. Every key i
 | `ZIPTASK_DEFAULTS_TIMELINE_LIMIT` | `50` | Fallback `limit` for `get_timeline` |
 | `ZIPTASK_DEFAULTS_QUEUE_LIMIT` | `100` | Fallback `limit` for `list_queue` |
 | `ZIPTASK_SETTINGS` | (unset) | Path to `settings.json`; `--settings` takes precedence |
+
+> **Legacy env var:** `ZIPTASK_LOGGING_LEVEL` is **ignored** — only `ZIPTASK_LOG_LEVEL` is read. Use `ZIPTASK_LOG_LEVEL`.
 
 After the env layer is applied, the merged result is re-validated before it is returned (`MergedSettingsSchema` and the final `safeParse`, `loadSettings`, `src/config.ts`). That splits an env mistake in two. A value that does not parse as an integer at all is ignored: the lower layer's value stays, and the caller is warned (`ignoring invalid ZIPTASK_PORT value`) — `src/index.ts` buffers those warnings until the logger exists and replays them then. A value that parses but breaks its bound (`ZIPTASK_LEASE_TTL_MIN=0`, a negative `ZIPTASK_PORT`) aborts startup with `Invalid configuration after env overrides: …`. `logging.level` stays a bare `string` in that merged schema, so a bad level still reaches the logger rather than aborting here.
 

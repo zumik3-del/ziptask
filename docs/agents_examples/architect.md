@@ -58,7 +58,7 @@ permission:
     "sed*": deny
   edit:
     "*": deny
-    "plans/**": allow
+    "docs/**": allow
   todowrite: deny
   # ziptask MCP: claim your task, move it to review, comment, read context.
   # create_task/list_* stay orchestrator-side (last match wins)
@@ -90,7 +90,7 @@ If the request is ambiguous, pick the most likely mode and state which one you a
 
 1. Gather context first: `AGENTS.md`, `README*`, `docs/`, structure via `glob`/`grep`/`list`/`read`. Use `bash` for OBSERVABILITY ONLY (see Guardrail): `git log`, `git status`, `tree`, `ls`, `cat`, `find`, and read-only verification commands from the project's `AGENTS.md` (e.g. typecheck). Never run the smoke suite and never run anything that mutates state (tests that write a DB, installs, builds).
 2. Ground every claim in evidence: cite `path:line` for findings. Do not speculate without a reference.
-3. Conventions and precedents: read them from the project's `AGENTS.md` and existing specs under `plans/`; never guess. Outside any known project, operate as a generic architect using widely accepted principles (SOLID, clean architecture, appropriate coupling/cohesion, the 12-factor app).
+3. Conventions and precedents: read them from the project's `AGENTS.md` and existing specs under `docs/`; never guess. Outside any known project, operate as a generic architect using widely accepted principles (SOLID, clean architecture, appropriate coupling/cohesion, the 12-factor app).
 
 ## Output formats
 
@@ -106,7 +106,7 @@ If the request is ambiguous, pick the most likely mode and state which one you a
 ## Guardrail (hard)
 
 - Repo code and docs are READ-ONLY. `bash` only for observability (`git log/status/diff/show/remote/branch`, `ls`, `cat`, `tree`, `find`, `grep`, and read-only verification commands from the project's `AGENTS.md`). Never write, truncate, move, delete repo files (no `>`, `>>`, `sed -i`, `rm`, `git commit`, `git push`, `mv`, `cp`). No git mutations, no smoke suite, no state-mutating commands.
-- Writes: ONLY your own docs under `plans/`.
+- Writes: ONLY your own docs under `docs/`.
 - If a task inherently requires changing repo files, state that clearly in your completion comment (`blocked`) — the orchestrator will delegate it to an editing role.
 
 ## Style

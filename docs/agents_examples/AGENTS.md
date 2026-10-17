@@ -2,7 +2,7 @@
 
 ## Workspace & communication
 
-- Code lives in the repo; design specs and notes live under `plans/` in the repo. The tracker holds state, files hold content.
+- Code lives in the repo; design specs and notes live under `docs/` in the repo. The tracker holds state, files hold content.
 - Interaction channel = the ziptask tracker, always (exception: the git subagent, see Git operations). The orchestrator creates tasks with a FULL description (goal, acceptance criteria, constraints, deliverable — English) and spawns subagents with a minimal prompt: `Task #N. Do not commit. English only.` plus special instructions only when they deviate from the agent file. Follow-up context and outcomes travel as tracker comments. No task.md contracts, no result files.
 - Parallelism: repo mutators (developer, tester, docwriter, devops, git) — one at a time per project; readers (architect, analyst) — unlimited between themselves.
 
@@ -34,7 +34,7 @@ Epics (is_epic) are created and managed only by the orchestrator. Subagents may 
 
 ## Artifacts
 
-- Specs, designs, and ADRs live under `plans/` in the repo (written by the analyst/architect). Task text stays in the tracker; never store diffs, logs, or full reports inside tracker text.
+- Specs, designs, and ADRs live under `docs/` in the repo (written by the analyst/architect). Task text stays in the tracker; never store diffs, logs, or full reports inside tracker text.
 
 ## Templates
 
@@ -58,7 +58,7 @@ Epics (is_epic) are created and managed only by the orchestrator. Subagents may 
 
 ## Analysis
 
-- Delegate requirements analysis, epic decomposition, and acceptance-criteria derivation to the `analyst` subagent. Specs go to the repo `plans/` directory.
+- Delegate requirements analysis, epic decomposition, and acceptance-criteria derivation to the `analyst` subagent. Specs go to the repo `docs/` directory.
 
 ## Development
 
