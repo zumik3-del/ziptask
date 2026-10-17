@@ -1,5 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import type { EventStore } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
+import { readRequestBody } from '@modelcontextprotocol/sdk/server/requestBody.js'
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { TaskService } from './core/service'
 import { formatError } from './core/result'
@@ -48,37 +49,12 @@ export function withCors(response: Response): Response {
   })
 }
 
-// Reads a request body without ever holding more than `maxBytes` in memory: a declared
-// Content-Length over the limit is rejected up front, and a chunked body is abandoned the moment
-// the running total crosses it. The caller turns `oversized` into a 413.
+// Thin adapter over the SDK's own body reader, so the peek below and the transport it feeds agree
+// on one cap and one Content-Length fast path: two copies drift (a local one enforced 1 MiB here
+// while the transport still accepted 4 MiB). The caller turns `oversized` into a 413.
 export async function readBodyWithLimit(req: Request, maxBytes: number): Promise<{ body: string; oversized: boolean }> {
-  const declaredLength = req.headers.get('content-length')
-  if (declaredLength !== null) {
-    const length = Number(declaredLength)
-    if (Number.isFinite(length) && length > maxBytes) return { body: '', oversized: true }
-  }
-  const stream = req.body
-  if (!stream) return { body: '', oversized: false }
-  const reader = stream.getReader()
-  const decoder = new TextDecoder()
-  let total = 0
-  let body = ''
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (!value) continue
-      total += value.byteLength
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => {})
-        return { body: '', oversized: true }
-      }
-      body += decoder.decode(value, { stream: true })
-    }
-  } finally {
-    reader.releaseLock()
-  }
-  return { body: body + decoder.decode(), oversized: false }
+  const result = await readRequestBody(req, maxBytes)
+  return result.tooLarge ? { body: '', oversized: true } : { body: result.text, oversized: false }
 }
 
 export function trackStreamActivity(response: Response, session: Session): Response {
@@ -156,16 +132,22 @@ export interface StartHttpOptions {
   onShutdown?: () => void
 }
 
+// The oversized case carries no request: the caller answers 413 and never replays the body, so the
+// union states that invariant instead of handing back a request no caller reads.
+type PeekResult =
+  | { oversized: true }
+  | { oversized: false; request: Request; agentName: string; isInitialize: boolean }
+
 async function peekInitialize(
   req: Request,
   logger: Logger,
   maxBodyBytes: number
-): Promise<{ request: Request; agentName: string; isInitialize: boolean; oversized: boolean }> {
-  if (req.method !== 'POST') return { request: req, agentName: 'unknown', isInitialize: false, oversized: false }
+): Promise<PeekResult> {
+  if (req.method !== 'POST') return { oversized: false, request: req, agentName: 'unknown', isInitialize: false }
   const { body, oversized } = await readBodyWithLimit(req, maxBodyBytes)
   if (oversized) {
     logger.warn('peekInitialize: request body exceeds the size limit', { maxBodyBytes })
-    return { request: req, agentName: 'unknown', isInitialize: false, oversized: true }
+    return { oversized: true }
   }
   const request = new Request(req.url, { method: req.method, headers: req.headers, body })
   let agentName = 'unknown'
@@ -181,7 +163,7 @@ async function peekInitialize(
     // treating the request as a non-initialize one (the caller answers 400).
     logger.debug('peekInitialize: failed to parse request body', { err: err instanceof Error ? err.message : String(err) })
   }
-  return { request, agentName, isInitialize, oversized: false }
+  return { oversized: false, request, agentName, isInitialize }
 }
 
 // JSON-RPC server-error codes live in the -32000..-32099 range; name them so both transport
@@ -292,11 +274,11 @@ export function startHttp(opts: StartHttpOptions) {
           return Response.json({ error: 'Too many sessions' }, { status: 429 })
         }
         try {
-          const { request, agentName, isInitialize, oversized } = await peekInitialize(req, svcLogger, DEFAULT_HTTP_MAX_BODY_BYTES)
-          if (oversized) {
+          const peek = await peekInitialize(req, svcLogger, DEFAULT_HTTP_MAX_BODY_BYTES)
+          if (peek.oversized) {
             return new Response('Payload Too Large', { status: 413 })
           }
-          if (!isInitialize) {
+          if (!peek.isInitialize) {
             return Response.json(SESSION_REQUIRED, { status: 400 })
           }
 
@@ -306,8 +288,11 @@ export function startHttp(opts: StartHttpOptions) {
             sessionIdGenerator: () => crypto.randomUUID(),
             keepAliveMs: SSE_KEEPALIVE_MS,
             eventStore,
+            // The same cap as the peek, applied by the transport itself: a session-bearing POST
+            // never runs the peek, so without this it would fall back to the SDK's 4 MiB default.
+            maxRequestBodySize: DEFAULT_HTTP_MAX_BODY_BYTES,
             onsessioninitialized: (id) => {
-              registry.open(id, { transport, lastAccess: Date.now(), agent: agentName })
+              registry.open(id, { transport, lastAccess: Date.now(), agent: peek.agentName })
             },
             onsessionclosed: (id) => {
               registry.close(id)
@@ -316,7 +301,7 @@ export function startHttp(opts: StartHttpOptions) {
           transport.onclose = () => eventStore.clear()
 
           await mcpServer.connect(transport)
-          const response = await transport.handleRequest(request)
+          const response = await transport.handleRequest(peek.request)
           const session = transport.sessionId ? registry.get(transport.sessionId) : undefined
           if (!session) {
             transport.close().catch(() => {})

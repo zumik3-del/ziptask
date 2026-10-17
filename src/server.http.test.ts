@@ -683,13 +683,91 @@ describe('request body size limit (#1704)', () => {
     expect(result).toEqual({ body: '', oversized: true })
   })
 
-  test('readBodyWithLimit rejects a declared Content-Length over the cap', async () => {
+  test('readBodyWithLimit rejects a declared Content-Length over the cap without reading the body', async () => {
+    // The body is only 3 bytes, so the streaming loop can never cross the 1024-byte cap: the test
+    // fails if the declared Content-Length fast path is removed.
     const req = new Request('http://127.0.0.1/mcp', {
       method: 'POST',
-      headers: { 'content-length': '2048' },
-      body: 'x'.repeat(2048)
+      headers: { 'content-length': '9999' },
+      body: 'abc'
     })
+    expect(req.headers.get('content-length')).toBe('9999')
     const result = await readBodyWithLimit(req, 1024)
     expect(result).toEqual({ body: '', oversized: true })
+  })
+
+  test('a session-bearing POST /mcp over the cap → 413', async () => {
+    // The peek only runs on a sessionless POST, so the cap on this path is the transport's own
+    // maxRequestBodySize. Without it the SDK default (4 MiB) applies and this returns 200.
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${srv.port}/mcp`))
+    const client = new Client({ name: 'cap-session-test', version: '1.0.0' })
+    await client.connect(transport)
+    const sessionId = transport.sessionId
+    expect(sessionId).toBeDefined()
+
+    const big = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+      params: { _pad: 'x'.repeat(DEFAULT_HTTP_MAX_BODY_BYTES) }
+    })
+    expect(new TextEncoder().encode(big).byteLength).toBeGreaterThan(DEFAULT_HTTP_MAX_BODY_BYTES)
+    const res = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': sessionId as string
+      },
+      body: big
+    })
+    expect(res.status).toBe(413)
+    await res.text()
+    await client.close()
+  })
+
+  test('a session-bearing POST /mcp under the cap is processed normally', async () => {
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${srv.port}/mcp`))
+    const client = new Client({ name: 'cap-session-ok', version: '1.0.0' })
+    await client.connect(transport)
+    const sessionId = transport.sessionId as string
+
+    const res = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': sessionId
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
+    })
+    expect(res.status).toBe(200)
+    await res.text()
+    await client.close()
+  })
+
+  test('/mcp responses carry no CORS headers', async () => {
+    // /mcp is an agent-to-server channel; only /api/* is cross-origin callable. A future global
+    // withCors would slip through if nothing pins this.
+    const sessionless = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+    })
+    expect(sessionless.status).toBe(400)
+
+    const oversized = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'x'.repeat(DEFAULT_HTTP_MAX_BODY_BYTES + 1)
+    })
+    expect(oversized.status).toBe(413)
+
+    for (const res of [sessionless, oversized]) {
+      expect(res.headers.get('access-control-allow-origin')).toBeNull()
+      expect(res.headers.get('access-control-allow-methods')).toBeNull()
+      expect(res.headers.get('access-control-allow-headers')).toBeNull()
+      await res.text()
+    }
   })
 })
