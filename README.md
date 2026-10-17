@@ -122,7 +122,15 @@ bun test               # unit tests (per-test temp DBs)
 bunx tsc --noEmit      # type check
 bunx biome check src/  # lint
 bun run src/smoke.ts   # MCP end-to-end over HTTP (ephemeral port + temp DB)
-bun run changelog      # rebuild CHANGELOG.md from git tags (maintainers; clean tree required, then commits and pushes it)
+bun run changelog      # rebuild CHANGELOG.md from git tags (maintainers; clean tree required; prints next steps to commit/push manually)
+```
+
+The changelog script only regenerates `CHANGELOG.md`; it does not commit or push. After running it, commit and push manually:
+
+```bash
+git add CHANGELOG.md
+git commit -m "docs: update CHANGELOG.md"
+git push
 ```
 
 ## Documentation
