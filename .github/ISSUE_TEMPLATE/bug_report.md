@@ -3,6 +3,7 @@ name: Bug report
 about: Report a bug or unexpected behavior
 title: "fix: "
 labels: bug
+assignees: zumik3-del
 ---
 
 ## Expected
