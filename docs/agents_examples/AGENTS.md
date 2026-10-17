@@ -73,6 +73,11 @@ Epics (is_epic) are created and managed only by the orchestrator. Subagents may 
 - The `tester` agent owns the smoke/heavy integration suites: run once per batch (after all tasks in the batch reach `review`/`done`), not per-commit; developers never run them.
 - The `tester` agent never commits or pushes — delegate those separately to `git`.
 
+## Review
+
+- Delegate pre-merge review of non-trivial changes to the `reviewer` subagent.
+- The `reviewer` is READ-ONLY: findings (severity + `path:line`) go in its completion comment; it never edits code. The orchestrator turns required findings into follow-up fix tasks.
+
 ## Documentation
 
 - Delegate README/docs/ADR/changelog/docstring work to the `docwriter` subagent.
