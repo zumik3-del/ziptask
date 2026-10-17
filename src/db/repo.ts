@@ -205,7 +205,7 @@ export class TaskRepo implements TaskStore {
       UNION ALL
       SELECT 'comment', agent, content, created_at, rowid
       FROM comments WHERE task_id = ?
-      ORDER BY created_at ASC, rowid ASC
+      ORDER BY created_at ASC, type ASC, rowid ASC
       LIMIT ${n}`
     return this.db.query(sql).all(taskId, taskId) as Array<{ type: string; agent: string; text: string; created_at: string }>
   }
