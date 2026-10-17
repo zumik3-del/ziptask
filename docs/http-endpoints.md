@@ -12,6 +12,36 @@ Every path returns `404` `Not Found` when it does not match. No endpoint authent
 
 `GET /health` is purely additive over `{"ok":true}`: `version` carries the running package version (no leading `v`) so the deploy framework's health gate can compare it against the target release (`HEALTH_VERSION_FIELD`, `expected = ${TAG#v}`).
 
+## `GET /api/tasks` (experimental)
+
+A provisional, read-only endpoint that lists tasks of one project, optionally filtered by status. Intended for lightweight REST consumers (e.g. the OpenCode TUI plugin) that do not speak MCP. It routes through the same service layer as the MCP tools.
+
+Query parameters:
+
+| Param | Required | Description |
+|---|---|---|
+| `project` | yes | project slug |
+| `status` | no | one of `queued`, `in_progress`, `review`, `done`, `failed`, `blocked`, `canceled` |
+| `limit` | no | max number of tasks (clamped to the server default) |
+
+```jsonc
+{
+  "tasks": [ { "id": 42, "title": "…", "status": "in_progress", "priority": "p2" } ],
+  "total": 1
+}
+```
+
+Errors:
+
+| Condition | Status | Body |
+|---|---|---|
+| missing `project` | `400` | `{"error":"INVALID: project required"}` |
+| unknown `project` | `400` | `{"error":"INVALID: unknown project 'x' (known: ...)"}` |
+| invalid `status` | `400` | `{"error":"INVALID: invalid status"}` |
+| invalid `limit` | `400` | `{"error":"INVALID: invalid limit"}` |
+
+Because it routes through the service, this read also triggers the [lazy lease reap](mcp-tools.md#reads-and-lease-reap).
+
 ## `GET /api/task/:id` (experimental)
 
 A provisional, read-only endpoint that is **an intentional integration endpoint for the subagentix client** — a REST-style consumer that does not speak MCP. It is not a general-purpose public API and its response shape is subject to change (the comment in `src/server.ts` marks it `EXPERIMENTAL`). It goes through the same service layer as the MCP tools.

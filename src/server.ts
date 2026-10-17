@@ -3,7 +3,7 @@ import type { EventStore } from '@modelcontextprotocol/sdk/server/webStandardStr
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { TaskService } from './core/service'
 import { formatError } from './core/result'
-import { monotonicNowMs } from './core/tasks'
+import { TASK_STATUS_VALUES, monotonicNowMs } from './core/tasks'
 import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
 import { createLogger, normalizeError } from './logger'
@@ -121,6 +121,35 @@ const SESSION_NOT_FOUND = { jsonrpc: '2.0', error: { code: JSONRPC_SESSION_NOT_F
 const SESSION_REQUIRED = { jsonrpc: '2.0', error: { code: JSONRPC_BAD_REQUEST, message: 'Bad Request: Mcp-Session-Id header is required' }, id: null }
 
 // EXPERIMENTAL: provisional read-only endpoint, response shape subject to change.
+function handleTaskList(svc: TaskService, url: URL): Response {
+  const project = url.searchParams.get('project') ?? undefined
+  const status = url.searchParams.get('status') ?? undefined
+  if (status !== undefined && !TASK_STATUS_VALUES.includes(status as (typeof TASK_STATUS_VALUES)[number])) {
+    return Response.json({ error: 'INVALID: invalid status' }, { status: 400 })
+  }
+  const limitRaw = url.searchParams.get('limit')
+  let limit: number | undefined
+  if (limitRaw !== null) {
+    limit = Number(limitRaw)
+    if (!Number.isInteger(limit) || limit <= 0) {
+      return Response.json({ error: 'INVALID: invalid limit' }, { status: 400 })
+    }
+  }
+  const result = svc.listTasks({ project, status: status as any, limit })
+  if (!result.ok) {
+    const httpStatus = result.error.code === 'NOT_FOUND' ? 404 : 400
+    return Response.json({ error: formatError(result.error) }, { status: httpStatus })
+  }
+  const tasks = result.data.tasks.map((task) => ({
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    priority: task.priority
+  }))
+  return Response.json({ tasks, total: result.data.total })
+}
+
+// EXPERIMENTAL: provisional read-only endpoint, response shape subject to change.
 function handleTaskView(svc: TaskService, pathname: string): Response {
   const rawId = pathname.slice('/api/task/'.length)
   const id = Number(rawId)
@@ -157,6 +186,10 @@ export function startHttp(opts: StartHttpOptions) {
 
         if (url.pathname === '/health' && req.method === 'GET') {
           return Response.json({ ok: true, version: VERSION })
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/tasks') {
+          return handleTaskList(svc, url)
         }
 
         if (req.method === 'GET' && url.pathname.startsWith('/api/task/')) {
