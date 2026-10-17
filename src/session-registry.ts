@@ -35,6 +35,7 @@ export class SessionRegistry {
   }
 
   release(): void {
+    if (this.reserved <= 0) return
     this.reserved--
   }
 
