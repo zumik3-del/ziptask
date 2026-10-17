@@ -4,7 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { TaskService } from './core/service'
 import { VERSION } from './version'
-import { startTestServer, textOf } from './test-context'
+import { startTestServer, textOf, TEST_PROJECT_SLUG } from './test-context'
 import type { TestServer } from './test-context'
 
 // The HTTP/MCP surface: the task-view endpoint, the schema guards in front of the tools, and the
@@ -151,6 +151,103 @@ describe('GET /api/task/:id HTTP endpoint', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as any
     expect(body.blocked_by).toEqual([])
+  })
+})
+
+describe('GET /api/tasks HTTP endpoint', () => {
+  let srv: TestServer
+
+  beforeEach(() => { srv = startTestServer() })
+  afterEach(() => { srv.stop() })
+
+  test('GET /api/tasks?project=<slug> returns 200 with { tasks, total } shape', async () => {
+    const id1 = getId(srv.svc.createTask({ title: 'Task 1', reporter: 'dev', priority: 'p1' }))
+    const id2 = getId(srv.svc.createTask({ title: 'Task 2', reporter: 'dev', priority: 'p2' }))
+
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.total).toBe(2)
+    expect(Array.isArray(body.tasks)).toBe(true)
+    expect(body.tasks.length).toBe(2)
+    expect(body.tasks[0]).toEqual({
+      id: id2,
+      title: 'Task 2',
+      status: 'queued',
+      priority: 'p2'
+    })
+    expect(body.tasks[1]).toEqual({
+      id: id1,
+      title: 'Task 1',
+      status: 'queued',
+      priority: 'p1'
+    })
+  })
+
+  test('returns empty tasks list and total 0 when project has no tasks', async () => {
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body).toEqual({ tasks: [], total: 0 })
+  })
+
+  test('status query filter returns matching tasks for valid status', async () => {
+    getId(srv.svc.createTask({ title: 'Queued task', reporter: 'dev' }))
+    const pId = getId(srv.svc.createTask({ title: 'In progress task', reporter: 'dev' }))
+    const claim = srv.svc.claimTask({ agent: 'dev', taskId: pId })
+    expect(claim.ok).toBe(true)
+
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&status=in_progress`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.total).toBe(1)
+    expect(body.tasks.length).toBe(1)
+    expect(body.tasks[0].id).toBe(pId)
+    expect(body.tasks[0].status).toBe('in_progress')
+  })
+
+  test('status query filter returns 400 with INVALID: invalid status for invalid status', async () => {
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&status=nonexistent_status`)
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error).toBe('INVALID: invalid status')
+  })
+
+  test('limit query param limits returned tasks when positive integer', async () => {
+    getId(srv.svc.createTask({ title: 'Task 1', reporter: 'dev' }))
+    getId(srv.svc.createTask({ title: 'Task 2', reporter: 'dev' }))
+    getId(srv.svc.createTask({ title: 'Task 3', reporter: 'dev' }))
+
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&limit=2`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.total).toBe(3)
+    expect(body.tasks.length).toBe(2)
+  })
+
+  test('limit query param returns 400 with INVALID: invalid limit for negative or non-integer values', async () => {
+    const badLimits = ['-1', '0', 'abc', '1.5', 'NaN']
+    for (const bad of badLimits) {
+      const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&limit=${bad}`)
+      expect(res.status).toBe(400)
+      const body = await res.json() as any
+      expect(body.error).toBe('INVALID: invalid limit')
+    }
+  })
+
+  test('missing project parameter returns 400 with INVALID: project required', async () => {
+    ;(srv.svc.projects as any).scope = undefined
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks`)
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error).toBe('INVALID: project required')
+  })
+
+  test('unknown project returns 400 with INVALID: unknown project...', async () => {
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=unknown_project`)
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error).toContain("INVALID: unknown project 'unknown_project'")
   })
 })
 
