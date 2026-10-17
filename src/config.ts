@@ -140,23 +140,49 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-function setNested(obj: Record<string, unknown>, path: string, value: unknown): void {
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function isDangerousKey(key: string): boolean {
+  return DANGEROUS_KEYS.has(key)
+}
+
+export function setNested(obj: Record<string, unknown>, path: string, value: unknown): void {
   const keys = path.split('.')
-  let current = obj
-  for (let i = 0; i < keys.length - 1; i++) {
-    if (!isPlainObject(current[keys[i]])) current[keys[i]] = {}
-    current = current[keys[i]] as Record<string, unknown>
+  if (keys.length === 0 || keys.some((k) => k.length === 0) || keys.some(isDangerousKey)) {
+    // Block dangerous property names and invalid segments to prevent prototype pollution.
+    return
   }
-  current[keys[keys.length - 1]] = value
+  let current: Record<string, unknown> = obj
+  for (let i = 0; i < keys.length - 1; i++) {
+    const key = keys[i]
+    if (!Object.hasOwn(current, key)) {
+      current[key] = {}
+    } else {
+      const existing = current[key]
+      if (!isPlainObject(existing)) {
+        current[key] = {}
+      }
+    }
+    const next = current[key]
+    if (!isPlainObject(next)) {
+      return
+    }
+    current = next
+  }
+  const last = keys[keys.length - 1]
+  if (last.length === 0 || isDangerousKey(last)) return
+  current[last] = value
 }
 
 function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {}
   for (const key of Object.keys(target)) {
+    if (isDangerousKey(key)) continue
     const t = target[key]
     result[key] = isPlainObject(t) ? deepMerge(t, {}) : t
   }
   for (const key of Object.keys(source)) {
+    if (isDangerousKey(key)) continue
     const s = source[key]
     const t = result[key]
     result[key] = isPlainObject(s) && isPlainObject(t) ? deepMerge(t, s) : s
