@@ -1,5 +1,5 @@
 import type { TaskStatus } from './tasks'
-import { nowIso } from './tasks'
+import { nowIso, monotonicNowMs } from './tasks'
 import type { LeaseStore } from './types'
 import { SECOND_MS } from '../defaults'
 
@@ -16,7 +16,7 @@ export class LeaseReaper {
   ) {}
 
   private _shouldReap(): boolean {
-    return Date.now() - this.lastReapAt >= this.reapCooldownSec * SECOND_MS
+    return monotonicNowMs() - this.lastReapAt >= this.reapCooldownSec * SECOND_MS
   }
 
   reapIfStale(): void {
@@ -32,6 +32,6 @@ export class LeaseReaper {
       const changes = this.store.reapTransition(task.id, task.version, newStatus, newAttempts, now)
       if (changes === 1 && this.auditLog) this.store.auditAppend(task.id, 'system', 'lease_expired', 'in_progress', newStatus)
     }
-    this.lastReapAt = Date.now()
+    this.lastReapAt = monotonicNowMs()
   }
 }
