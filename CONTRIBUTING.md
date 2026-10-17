@@ -2,13 +2,13 @@
 
 Thanks for your interest in contributing! This document explains how to get started.
 
-## Code of Conduct
+## Code of conduct
 
 This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you agree to uphold it.
 
-## How to Contribute
+## How to contribute
 
-### Reporting Bugs
+### Reporting bugs
 
 1. Check [existing issues](https://github.com/zumik3-del/ziptask/issues) to avoid duplicates.
 2. Open a new issue with:
@@ -17,11 +17,11 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
    - Expected vs actual behavior
    - Your environment (Bun version, DB path, transport)
 
-### Suggesting Features
+### Suggesting features
 
 Open an issue with the `feature` label. Describe the problem you want to solve and your proposed solution.
 
-### Submitting Changes
+### Submitting changes
 
 1. Fork the repo and create a feature branch from `dev`.
 2. Make your changes following the code conventions below.
@@ -31,7 +31,7 @@ Open an issue with the `feature` label. Describe the problem you want to solve a
 6. Open a pull request `dev` → `main` with a **Conventional Commit title** (see below).
 7. PRs are merged with a **merge commit** (never squash) — the PR title becomes the merge-commit subject on `main`.
 
-## Commit Convention
+## Commit convention
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org/). The PR title (used as the merge-commit subject) must follow this format:
 
@@ -60,14 +60,14 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/). 
 - `✨ Added feature` (emoji, not conventional)
 - `update stuff` (no type prefix)
 
-## Code Conventions
+## Code conventions
 
 - **SOLID, KISS, DRY** — apply where it matters, skip where it doesn't.
 - **TypeScript strict** — no `any` unless unavoidable.
 - **Functions do one thing**, files are short, names are clear.
 - **Tests alongside source** — `.test.ts` suffix, same directory.
 
-## Project Structure
+## Project structure
 
 ```
 src/
@@ -76,7 +76,7 @@ src/
   mcp/          MCP server + tools
 ```
 
-## Development Setup
+## Development setup
 
 ```bash
 bun install
@@ -87,7 +87,7 @@ bun run start               # start server (HTTP)
 bun run dev                 # watch mode (restart on change)
 ```
 
-## Pull Request Guidelines
+## Pull request guidelines
 
 - Keep PRs focused on a single change.
 - Reference related issues (e.g., `closes #12`).

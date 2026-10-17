@@ -1,6 +1,6 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+## Supported versions
 
 | Version | Supported          |
 | ------- | ------------------ |
@@ -8,7 +8,7 @@
 
 Only the latest released version receives security updates.
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
 If you discover a security vulnerability in ziptask, please report it responsibly.
 
@@ -21,7 +21,7 @@ Instead, send an email to **zumik3@gmail.com** with:
 - Potential impact
 - Suggested fix (if any)
 
-## Response Timeline
+## Response timeline
 
 - **Acknowledgment**: within 48 hours
 - **Initial assessment**: within 1 week
