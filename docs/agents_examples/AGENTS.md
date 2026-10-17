@@ -1,10 +1,12 @@
-# Global rules
+# Global rules (generic template)
+
+> This is a **minimal, generic template**. Adapt paths, commands, and conventions to your project; it is not a verbatim copy of any specific project's rules.
 
 ## Workspace & communication
 
-- Code lives in the repo; design specs and notes live under `plans/` in the repo. The tracker holds state, files hold content.
+- Code lives in the repo; design specs and notes live under `docs/` in the repo. The tracker holds state, files hold content.
 - Interaction channel = the ziptask tracker, always (exception: the git subagent, see Git operations). The orchestrator creates tasks with a FULL description (goal, acceptance criteria, constraints, deliverable — English) and spawns subagents with a minimal prompt: `Task #N. Do not commit. English only.` plus special instructions only when they deviate from the agent file. Follow-up context and outcomes travel as tracker comments. No task.md contracts, no result files.
-- Parallelism: repo mutators (developer, tester, docwriter, devops, git) — one at a time per project; readers (architect, analyst) — unlimited between themselves.
+- Parallelism: repo mutators (developer, tester, docwriter, devops, git) — up to 4 concurrent per project on disjoint files; readers (architect, analyst) — unlimited between themselves.
 
 ## Tracker — orchestrator duties
 
@@ -34,7 +36,7 @@ Epics (is_epic) are created and managed only by the orchestrator. Subagents may 
 
 ## Artifacts
 
-- Specs, designs, and ADRs live under `plans/` in the repo (written by the analyst/architect). Task text stays in the tracker; never store diffs, logs, or full reports inside tracker text.
+- Specs, designs, and ADRs live under `docs/` in the repo (written by the analyst/architect). Task text stays in the tracker; never store diffs, logs, or full reports inside tracker text.
 
 ## Templates
 
@@ -58,7 +60,7 @@ Epics (is_epic) are created and managed only by the orchestrator. Subagents may 
 
 ## Analysis
 
-- Delegate requirements analysis, epic decomposition, and acceptance-criteria derivation to the `analyst` subagent. Specs go to the repo `plans/` directory.
+- Delegate requirements analysis, epic decomposition, and acceptance-criteria derivation to the `analyst` subagent. Specs go to the repo `docs/` directory.
 
 ## Development
 
@@ -72,6 +74,11 @@ Epics (is_epic) are created and managed only by the orchestrator. Subagents may 
 - When a task requires writing new tests, running the test suite, or reviewing test coverage, use the `tester` subagent.
 - The `tester` agent owns the smoke/heavy integration suites: run once per batch (after all tasks in the batch reach `review`/`done`), not per-commit; developers never run them.
 - The `tester` agent never commits or pushes — delegate those separately to `git`.
+
+## Review
+
+- Delegate pre-merge review of non-trivial changes to the `reviewer` subagent.
+- The `reviewer` is READ-ONLY: findings (severity + `path:line`) go in its completion comment; it never edits code. The orchestrator turns required findings into follow-up fix tasks.
 
 ## Documentation
 

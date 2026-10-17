@@ -1,67 +1,166 @@
 ---
 description: Technical writer — project documentation, README, ADR formatting, changelogs, docstrings. Follows the project's existing docs structure and voice. Verifies claims against the codebase.
 mode: subagent
-temperature: 0.3
 steps: 30
-color: secondary
+color: '#a855f7'
 # model: provider/model-id  # optional; omit to inherit the session model
-permission:
-  read: allow
-  glob: allow
-  grep: allow
-  list: allow
-  webfetch: allow
-  websearch: allow
-  bash:
-    "*": ask
-    "git status*": allow
-    "git log*": allow
-    "git diff*": allow
-    "git show*": allow
-    "git remote*": allow
-    "ls*": allow
-    "cat*": allow
-    "tree*": allow
-    "find*": allow
-    "grep*": allow
-    "head*": allow
-    "tail*": allow
-    "wc*": allow
-    "date*": allow
-    "rg*": allow
-    "sort*": allow
-    "tr*": allow
-    "uniq*": allow
-    "cut*": allow
-    "nl*": allow
-    "echo*": allow
-    "which*": allow
-    "command*": allow
-    "rm*": deny
-    "mv*": deny
-    "cp*": deny
-    "git commit*": deny
-    "git push*": deny
-    "git reset*": deny
-    "git clean*": deny
-    "git merge*": deny
-    "* > *": deny
-    "* >> *": deny
-    "sed*": deny
-  edit:
-    "*": allow
-    "AGENTS.md": deny
-    "**/AGENTS.md": deny
-  todowrite: deny
-  # ziptask MCP: claim your task, move it to review, comment, read context.
-  # create_task/list_* stay orchestrator-side (last match wins)
-  "ziptask_*": deny
-  "ziptask_claim_task": allow
-  "ziptask_update_status": allow
-  "ziptask_add_comment": allow
-  "ziptask_get_task": allow
-  "ziptask_get_timeline": allow
-  "ziptask_get_template": allow
+permissions:
+  - action: read
+    resource: "*"
+    effect: allow
+  - action: glob
+    resource: "*"
+    effect: allow
+  - action: grep
+    resource: "*"
+    effect: allow
+  - action: list
+    resource: "*"
+    effect: allow
+  - action: webfetch
+    resource: "*"
+    effect: allow
+  - action: websearch
+    resource: "*"
+    effect: allow
+  - action: shell
+    resource: "*"
+    effect: ask
+  - action: shell
+    resource: "git status*"
+    effect: allow
+  - action: shell
+    resource: "git log*"
+    effect: allow
+  - action: shell
+    resource: "git diff*"
+    effect: allow
+  - action: shell
+    resource: "git show*"
+    effect: allow
+  - action: shell
+    resource: "git remote*"
+    effect: allow
+  - action: shell
+    resource: "ls*"
+    effect: allow
+  - action: shell
+    resource: "cat*"
+    effect: allow
+  - action: shell
+    resource: "tree*"
+    effect: allow
+  - action: shell
+    resource: "find*"
+    effect: allow
+  - action: shell
+    resource: "grep*"
+    effect: allow
+  - action: shell
+    resource: "head*"
+    effect: allow
+  - action: shell
+    resource: "tail*"
+    effect: allow
+  - action: shell
+    resource: "wc*"
+    effect: allow
+  - action: shell
+    resource: "date*"
+    effect: allow
+  - action: shell
+    resource: "rg*"
+    effect: allow
+  - action: shell
+    resource: "sort*"
+    effect: allow
+  - action: shell
+    resource: "tr*"
+    effect: allow
+  - action: shell
+    resource: "uniq*"
+    effect: allow
+  - action: shell
+    resource: "cut*"
+    effect: allow
+  - action: shell
+    resource: "nl*"
+    effect: allow
+  - action: shell
+    resource: "echo*"
+    effect: allow
+  - action: shell
+    resource: "which*"
+    effect: allow
+  - action: shell
+    resource: "command*"
+    effect: allow
+  - action: shell
+    resource: "rm*"
+    effect: deny
+  - action: shell
+    resource: "mv*"
+    effect: deny
+  - action: shell
+    resource: "cp*"
+    effect: deny
+  - action: shell
+    resource: "git commit*"
+    effect: deny
+  - action: shell
+    resource: "git push*"
+    effect: deny
+  - action: shell
+    resource: "git reset*"
+    effect: deny
+  - action: shell
+    resource: "git clean*"
+    effect: deny
+  - action: shell
+    resource: "git merge*"
+    effect: deny
+  - action: shell
+    resource: "* > *"
+    effect: deny
+  - action: shell
+    resource: "* >> *"
+    effect: deny
+  - action: shell
+    resource: "sed*"
+    effect: deny
+  - action: edit
+    resource: "*"
+    effect: allow
+  - action: edit
+    resource: "AGENTS.md"
+    effect: deny
+  - action: edit
+    resource: "**/AGENTS.md"
+    effect: deny
+  - action: todowrite
+    resource: "*"
+    effect: deny
+  - action: ziptask_*
+    resource: "*"
+    effect: deny
+  - action: ziptask_claim_task
+    resource: "*"
+    effect: allow
+  - action: ziptask_update_status
+    resource: "*"
+    effect: allow
+  - action: ziptask_add_comment
+    resource: "*"
+    effect: allow
+  - action: ziptask_get_task
+    resource: "*"
+    effect: allow
+  - action: ziptask_get_timeline
+    resource: "*"
+    effect: allow
+  - action: ziptask_get_template
+    resource: "*"
+    effect: allow
 ---
 
 You are a senior technical writer. You WRITE and UPDATE project documentation: README, guides, ADRs, changelogs, docstrings. You document what IS, not what should be — every claim is verified against the codebase. You work as a delegated subagent: the orchestrator hands you a task id, you drive your task in the ziptask tracker.

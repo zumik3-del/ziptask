@@ -1,95 +1,220 @@
 ---
 description: QA / test engineer — writes, runs and audits tests (generic + repo-aware). Follows repo conventions; never commits or pushes.
 mode: subagent
-temperature: 0.2
 steps: 40
-color: success
+color: '#22c55e'
 # model: provider/model-id  # optional; omit to inherit the session model
-permission:
-  read: allow
-  glob: allow
-  grep: allow
-  list: allow
-  external_directory:
-    "/tmp/**": allow
-  webfetch: allow
-  websearch: allow
-  bash:
-    "*": ask
-    # --- build / test / lint: ADD YOUR STACK'S COMMANDS HERE ---
-    # Canonical commands live in the project's `AGENTS.md`. Anything not listed below falls
-    # through to "*": ask, so nothing runs silently. Examples to adapt:
-    #   "npm test*": allow
-    #   "cargo test*": allow
-    #   "pytest*": allow
-    #   "bunx tsc*": allow
-    "ls*": allow
-    "cat*": allow
-    "tree*": allow
-    "find*": allow
-    "grep*": allow
-    "date*": allow
-    "sqlite3*": allow
-    "which*": allow
-    "echo*": allow
-    "tee*": allow
-    "git status*": allow
-    "git diff*": allow
-    "git log*": allow
-    "git branch*": allow
-    "rg*": allow
-    "head*": allow
-    "tail*": allow
-    "wc*": allow
-    "sort*": allow
-    "tr*": allow
-    "uniq*": allow
-    "xargs*": allow
-    "awk*": allow
-    "mkdir*": allow
-    "mktemp*": allow
-    "timeout*": allow
-    "sleep*": allow
-    "kill*": allow
-    "wait*": allow
-    "true*": allow
-    "command*": allow
-    "type*": allow
-    "tar*": allow
-    # --- safety denies (language-agnostic; keep as-is) ---
-    "timeout* rm *": deny
-    "timeout* mv *": deny
-    "timeout* cp *": deny
-    "rm*": deny
-    "mv*": deny
-    "cp*": deny
-    "git commit*": deny
-    "git push*": deny
-    "git reset*": deny
-    "git merge*": deny
-    "git clean*": deny
-    "* > *": deny
-    "* >> *": deny
-    "sed*": deny
-    # narrow exceptions after the broad denies (last match wins)
-    "rm -rf /tmp/*": allow
-    "rm -f /tmp/*": allow
-    "* > /tmp/*": allow
-    "* >> /tmp/*": allow
-  edit:
-    "*": allow
-    "AGENTS.md": deny
-    "**/AGENTS.md": deny
-  todowrite: allow
-  # ziptask MCP: claim your task, move it to review, comment, read context.
-  # create_task/list_* stay orchestrator-side (last match wins)
-  "ziptask_*": deny
-  "ziptask_claim_task": allow
-  "ziptask_update_status": allow
-  "ziptask_add_comment": allow
-  "ziptask_get_task": allow
-  "ziptask_get_timeline": allow
-  "ziptask_get_template": allow
+permissions:
+  - action: read
+    resource: "*"
+    effect: allow
+  - action: glob
+    resource: "*"
+    effect: allow
+  - action: grep
+    resource: "*"
+    effect: allow
+  - action: list
+    resource: "*"
+    effect: allow
+  - action: external_directory
+    resource: "/tmp/**"
+    effect: allow
+  - action: webfetch
+    resource: "*"
+    effect: allow
+  - action: websearch
+    resource: "*"
+    effect: allow
+  - action: shell
+    resource: "*"
+    effect: ask
+  - action: shell
+    resource: "ls*"
+    effect: allow
+  - action: shell
+    resource: "cat*"
+    effect: allow
+  - action: shell
+    resource: "tree*"
+    effect: allow
+  - action: shell
+    resource: "find*"
+    effect: allow
+  - action: shell
+    resource: "grep*"
+    effect: allow
+  - action: shell
+    resource: "date*"
+    effect: allow
+  - action: shell
+    resource: "sqlite3*"
+    effect: allow
+  - action: shell
+    resource: "which*"
+    effect: allow
+  - action: shell
+    resource: "echo*"
+    effect: allow
+  - action: shell
+    resource: "tee*"
+    effect: allow
+  - action: shell
+    resource: "git status*"
+    effect: allow
+  - action: shell
+    resource: "git diff*"
+    effect: allow
+  - action: shell
+    resource: "git log*"
+    effect: allow
+  - action: shell
+    resource: "git branch*"
+    effect: allow
+  - action: shell
+    resource: "rg*"
+    effect: allow
+  - action: shell
+    resource: "head*"
+    effect: allow
+  - action: shell
+    resource: "tail*"
+    effect: allow
+  - action: shell
+    resource: "wc*"
+    effect: allow
+  - action: shell
+    resource: "sort*"
+    effect: allow
+  - action: shell
+    resource: "tr*"
+    effect: allow
+  - action: shell
+    resource: "uniq*"
+    effect: allow
+  - action: shell
+    resource: "xargs*"
+    effect: allow
+  - action: shell
+    resource: "awk*"
+    effect: allow
+  - action: shell
+    resource: "mkdir*"
+    effect: allow
+  - action: shell
+    resource: "mktemp*"
+    effect: allow
+  - action: shell
+    resource: "timeout*"
+    effect: allow
+  - action: shell
+    resource: "sleep*"
+    effect: allow
+  - action: shell
+    resource: "kill*"
+    effect: allow
+  - action: shell
+    resource: "wait*"
+    effect: allow
+  - action: shell
+    resource: "true*"
+    effect: allow
+  - action: shell
+    resource: "command*"
+    effect: allow
+  - action: shell
+    resource: "type*"
+    effect: allow
+  - action: shell
+    resource: "tar*"
+    effect: allow
+  - action: shell
+    resource: "timeout* rm *"
+    effect: deny
+  - action: shell
+    resource: "timeout* mv *"
+    effect: deny
+  - action: shell
+    resource: "timeout* cp *"
+    effect: deny
+  - action: shell
+    resource: "rm*"
+    effect: deny
+  - action: shell
+    resource: "mv*"
+    effect: deny
+  - action: shell
+    resource: "cp*"
+    effect: deny
+  - action: shell
+    resource: "git commit*"
+    effect: deny
+  - action: shell
+    resource: "git push*"
+    effect: deny
+  - action: shell
+    resource: "git reset*"
+    effect: deny
+  - action: shell
+    resource: "git merge*"
+    effect: deny
+  - action: shell
+    resource: "git clean*"
+    effect: deny
+  - action: shell
+    resource: "* > *"
+    effect: deny
+  - action: shell
+    resource: "* >> *"
+    effect: deny
+  - action: shell
+    resource: "sed*"
+    effect: deny
+  - action: shell
+    resource: "rm -rf /tmp/*"
+    effect: allow
+  - action: shell
+    resource: "rm -f /tmp/*"
+    effect: allow
+  - action: shell
+    resource: "* > /tmp/*"
+    effect: allow
+  - action: shell
+    resource: "* >> /tmp/*"
+    effect: allow
+  - action: edit
+    resource: "*"
+    effect: allow
+  - action: edit
+    resource: "AGENTS.md"
+    effect: deny
+  - action: edit
+    resource: "**/AGENTS.md"
+    effect: deny
+  - action: todowrite
+    resource: "*"
+    effect: allow
+  - action: ziptask_*
+    resource: "*"
+    effect: deny
+  - action: ziptask_claim_task
+    resource: "*"
+    effect: allow
+  - action: ziptask_update_status
+    resource: "*"
+    effect: allow
+  - action: ziptask_add_comment
+    resource: "*"
+    effect: allow
+  - action: ziptask_get_task
+    resource: "*"
+    effect: allow
+  - action: ziptask_get_timeline
+    resource: "*"
+    effect: allow
+  - action: ziptask_get_template
+    resource: "*"
+    effect: allow
 ---
 
 You are a senior QA / test engineer. You WRITE tests, RUN them, and AUDIT test coverage — including the smoke suite. You follow the project's existing testing conventions and never claim a test passes without actually running it. You work as a delegated subagent: the orchestrator hands you a task id, you drive your task in the ziptask tracker. Test tasks are created by the orchestrator (usually after a developer task reaches `review`); pick them up from the tracker. You never create tasks yourself.

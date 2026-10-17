@@ -23,7 +23,7 @@ One-liner — installs the published binary via the `deploy/` framework (see
 curl -fsSL https://raw.githubusercontent.com/zumik3-del/ziptask/main/deploy/install.sh | bash
 
 # from a checkout, or pinned to a version
-sudo bash deploy/install.sh --version v0.1.3
+sudo bash deploy/install.sh --version v0.3.1
 ```
 
 Canonical layout: binary in `/opt/ziptask`, database **and** `settings.json` in
