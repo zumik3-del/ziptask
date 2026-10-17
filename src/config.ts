@@ -140,23 +140,39 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-function setNested(obj: Record<string, unknown>, path: string, value: unknown): void {
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function isDangerousKey(key: string): boolean {
+  return DANGEROUS_KEYS.has(key)
+}
+
+export function setNested(obj: Record<string, unknown>, path: string, value: unknown): void {
   const keys = path.split('.')
+  if (keys.some(isDangerousKey)) {
+    // Block dangerous property names to prevent prototype pollution.
+    return
+  }
   let current = obj
   for (let i = 0; i < keys.length - 1; i++) {
-    if (!isPlainObject(current[keys[i]])) current[keys[i]] = {}
-    current = current[keys[i]] as Record<string, unknown>
+    const key = keys[i]
+    if (!Object.hasOwn(current, key) || !isPlainObject(current[key])) {
+      current[key] = {}
+    }
+    current = current[key] as Record<string, unknown>
   }
-  current[keys[keys.length - 1]] = value
+  const last = keys[keys.length - 1]
+  current[last] = value
 }
 
 function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {}
   for (const key of Object.keys(target)) {
+    if (isDangerousKey(key)) continue
     const t = target[key]
     result[key] = isPlainObject(t) ? deepMerge(t, {}) : t
   }
   for (const key of Object.keys(source)) {
+    if (isDangerousKey(key)) continue
     const s = source[key]
     const t = result[key]
     result[key] = isPlainObject(s) && isPlainObject(t) ? deepMerge(t, s) : s
