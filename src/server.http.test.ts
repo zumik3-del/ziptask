@@ -6,6 +6,8 @@ import type { TaskService } from './core/service'
 import { VERSION } from './version'
 import { startTestServer, textOf, TEST_PROJECT_SLUG } from './test-context'
 import type { TestServer } from './test-context'
+import { readBodyWithLimit } from './server'
+import { DEFAULT_HTTP_MAX_BODY_BYTES } from './defaults'
 
 // The HTTP/MCP surface: the task-view endpoint, the schema guards in front of the tools, and the
 // argument contract as it reaches the wire. Session lifecycle and the event store live in the
@@ -568,5 +570,126 @@ describe('argument contract over MCP (F1 #1040)', () => {
       expect(res.isError).toBe(true)
       expect((srv.db.query('SELECT status FROM tasks WHERE id = ?').get(bait) as any).status).toBe('queued')
     })
+  })
+})
+
+// CORS on the browser-facing /api/* surface and the request-body cap that protects peekInitialize.
+describe('CORS on /api/* (#1704)', () => {
+  let srv: TestServer
+
+  beforeEach(() => { srv = startTestServer() })
+  afterEach(() => { srv.stop() })
+
+  test('GET /api/tasks carries Access-Control-Allow-Origin', async () => {
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+  })
+
+  test('GET /api/task/:id carries Access-Control-Allow-Origin', async () => {
+    const id = getId(srv.svc.createTask({ title: 'CORS task', reporter: 'dev' }))
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/${id}`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+  })
+
+  test('an /api error response still carries the CORS header', async () => {
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/99999`)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+  })
+
+  test('OPTIONS preflight on /api/tasks and /api/task/:id → 204 with CORS headers', async () => {
+    for (const path of ['/api/tasks', '/api/task/1']) {
+      const res = await fetch(`http://127.0.0.1:${srv.port}${path}`, {
+        method: 'OPTIONS',
+        headers: {
+          origin: 'http://example.com',
+          'access-control-request-method': 'GET'
+        }
+      })
+      expect(`${path}: ${res.status}`).toBe(`${path}: 204`)
+      expect(res.headers.get('access-control-allow-origin')).toBe('*')
+      expect(res.headers.get('access-control-allow-methods')).toContain('GET')
+      expect(res.headers.get('access-control-allow-headers')).toContain('Content-Type')
+    }
+  })
+})
+
+describe('request body size limit (#1704)', () => {
+  let srv: TestServer
+
+  beforeEach(() => { srv = startTestServer() })
+  afterEach(() => { srv.stop() })
+
+  test('oversized POST /mcp body → 413', async () => {
+    const big = 'x'.repeat(DEFAULT_HTTP_MAX_BODY_BYTES + 1)
+    const res = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: big
+    })
+    expect(res.status).toBe(413)
+    await res.text()
+  })
+
+  test('a body under the cap is processed normally (no 413)', async () => {
+    // A non-initialize request answers 400 SESSION_REQUIRED — deterministic proof the request
+    // reached the handler instead of being cut off by the size limit.
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+      params: { _pad: 'x'.repeat(DEFAULT_HTTP_MAX_BODY_BYTES - 512) }
+    })
+    expect(new TextEncoder().encode(body).byteLength).toBeLessThanOrEqual(DEFAULT_HTTP_MAX_BODY_BYTES)
+    const res = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body
+    })
+    expect(res.status).toBe(400)
+    expect(await res.text()).toContain('Mcp-Session-Id')
+  })
+
+  test('readBodyWithLimit assembles a chunked body within the cap', async () => {
+    const req = new Request('http://127.0.0.1/mcp', {
+      method: 'POST',
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"a":'))
+          controller.enqueue(new TextEncoder().encode('1}'))
+          controller.close()
+        }
+      })
+    })
+    const result = await readBodyWithLimit(req, 1024)
+    expect(result).toEqual({ body: '{"a":1}', oversized: false })
+  })
+
+  test('readBodyWithLimit abandons a chunked body once it crosses the cap, without Content-Length', async () => {
+    const req = new Request('http://127.0.0.1/mcp', {
+      method: 'POST',
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(64))
+          controller.enqueue(new Uint8Array(64))
+          controller.close()
+        }
+      })
+    })
+    expect(req.headers.get('content-length')).toBeNull()
+    const result = await readBodyWithLimit(req, 100)
+    expect(result).toEqual({ body: '', oversized: true })
+  })
+
+  test('readBodyWithLimit rejects a declared Content-Length over the cap', async () => {
+    const req = new Request('http://127.0.0.1/mcp', {
+      method: 'POST',
+      headers: { 'content-length': '2048' },
+      body: 'x'.repeat(2048)
+    })
+    const result = await readBodyWithLimit(req, 1024)
+    expect(result).toEqual({ body: '', oversized: true })
   })
 })

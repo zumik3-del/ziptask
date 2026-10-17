@@ -11,6 +11,9 @@ export const DEFAULT_REAP_COOLDOWN_SEC = 60
 export const DEFAULT_AUTO_CLAIM_CEILING = 10000
 export const DEFAULT_HTTP_MAX_SESSIONS = 100
 export const DEFAULT_HTTP_SESSION_TTL_MS = HOUR_MS
+// Upper bound on a single request body read by peekInitialize: an unbounded body would let a
+// client exhaust server memory before the JSON-RPC layer ever sees the payload.
+export const DEFAULT_HTTP_MAX_BODY_BYTES = 1_048_576
 export const DEFAULT_PRIORITY = 'p2'
 export const DEFAULT_REPORTER = 'system'
 export const DEFAULT_LIST_LIMIT = 50

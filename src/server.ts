@@ -9,13 +9,77 @@ import type { Logger } from './logger'
 import { createLogger, normalizeError } from './logger'
 import { VERSION } from './version'
 import { SessionRegistry, type Session } from './session-registry'
-import { DEFAULT_HTTP_MAX_SESSIONS, DEFAULT_HTTP_SESSION_TTL_MS, SESSION_CLEANUP_INTERVAL_MS } from './defaults'
+import {
+  DEFAULT_HTTP_MAX_BODY_BYTES,
+  DEFAULT_HTTP_MAX_SESSIONS,
+  DEFAULT_HTTP_SESSION_TTL_MS,
+  SESSION_CLEANUP_INTERVAL_MS
+} from './defaults'
 
 export type { Session } from './session-registry'
 
 export const SSE_KEEPALIVE_MS = 10_000
 export const HTTP_IDLE_TIMEOUT_SEC = 60
 export const MAX_EVENT_STORE_EVENTS = 1000
+
+// The browser-facing /api/* surface is read-only and needs to be callable cross-origin, so the
+// three headers are fixed here rather than negotiated per request. /mcp is deliberately left out:
+// it is an agent-to-server channel, not something a page fetches through the same-origin policy.
+export const CORS_ALLOW_ORIGIN = '*'
+export const CORS_ALLOW_METHODS = 'GET, OPTIONS'
+export const CORS_ALLOW_HEADERS = 'Content-Type'
+
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': CORS_ALLOW_ORIGIN,
+  'Access-Control-Allow-Methods': CORS_ALLOW_METHODS,
+  'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS
+}
+
+// Rebuilds the response so the CORS headers land on success and error alike (a 400/404 that
+// omits them is unreadable in a browser). The body is passed through untouched, so a streaming
+// response keeps streaming.
+export function withCors(response: Response): Response {
+  const headers = new Headers(response.headers)
+  for (const [name, value] of Object.entries(CORS_HEADERS)) headers.set(name, value)
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  })
+}
+
+// Reads a request body without ever holding more than `maxBytes` in memory: a declared
+// Content-Length over the limit is rejected up front, and a chunked body is abandoned the moment
+// the running total crosses it. The caller turns `oversized` into a 413.
+export async function readBodyWithLimit(req: Request, maxBytes: number): Promise<{ body: string; oversized: boolean }> {
+  const declaredLength = req.headers.get('content-length')
+  if (declaredLength !== null) {
+    const length = Number(declaredLength)
+    if (Number.isFinite(length) && length > maxBytes) return { body: '', oversized: true }
+  }
+  const stream = req.body
+  if (!stream) return { body: '', oversized: false }
+  const reader = stream.getReader()
+  const decoder = new TextDecoder()
+  let total = 0
+  let body = ''
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      total += value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {})
+        return { body: '', oversized: true }
+      }
+      body += decoder.decode(value, { stream: true })
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return { body: body + decoder.decode(), oversized: false }
+}
 
 export function trackStreamActivity(response: Response, session: Session): Response {
   const contentType = response.headers.get('content-type') ?? ''
@@ -92,9 +156,17 @@ export interface StartHttpOptions {
   onShutdown?: () => void
 }
 
-async function peekInitialize(req: Request, logger: Logger): Promise<{ request: Request; agentName: string; isInitialize: boolean }> {
-  if (req.method !== 'POST') return { request: req, agentName: 'unknown', isInitialize: false }
-  const body = await req.text()
+async function peekInitialize(
+  req: Request,
+  logger: Logger,
+  maxBodyBytes: number
+): Promise<{ request: Request; agentName: string; isInitialize: boolean; oversized: boolean }> {
+  if (req.method !== 'POST') return { request: req, agentName: 'unknown', isInitialize: false, oversized: false }
+  const { body, oversized } = await readBodyWithLimit(req, maxBodyBytes)
+  if (oversized) {
+    logger.warn('peekInitialize: request body exceeds the size limit', { maxBodyBytes })
+    return { request: req, agentName: 'unknown', isInitialize: false, oversized: true }
+  }
   const request = new Request(req.url, { method: req.method, headers: req.headers, body })
   let agentName = 'unknown'
   let isInitialize = false
@@ -109,7 +181,7 @@ async function peekInitialize(req: Request, logger: Logger): Promise<{ request: 
     // treating the request as a non-initialize one (the caller answers 400).
     logger.debug('peekInitialize: failed to parse request body', { err: err instanceof Error ? err.message : String(err) })
   }
-  return { request, agentName, isInitialize }
+  return { request, agentName, isInitialize, oversized: false }
 }
 
 // JSON-RPC server-error codes live in the -32000..-32099 range; name them so both transport
@@ -188,12 +260,17 @@ export function startHttp(opts: StartHttpOptions) {
           return Response.json({ ok: true, version: VERSION })
         }
 
-        if (req.method === 'GET' && url.pathname === '/api/tasks') {
-          return handleTaskList(svc, url)
-        }
-
-        if (req.method === 'GET' && url.pathname.startsWith('/api/task/')) {
-          return handleTaskView(svc, url.pathname)
+        if (url.pathname.startsWith('/api/')) {
+          if (req.method === 'OPTIONS') {
+            return new Response(null, { status: 204, headers: CORS_HEADERS })
+          }
+          if (req.method === 'GET' && url.pathname === '/api/tasks') {
+            return withCors(handleTaskList(svc, url))
+          }
+          if (req.method === 'GET' && url.pathname.startsWith('/api/task/')) {
+            return withCors(handleTaskView(svc, url.pathname))
+          }
+          return new Response('Not Found', { status: 404, headers: CORS_HEADERS })
         }
 
         if (url.pathname !== '/mcp') {
@@ -215,7 +292,10 @@ export function startHttp(opts: StartHttpOptions) {
           return Response.json({ error: 'Too many sessions' }, { status: 429 })
         }
         try {
-          const { request, agentName, isInitialize } = await peekInitialize(req, svcLogger)
+          const { request, agentName, isInitialize, oversized } = await peekInitialize(req, svcLogger, DEFAULT_HTTP_MAX_BODY_BYTES)
+          if (oversized) {
+            return new Response('Payload Too Large', { status: 413 })
+          }
           if (!isInitialize) {
             return Response.json(SESSION_REQUIRED, { status: 400 })
           }
