@@ -3,6 +3,7 @@ name: Feature
 about: Suggest a new feature or improvement
 title: "feat: "
 labels: feature
+assignees: zumik3-del
 ---
 
 ## Problem
