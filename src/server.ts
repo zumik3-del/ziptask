@@ -3,6 +3,7 @@ import type { EventStore } from '@modelcontextprotocol/sdk/server/webStandardStr
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { TaskService } from './core/service'
 import { formatError } from './core/result'
+import { monotonicNowMs } from './core/tasks'
 import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
 import { createLogger, normalizeError } from './logger'
@@ -42,7 +43,7 @@ export class InMemoryEventStore implements EventStore {
   // ambiguous because bursts land in the same millisecond, so it is paired with a
   // fixed-width monotonic counter. Ids are unique and lexicographically ordered.
   private generateEventId(streamId: string): string {
-    return `${streamId}_${Date.now()}_${String(++this.seq).padStart(10, '0')}`
+    return `${streamId}_${monotonicNowMs()}_${String(++this.seq).padStart(10, '0')}`
   }
 
   async storeEvent(streamId: string, message: JSONRPCMessage): Promise<string> {
