@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { isValidTransition } from './core/tasks'
+import { isValidTransition, monotonicNowMs } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { formatError } from './core/result'
@@ -30,11 +30,11 @@ const leaseMs = (id: number): number => new Date(row(id).lease_expires_at).getTi
 // clock instead of the previous deadline keeps the assertion free of millisecond races, and it is
 // strictly stronger than "changed": a stored deadline one second out can only become this if the
 // renewal recomputed the window instead of nudging it.
-const fullWindowFromNow = () => Date.now() + 14 * 60_000
+const fullWindowFromNow = () => monotonicNowMs() + 14 * 60_000
 // Simulates an elapsed TTL without a clock seam: only lease_expires_at moves, so version and
 // attempts stay exactly where the production write left them.
-const expireLease = (id: number) => { db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [new Date(Date.now() - HOUR_MS).toISOString(), id]) }
-const pinLease = (id: number, msFromNow: number): string => { const iso = new Date(Date.now() + msFromNow).toISOString(); db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [iso, id]); return iso }
+const expireLease = (id: number) => { db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [new Date(monotonicNowMs() - HOUR_MS).toISOString(), id]) }
+const pinLease = (id: number, msFromNow: number): string => { const iso = new Date(monotonicNowMs() + msFromNow).toISOString(); db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [iso, id]); return iso }
 const auditActions = (id: number): string[] =>
   (db.query('SELECT action FROM audit_log WHERE task_id = ? ORDER BY id').all(id) as Array<{ action: string }>).map(r => r.action)
 const countAudit = (id: number, action: string): number =>
@@ -70,7 +70,7 @@ const burnAttempt = (id: number, agent = 'developer') => {
 // so the sweep and the renewal guard meet a row the database could really hold.
 const seedLease = (id: number, holder: string, msFromNow: number) => {
   db.run("UPDATE tasks SET status = 'in_progress', assignee = ?, lease_expires_at = ?, version = version + 1 WHERE id = ?",
-    [holder, new Date(Date.now() + msFromNow).toISOString(), id])
+    [holder, new Date(monotonicNowMs() + msFromNow).toISOString(), id])
   return id
 }
 const seedLeasedEpic = (title: string, holder: string, msFromNow = 15 * 60_000) =>
@@ -110,7 +110,7 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     // produce; after a renewal the window must be ~now + lease_ttl_min instead.
     const id = createTaskRow('FixedWindow')
     claimOrThrow(id, HOLDER)
-    const creeped = new Date(Date.now() + 10 * 24 * HOUR_MS).toISOString()
+    const creeped = new Date(monotonicNowMs() + 10 * 24 * HOUR_MS).toISOString()
     db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [creeped, id])
 
     const res = leaseField(id, HOLDER, versionOf(id))
@@ -118,7 +118,7 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
 
     const renewed = leaseMs(id)
     expect(renewed).toBeLessThan(new Date(creeped).getTime())
-    expect(renewed).toBeLessThanOrEqual(Date.now() + 15 * 60_000 + 5000)
+    expect(renewed).toBeLessThanOrEqual(monotonicNowMs() + 15 * 60_000 + 5000)
   })
 
   test('repeated heartbeats are never requeued by the reap and never spend an attempt', () => {

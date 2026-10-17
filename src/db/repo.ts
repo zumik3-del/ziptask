@@ -83,8 +83,8 @@ export class TaskRepo implements TaskStore {
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
     const limit = clampLimit(filters.limit, 0)
     const rows = this.db.query(
-      `${TASK_SELECT} ${where} ORDER BY t.created_at DESC, t.id DESC LIMIT ${limit}`
-    ).all(...bindParams(params)) as TaskRow[]
+      `${TASK_SELECT} ${where} ORDER BY t.created_at DESC, t.id DESC LIMIT ?`
+    ).all(...bindParams([...params, limit])) as TaskRow[]
     const total = (this.db.query(`SELECT COUNT(*) as cnt FROM tasks t ${where}`).get(...bindParams(params)) as { cnt: number }).cnt
     return { rows: rows.map(toTask), total }
   }
@@ -95,8 +95,8 @@ export class TaskRepo implements TaskStore {
     const rows = this.db.query(
       `${TASK_SELECT} WHERE t.status = 'queued' AND t.is_epic = 0 AND t.project_id = ?
        ORDER BY ${PRIORITY_ORDER_SQL}, t.created_at ASC, t.id ASC
-       LIMIT ${n} OFFSET ${o}`
-    ).all(projectId) as TaskRow[]
+       LIMIT ? OFFSET ?`
+    ).all(projectId, n, o) as TaskRow[]
     return rows.map(toTask)
   }
 
@@ -205,9 +205,9 @@ export class TaskRepo implements TaskStore {
       UNION ALL
       SELECT 'comment', agent, content, created_at, rowid
       FROM comments WHERE task_id = ?
-      ORDER BY created_at ASC, rowid ASC
-      LIMIT ${n}`
-    return this.db.query(sql).all(taskId, taskId) as Array<{ type: string; agent: string; text: string; created_at: string }>
+      ORDER BY created_at ASC, type ASC, rowid ASC
+      LIMIT ?`
+    return this.db.query(sql).all(taskId, taskId, n) as Array<{ type: string; agent: string; text: string; created_at: string }>
   }
 
   commentsOf(taskId: number): CommentRow[] {
@@ -237,13 +237,10 @@ export class TaskRepo implements TaskStore {
   }
 
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void {
-    const txn = this.db.transaction(() => {
-      this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
-      if (auditLog) {
-        this.auditAppend(id, agent, action, undefined, newValue)
-      }
-    })
-    txn()
+    this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
+    if (auditLog) {
+      this.auditAppend(id, agent, action, undefined, newValue)
+    }
   }
 
   appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void {
