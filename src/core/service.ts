@@ -223,16 +223,19 @@ export class TaskService {
     }
 
     if (!task) return fail('EMPTY', 'no claimable tasks')
+    const claimedTask = task
 
     const now = nowIso()
     // a per-claim override lives only for this call: the instance default is never mutated
     const leaseTtlMin = args.leaseTtlMin ?? this.opts.leaseTtlMin
     const leaseUntil = this._leaseUntil(leaseTtlMin)
-    const changes = this.store.markClaimed(task.id, task.version, args.agent, leaseUntil, now)
-    const updated = this.store.getTaskRow(task.id)
-    if (changes !== 1 || !updated) return fail('CONFLICT', 'version mismatch')
-    if (this.opts.auditLog) this.store.auditAppend(task.id, args.agent, 'claim', task.status, 'in_progress')
-    return ok({ id: task.id, leaseTtlMin, task: updated })
+    return this.store.transaction((): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> => {
+      const changes = this.store.markClaimed(claimedTask.id, claimedTask.version, args.agent, leaseUntil, now)
+      const updated = this.store.getTaskRow(claimedTask.id)
+      if (changes !== 1 || !updated) return fail('CONFLICT', 'version mismatch')
+      if (this.opts.auditLog) this.store.auditAppend(claimedTask.id, args.agent, 'claim', claimedTask.status, 'in_progress')
+      return ok({ id: claimedTask.id, leaseTtlMin, task: updated })
+    })
   }
 
   updateStatus(args: UpdateStatusArgs): SvcResult<UpdateStatusData> {

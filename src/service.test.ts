@@ -89,6 +89,41 @@ describe('audit_log toggle', () => {
   })
 })
 
+describe('claimTask atomic transaction (#1705)', () => {
+  test('claimTask executes markClaimed and auditAppend inside store.transaction', () => {
+    let txCalled = false
+    const origTx = repo.transaction.bind(repo)
+    repo.transaction = <T>(fn: () => T): T => {
+      txCalled = true
+      return origTx(fn)
+    }
+
+    const id = json(handleCreateTask(svc, { title: 'TxClaim', reporter: 'dev' })).id
+    txCalled = false
+    const res = svc.claimTask({ agent: 'dev', taskId: id })
+    expect(res.ok).toBe(true)
+    expect(txCalled).toBe(true)
+  })
+
+  test('claimTask rolls back status update if auditAppend throws', () => {
+    const id = json(handleCreateTask(svc, { title: 'RollbackClaim', reporter: 'dev' })).id
+    const origAuditAppend = repo.auditAppend.bind(repo)
+    repo.auditAppend = () => {
+      throw new Error('audit append simulated error')
+    }
+
+    try {
+      expect(() => svc.claimTask({ agent: 'dev', taskId: id })).toThrow('audit append simulated error')
+    } finally {
+      repo.auditAppend = origAuditAppend
+    }
+
+    const task = repo.getTaskRow(id)
+    expect(task?.status).toBe('queued')
+    expect(task?.assignee).toBeNull()
+  })
+})
+
 describe('reap cooldown (#104)', () => {
   function fakeStore(reapCb?: () => void): TaskStore {
     return taskStoreStubs({ expiredLeases: () => { reapCb?.(); return [] } })

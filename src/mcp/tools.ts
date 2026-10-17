@@ -73,7 +73,7 @@ const CREATE_TASK_SHAPE = {
   description: z.string().optional().describe('English; fill get_template("task") or "epic" first'),
   priority: z.enum(TASK_PRIORITIES).optional(),
   assignee: z.string().optional(),
-  depends_on: z.array(z.number().int()).optional(),
+  depends_on: z.array(TaskId).optional(),
   reporter: z.string().optional(),
   epic: z.boolean().optional().describe('Create as an epic (not claimable); description follows get_template("epic") with required Source'),
   epic_id: TaskId.optional().describe('Attach as sub-task to an existing task'),

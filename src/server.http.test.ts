@@ -203,6 +203,26 @@ describe('MCP schema guards (#431)', () => {
     const good = await client.callTool({ name: 'list_tasks', arguments: { status: 'queued', project: 'test' } })
     expect(good.isError).toBeUndefined()
   })
+
+  test('create_task depends_on rejects zero or negative integers (#1705)', async () => {
+    const zero = await client.callTool({
+      name: 'create_task',
+      arguments: { title: 'Zero dep', reporter: 'dev', depends_on: [0], project: 'test' }
+    })
+    expect(zero.isError).toBe(true)
+
+    const negative = await client.callTool({
+      name: 'create_task',
+      arguments: { title: 'Negative dep', reporter: 'dev', depends_on: [-1], project: 'test' }
+    })
+    expect(negative.isError).toBe(true)
+
+    const good = await client.callTool({
+      name: 'create_task',
+      arguments: { title: 'Valid dep', reporter: 'dev', depends_on: [999], project: 'test' }
+    })
+    expect(good.isError).toBeUndefined()
+  })
 })
 
 describe('argument contract over MCP (F1 #1040)', () => {
