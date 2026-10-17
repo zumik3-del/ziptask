@@ -1,11 +1,12 @@
 # HTTP endpoints
 
-`bun run start` (and the systemd service) exposes a small HTTP surface next to the MCP transport. ziptask is MCP-first, not MCP-only: the task API is MCP, plus one experimental REST-style read endpoint kept for an external client.
+`bun run start` (and the systemd service) exposes a small HTTP surface next to the MCP transport. ziptask is MCP-first, not MCP-only: the task API is MCP, plus two experimental REST-style read endpoints (`/api/tasks` and `/api/task/:id`) kept for external clients and lightweight consumers.
 
 | Method & path | Purpose |
 |---|---|
 | `POST` / `GET` / `DELETE` `/mcp` | MCP StreamableHTTP transport — the client-facing API (tool calls, SSE stream, session teardown) |
 | `GET /health` | Liveness probe, always `{"ok":true}` plus `version` (the running package version) |
+| `GET /api/tasks` | **Experimental** read-only task list by project (lightweight REST consumers) |
 | `GET /api/task/:id` | **Experimental** read-only task view (subagentix integration) |
 
 Every path returns `404` `Not Found` when it does not match. No endpoint authenticates — keep the listener bound to `127.0.0.1` (`ZIPTASK_HOST`/`settings.json`) and put an authenticating reverse proxy in front if it must be reachable from other hosts.
