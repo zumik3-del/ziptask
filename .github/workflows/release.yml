@@ -71,6 +71,18 @@ jobs:
           echo "ASSET_NAME=${ASSET}" >> "$GITHUB_OUTPUT"
           echo "ROOT_DIR=${ROOT_DIR}" >> "$GITHUB_OUTPUT"
 
+      - name: Generate SHA-256 checksums
+        if: steps.tag.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum ziptask-linux-x86_64 > ziptask-linux-x86_64.sha256
+          sha256sum "${{ steps.pack.outputs.ASSET_NAME }}" > "${{ steps.pack.outputs.ASSET_NAME }}.sha256"
+          echo "Generated checksums:"
+          cat ziptask-linux-x86_64.sha256
+          cat "${{ steps.pack.outputs.ASSET_NAME }}.sha256"
+
       - name: Verify the tarball unpacks cleanly
         if: steps.tag.outputs.exists != 'true'
         shell: bash
@@ -148,6 +160,8 @@ jobs:
             --title "v${{ steps.ver.outputs.version }}" \
             --notes-file RELEASE_NOTES.md \
             dist/ziptask-linux-x86_64 \
-            "dist/${{ steps.pack.outputs.ASSET_NAME }}"
+            dist/ziptask-linux-x86_64.sha256 \
+            "dist/${{ steps.pack.outputs.ASSET_NAME }}" \
+            "dist/${{ steps.pack.outputs.ASSET_NAME }}.sha256"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
