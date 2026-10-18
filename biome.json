@@ -106,6 +106,7 @@
                 "paths": {
                   "../core/tasks": {
                     "allowImportNames": [
+                      "asClock",
                       "Task",
                       "TaskStatus",
                       "TaskPriority",

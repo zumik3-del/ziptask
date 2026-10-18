@@ -31,7 +31,6 @@ export function handleGetTemplate(args: { name: TemplateName }): ToolResult {
   return textResult(template)
 }
 
-// placeholder fix below
 export function registerTemplateTools(server: McpServer, _svc: TaskService) {
   server.registerTool('get_template', {
     description: 'Return a markdown template by name',
