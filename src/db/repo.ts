@@ -89,11 +89,15 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
     const limit = clampLimit(filters.limit, 0)
+    // One pass: the window function carries the filtered total on every row, so no
+    // second COUNT query is needed. When the filter yields no rows the window has
+    // nothing to attach to, so total defaults to 0 (which is the correct total).
+    type RowWithTotal = TaskRow & { __total: number }
     const rows = this.db.query(
-      `${TASK_SELECT} ${where} ORDER BY t.created_at DESC, t.id DESC LIMIT ?`
-    ).all(...bindParams([...params, limit])) as TaskRow[]
-    const total = (this.db.query(`SELECT COUNT(*) as cnt FROM tasks t ${where}`).get(...bindParams(params)) as { cnt: number }).cnt
-    return { rows: rows.map(toTask), total }
+      `SELECT *, COUNT(*) OVER() AS __total FROM (${TASK_SELECT} ${where}) ORDER BY created_at DESC, id DESC LIMIT ?`
+    ).all(...bindParams([...params, limit])) as RowWithTotal[]
+    const total = rows.length > 0 ? rows[0].__total : 0
+    return { rows: rows.map(({ __total: _ignored, ...rest }) => toTask(rest as TaskRow)), total }
   }
 
   queuedCandidates(limit: number, projectId: number, offset?: number): Task[] {
