@@ -5,6 +5,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { TaskService } from './core/service'
 import { formatError } from './core/result'
 import { TASK_STATUS_VALUES, monotonicNowMs } from './core/tasks'
+import type { TaskStatus } from './core/tasks'
 import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
 import { isLoopbackHost } from './config'
@@ -190,7 +191,7 @@ function handleTaskList(svc: TaskService, url: URL): Response {
       return Response.json({ error: 'INVALID: invalid limit' }, { status: 400 })
     }
   }
-  const result = svc.listTasks({ project, status: status as any, limit })
+  const result = svc.listTasks({ project, status: status as TaskStatus, limit })
   if (!result.ok) {
     const httpStatus = result.error.code === 'NOT_FOUND' ? 404 : 400
     return Response.json({ error: formatError(result.error) }, { status: httpStatus })
