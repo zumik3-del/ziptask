@@ -37,5 +37,112 @@
       "trailingCommas": "none",
       "arrowParentheses": "asNeeded"
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": [
+        "src/mcp/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "../db",
+                      "../db/*",
+                      "../db/**",
+                      "../logger",
+                      "../logger/*",
+                      "../logger/**",
+                      "bun:sqlite"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "src/core/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "../mcp",
+                      "../mcp/*",
+                      "../mcp/**"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "src/db/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "../core/tasks": {
+                    "allowImportNames": [
+                      "Task",
+                      "TaskStatus",
+                      "TaskPriority",
+                      "CommentType",
+                      "clampLimit",
+                      "monotonicNowMs",
+                      "TERMINAL_STATUSES"
+                    ]
+                  },
+                  "../core/types": {
+                    "allowImportNames": [
+                      "CommentRow",
+                      "ProjectListItem",
+                      "ProjectRow",
+                      "TaskStore"
+                    ]
+                  }
+                },
+                "patterns": [
+                  {
+                    "group": [
+                      "../mcp",
+                      "../mcp/*",
+                      "../mcp/**",
+                      "../core",
+                      "../core/*",
+                      "../core/**",
+                      "!../core/tasks",
+                      "!../core/types"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }
