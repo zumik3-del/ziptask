@@ -355,17 +355,13 @@ export class TaskQueryService {
 }
 
 export class TaskService {
-  readonly store: Store
+  protected readonly store: Store
   private readonly opts: ResolvedOptions
   private readonly clock: Clock | null
   private readonly reaper: LeaseReaper
   readonly projects: ProjectService
   readonly lifecycle: TaskLifecycleService
   readonly query: TaskQueryService
-  readonly taskLifecycle: TaskLifecycleService
-  readonly taskQuery: TaskQueryService
-  readonly lifecycleService: TaskLifecycleService
-  readonly queryService: TaskQueryService
 
   constructor(store: Store, opts: TaskServiceOptions = {}) {
     this.store = store
@@ -375,10 +371,6 @@ export class TaskService {
     this.projects = new ProjectService(store, this.opts.scope)
     this.lifecycle = new TaskLifecycleService(store, opts, this.reaper, this.projects)
     this.query = new TaskQueryService(store, opts, this.reaper, this.projects)
-    this.taskLifecycle = this.lifecycle
-    this.taskQuery = this.query
-    this.lifecycleService = this.lifecycle
-    this.queryService = this.query
   }
 
   createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' }> {
