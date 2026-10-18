@@ -310,8 +310,11 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   listProjects(): ProjectListItem[] {
     return this.db.query(
       `SELECT p.slug AS slug, p.folder_path AS folder_path,
-         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status NOT IN ${TERMINAL_STATUSES_SQL}) AS open
-       FROM projects p ORDER BY p.slug ASC`
+         COUNT(CASE WHEN t.status NOT IN ${TERMINAL_STATUSES_SQL} THEN 1 END) AS open
+       FROM projects p
+       LEFT JOIN tasks t ON t.project_id = p.id
+       GROUP BY p.id, p.slug, p.folder_path
+       ORDER BY p.slug ASC`
     ).all() as ProjectListItem[]
   }
 
