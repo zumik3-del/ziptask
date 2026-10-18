@@ -2,16 +2,20 @@
 # No one pushes main or tags manually; the tag is created by `gh release create`.
 name: release
 on:
-  push:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
     branches: [main]
 permissions:
   contents: write
 jobs:
   release:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
@@ -124,9 +128,9 @@ jobs:
 
           TMP=$(mktemp)
           if [ -n "$PREV_TAG" ]; then
-            git log "${PREV_TAG}..${{ github.sha }}" --no-merges --pretty="$COMMIT_FMT" | grep -v CHANGELOG > "$TMP"
+            git log "${PREV_TAG}..${{ github.event.workflow_run.head_sha }}" --no-merges --pretty="$COMMIT_FMT" | grep -v CHANGELOG > "$TMP"
           else
-            git log "${{ github.sha }}" --no-merges --pretty="$COMMIT_FMT" | grep -v CHANGELOG > "$TMP"
+            git log "${{ github.event.workflow_run.head_sha }}" --no-merges --pretty="$COMMIT_FMT" | grep -v CHANGELOG > "$TMP"
           fi
 
           FEATURES=$(grep -i '^-.*: *feat[:(]' "$TMP" || true)
@@ -162,7 +166,7 @@ jobs:
         if: steps.tag.outputs.exists != 'true'
         run: |
           gh release create "v${{ steps.ver.outputs.version }}" \
-            --target "${{ github.sha }}" \
+            --target "${{ github.event.workflow_run.head_sha }}" \
             --title "v${{ steps.ver.outputs.version }}" \
             --notes-file RELEASE_NOTES.md \
             dist/ziptask-linux-x86_64 \
