@@ -290,11 +290,17 @@ export class TaskQueryService {
   listTasks(args: ListTasksArgs): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number }> {
     const project = this.projects.resolve(args.project)
     if (!project.ok) return fail(project.error)
+    if (args.updated_since !== undefined) {
+      if (!Number.isFinite(args.updated_since)) return fail('INVALID', 'invalid updated_since')
+      const updatedSinceDate = new Date(args.updated_since)
+      if (Number.isNaN(updatedSinceDate.getTime())) return fail('INVALID', 'invalid updated_since')
+    }
     this.reaper.reapIfStale()
+    const updatedSinceIso = args.updated_since !== undefined ? new Date(args.updated_since).toISOString() : undefined
     const { rows, total } = this.store.listTasks({
       assignee: args.assignee,
       status: args.status,
-      updatedSinceIso: args.updated_since !== undefined ? new Date(args.updated_since).toISOString() : undefined,
+      updatedSinceIso,
       epicId: args.epic_id,
       limit: clampLimit(args.limit, this.opts.listLimit),
       projectId: project.data.id
