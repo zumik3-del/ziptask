@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { loadSettings, DEFAULTS, type Settings } from './config'
+import { loadSettings, DEFAULTS, setNested, type Settings } from './config'
 import { createLogger } from './logger'
 import { TaskService } from './core/service'
 import { taskStoreStubs } from './test-context'
@@ -450,5 +450,36 @@ describe('maxAttempts flow', () => {
 
     const result = svc.createTask({ title: 'Default flow', reporter: 'tester' })
     expect(result.ok).toBe(true)
+  })
+})
+
+describe('loadSettings env ZIPTASK_SETTINGS', () => {
+  test('loads settings from env path when no CLI flag', () => {
+    const envFile = join(testDir, 'env-only-settings.json')
+    writeFileSync(envFile, JSON.stringify({ dbPath: '/tmp/env-only.db' }))
+    const s = loadSettings({ env: { ZIPTASK_SETTINGS: envFile }, argv: ['node'] })
+    expect(s.dbPath).toBe('/tmp/env-only.db')
+  })
+})
+
+describe('setNested', () => {
+  test('blocks dangerous and empty segments without mutating', () => {
+    const obj: Record<string, unknown> = {}
+    setNested(obj, '__proto__.x', 1)
+    setNested(obj, 'a..b', 1)
+    setNested(obj, '', 1)
+    expect(obj).toEqual({})
+  })
+
+  test('creates missing intermediate objects', () => {
+    const obj: Record<string, unknown> = {}
+    setNested(obj, 'a.b.c', 42)
+    expect(obj).toEqual({ a: { b: { c: 42 } } })
+  })
+
+  test('replaces non-plain intermediates', () => {
+    const obj: Record<string, unknown> = { a: 7 }
+    setNested(obj, 'a.b', 9)
+    expect(obj).toEqual({ a: { b: 9 } })
   })
 })
