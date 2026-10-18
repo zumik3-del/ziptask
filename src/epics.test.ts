@@ -33,6 +33,9 @@ describe('epic creation', () => {
     const task = getTaskRow(db, res.id)
     expect(task.is_epic).toBe(true)
     expect(task.epic_id).toBeNull()
+    // ADR 0002: an epic holds no lease, so neither ownership column is ever written at birth.
+    expect(task.assignee).toBeNull()
+    expect(task.lease_expires_at).toBeNull()
   })
 
   test('epic is excluded from list_queue', () => {
@@ -363,34 +366,39 @@ describe('claim_task refusal order: epic → status window → deps', () => {
 
 describe('migration 007: a legacy epic row becomes open', () => {
   // The data half of ADR 0002 runs once, on a real upgrade, so it is asserted on a real pre-007
-  // database: the frozen prefix is replayed, legacy rows are seeded through raw SQL, and
-  // openDatabase then applies the two remaining statements.
+  // database rather than against the SQL text.
   const PRE_007 = MIGRATIONS.length - 2
   const SEED_TIME = '2026-01-01T00:00:00.000Z'
   const FUTURE_LEASE = '2099-01-01T00:00:00.000Z'
 
+  // A real pre-007 database: the frozen prefix replayed, legacy epic rows seeded through raw SQL, and
+  // the version stamped one short so openDatabase applies exactly the two migration-007 statements.
+  const seedPre007Db = (path: string) => {
+    const raw = new SqliteDb(path)
+    for (const stmt of MIGRATIONS.slice(0, PRE_007)) raw.exec(stmt)
+    raw.run(
+      "INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES ('legacy-epics', '', ?, ?)",
+      [SEED_TIME, SEED_TIME]
+    )
+    const projectId = (raw.query('SELECT id FROM projects WHERE slug = ?').get('legacy-epics') as { id: number }).id
+    const seedEpic = (title: string, status: string, assignee: string | null, lease: string | null) =>
+      raw.run(
+        `INSERT INTO tasks (title, reporter, status, assignee, lease_expires_at, is_epic, project_id, created_at, updated_at)
+         VALUES (?, 'dev', ?, ?, ?, 1, ?, ?, ?)`,
+        [title, status, assignee, lease, projectId, SEED_TIME, SEED_TIME]
+      )
+    seedEpic('QueuedEpic', 'queued', null, null)
+    seedEpic('LeasedEpic', 'in_progress', 'developer', FUTURE_LEASE)
+    seedEpic('DoneEpic', 'done', 'developer', FUTURE_LEASE)
+    raw.run('DELETE FROM schema_version')
+    raw.run('INSERT INTO schema_version (version) VALUES (?)', [PRE_007])
+    raw.close()
+  }
+
   test('non-terminal epics become open and lose assignee/lease, a terminal epic keeps its outcome', () => {
     const path = makeTempDbPath('epic-open-007')
     try {
-      const raw = new SqliteDb(path)
-      for (const stmt of MIGRATIONS.slice(0, PRE_007)) raw.exec(stmt)
-      raw.run(
-        "INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES ('legacy-epics', '', ?, ?)",
-        [SEED_TIME, SEED_TIME]
-      )
-      const projectId = (raw.query('SELECT id FROM projects WHERE slug = ?').get('legacy-epics') as { id: number }).id
-      const seedEpic = (title: string, status: string, assignee: string | null, lease: string | null) =>
-        raw.run(
-          `INSERT INTO tasks (title, reporter, status, assignee, lease_expires_at, is_epic, project_id, created_at, updated_at)
-           VALUES (?, 'dev', ?, ?, ?, 1, ?, ?, ?)`,
-          [title, status, assignee, lease, projectId, SEED_TIME, SEED_TIME]
-        )
-      seedEpic('QueuedEpic', 'queued', null, null)
-      seedEpic('LeasedEpic', 'in_progress', 'developer', FUTURE_LEASE)
-      seedEpic('DoneEpic', 'done', 'developer', FUTURE_LEASE)
-      raw.run('DELETE FROM schema_version')
-      raw.run('INSERT INTO schema_version (version) VALUES (?)', [PRE_007])
-      raw.close()
+      seedPre007Db(path)
 
       const upgraded = openDatabase(path)
       expect((upgraded.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number }).version).toBe(MIGRATIONS.length)
@@ -408,6 +416,27 @@ describe('migration 007: a legacy epic row becomes open', () => {
       expect(byTitle.DoneEpic.status).toBe('done')
       expect(byTitle.DoneEpic.assignee).toBeNull()
       expect(byTitle.DoneEpic.lease_expires_at).toBeNull()
+    } finally { removeTempDb(path) }
+  })
+
+  // ADR 0002 claims the rewrite is idempotent ("re-running it matches zero rows after the first
+  // pass"), and an operator can re-execute it by hand after a rolled-back deploy, so the property is
+  // pinned rather than assumed. The two statements are the tail of MIGRATIONS.
+  test('migration 007 is idempotent: re-running its statements matches zero rows', () => {
+    const path = makeTempDbPath('epic-open-007-idempotent')
+    try {
+      seedPre007Db(path)
+      const upgraded = openDatabase(path)
+
+      const first = upgraded.run(MIGRATIONS[MIGRATIONS.length - 2])
+      const second = upgraded.run(MIGRATIONS[MIGRATIONS.length - 1])
+      expect(Number(first.changes)).toBe(0)
+      expect(Number(second.changes)).toBe(0)
+
+      const rows = upgraded.query('SELECT title, status FROM tasks ORDER BY id').all() as any[]
+      upgraded.close()
+      // the re-run moved nothing: the rewritten rows stay open and the closed epic stays closed
+      expect(rows.map(r => `${r.title}=${r.status}`)).toEqual(['QueuedEpic=open', 'LeasedEpic=open', 'DoneEpic=done'])
     } finally { removeTempDb(path) }
   })
 })
