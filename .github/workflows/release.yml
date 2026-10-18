@@ -1,4 +1,4 @@
-# Merge-driven release: pushed to main → CI builds + publishes GitHub Release.
+# Merge-driven release: runs after the CI workflow succeeds on main.
 # No one pushes main or tags manually; the tag is created by `gh release create`.
 name: release
 on:
