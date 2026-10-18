@@ -92,7 +92,7 @@ const LIST_TASKS_SHAPE = {
   limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional(),
   updated_since: z.number().finite().min(-MAX_SAFE_TIMESTAMP_MS).max(MAX_SAFE_TIMESTAMP_MS).optional(),
   epic_id: TaskId.optional(),
-  ids: z.array(z.number().int()).optional(),
+  ids: z.array(z.number().int()).max(MAX_RESULT_LIMIT).optional(),
   project: PROJECT_ARG
 }
 

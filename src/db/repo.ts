@@ -116,8 +116,13 @@ export class TaskRepo implements TaskStore {
   batchTasks(ids: number[]): Map<number, Task | null> {
     const map = new Map<number, Task | null>()
     if (ids.length === 0) return map
-    const rows = this.db.query(`${TASK_SELECT} WHERE t.id ${this.inClause(ids.length)}`).all(...bindParams(ids)) as TaskRow[]
-    for (const row of rows) map.set(row.id, toTask(row))
+    // Chunk to stay under SQLite's bound-variable limit (portable builds cap at 999).
+    const chunkSize = 500
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const chunk = ids.slice(i, i + chunkSize)
+      const rows = this.db.query(`${TASK_SELECT} WHERE t.id ${this.inClause(chunk.length)}`).all(...bindParams(chunk)) as TaskRow[]
+      for (const row of rows) map.set(row.id, toTask(row))
+    }
     return map
   }
 
