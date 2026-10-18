@@ -660,6 +660,66 @@ describe('promotion cannot destroy in-flight work (review #1740 P1)', () => {
   })
 })
 
+// #1745: createTaskGuard refuses every non-queued target, but the store-level WHERE is the defence
+// behind that guard — it is what stops a bypass or a cross-process race from deforming a live row.
+// These tests call the store directly, the only way to exercise the defence itself.
+describe('promoteEpicWithMirror is a no-op off the queued path (#1745)', () => {
+  function seedAt(status: 'in_progress' | 'review' | 'blocked'): number {
+    const id = json(handleCreateTask(svc, { title: `Target ${status}`, reporter: 'dev', assignee: 'worker' })).id
+    if (status === 'blocked') {
+      handleUpdateStatus(svc, { id, agent: 'worker', status: 'blocked', version: versionOf(id) })
+    } else {
+      handleClaimTask(svc, { agent: 'worker', task_id: id })
+      if (status === 'review') {
+        handleUpdateStatus(svc, { id, agent: 'worker', status: 'review', version: versionOf(id) })
+      }
+    }
+    return id
+  }
+
+  for (const status of ['in_progress', 'review', 'blocked'] as const) {
+    test(`a direct call on a ${status} non-epic leaves is_epic, status, assignee, lease and version untouched`, () => {
+      const target = seedAt(status)
+      const before = getTaskRow(db, target)!
+      // non-vacuity: the row really holds the state the defence has to protect
+      expect(before.status).toBe(status)
+      expect(before.assignee).toBe('worker')
+      if (status === 'in_progress') expect(before.lease_expires_at).not.toBeNull()
+
+      ;(svc as any).store.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
+
+      const after = getTaskRow(db, target)!
+      expect(after.is_epic).toBe(false)
+      expect(after.status).toBe(before.status)
+      expect(after.assignee).toBe(before.assignee)
+      expect(after.lease_expires_at).toBe(before.lease_expires_at)
+      expect(after.version).toBe(before.version)
+      expect(after.updated_at).toBe(before.updated_at)
+    })
+  }
+
+  test('a queued non-epic is still promoted: is_epic=1, status=open, no holder and no lease', () => {
+    const target = json(handleCreateTask(svc, { title: 'Fresh', reporter: 'dev' })).id
+    const before = getTaskRow(db, target)!
+    expect(before.status).toBe('queued')
+    expect(before.assignee).toBeNull()
+    expect(before.lease_expires_at).toBeNull()
+
+    ;(svc as any).store.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
+
+    const after = getTaskRow(db, target)!
+    expect(after.is_epic).toBe(true)
+    expect(after.status).toBe('open')
+    expect(after.assignee).toBeNull()
+    expect(after.lease_expires_at).toBeNull()
+    const mirrors = db.query(
+      "SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
+    ).all(target) as any[]
+    expect(mirrors.length).toBe(1)
+    expect(mirrors[0].new_value).toBe('#99 Some Sub')
+  })
+})
+
 // Review #1740 P2: `assignee` means "lease holder" everywhere else, and an epic holds no lease, so
 // the value is refused rather than silently dropped.
 describe('an epic takes no assignee (review #1740 P2)', () => {
