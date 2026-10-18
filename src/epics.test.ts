@@ -11,7 +11,7 @@ import {
   handleListQueue, handleListTasks
 } from './mcp/tools'
 import {
-  createTestDb, closeTestDb, getTaskRow, json, text, driveToDone, makeTempDbPath, removeTempDb
+  createTestDb, closeTestDb, getTaskRow, json, text, driveToDone, makeTempDbPath, removeTempDb, testProjectId
 } from './test-context'
 
 let db: Database
@@ -33,8 +33,8 @@ describe('epic creation', () => {
     const task = getTaskRow(db, res.id)
     expect(task.is_epic).toBe(true)
     expect(task.epic_id).toBeNull()
-    // ADR 0002: an epic holds no lease, so neither ownership column is ever written at birth.
-    expect(task.assignee).toBeNull()
+    // ADR 0002: an epic holds no lease, so the birth INSERT never names the lease column. The
+    // assignee half is refused upstream and pinned at the store in 'an epic takes no assignee'.
     expect(task.lease_expires_at).toBeNull()
   })
 
@@ -365,17 +365,28 @@ describe('claim_task refusal order: epic → status window → deps', () => {
 })
 
 describe('migration 007: a legacy epic row becomes open', () => {
-  // The data half of ADR 0002 runs once, on a real upgrade, so it is asserted on a real pre-007
-  // database rather than against the SQL text.
-  const PRE_007 = MIGRATIONS.length - 2
+  // The data half of ADR 0002 runs once, on a real upgrade: the first test drives it through
+  // openDatabase on a real pre-007 database, the second re-executes the raw 007 statements by hand.
+  // Both locate the pair by SQL identity, never by a positional tail — appending a migration 008
+  // must not silently re-point them, and deleting 007a or 007b must fail the lookup, not pass.
+  const OPEN_MARKER = "SET status = 'open', lease_expires_at = NULL, assignee = NULL"
+  const CLEAR_MARKER = "SET lease_expires_at = NULL, assignee = NULL WHERE is_epic = 1"
+  const locate007 = (): { openIdx: number; clearIdx: number } => {
+    const openIdx = MIGRATIONS.findIndex(stmt => stmt.includes(OPEN_MARKER))
+    const clearIdx = MIGRATIONS.findIndex(stmt => stmt.includes(CLEAR_MARKER))
+    if (openIdx < 0 || clearIdx !== openIdx + 1) {
+      throw new Error(`migration 007 statements not located as a pair (open=${openIdx}, clear=${clearIdx})`)
+    }
+    return { openIdx, clearIdx }
+  }
   const SEED_TIME = '2026-01-01T00:00:00.000Z'
   const FUTURE_LEASE = '2099-01-01T00:00:00.000Z'
 
   // A real pre-007 database: the frozen prefix replayed, legacy epic rows seeded through raw SQL, and
   // the version stamped one short so openDatabase applies exactly the two migration-007 statements.
-  const seedPre007Db = (path: string) => {
+  const seedPre007Db = (path: string, prefixLength: number) => {
     const raw = new SqliteDb(path)
-    for (const stmt of MIGRATIONS.slice(0, PRE_007)) raw.exec(stmt)
+    for (const stmt of MIGRATIONS.slice(0, prefixLength)) raw.exec(stmt)
     raw.run(
       "INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES ('legacy-epics', '', ?, ?)",
       [SEED_TIME, SEED_TIME]
@@ -391,14 +402,15 @@ describe('migration 007: a legacy epic row becomes open', () => {
     seedEpic('LeasedEpic', 'in_progress', 'developer', FUTURE_LEASE)
     seedEpic('DoneEpic', 'done', 'developer', FUTURE_LEASE)
     raw.run('DELETE FROM schema_version')
-    raw.run('INSERT INTO schema_version (version) VALUES (?)', [PRE_007])
+    raw.run('INSERT INTO schema_version (version) VALUES (?)', [prefixLength])
     raw.close()
   }
 
   test('non-terminal epics become open and lose assignee/lease, a terminal epic keeps its outcome', () => {
+    const { openIdx } = locate007()
     const path = makeTempDbPath('epic-open-007')
     try {
-      seedPre007Db(path)
+      seedPre007Db(path, openIdx)
 
       const upgraded = openDatabase(path)
       expect((upgraded.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number }).version).toBe(MIGRATIONS.length)
@@ -421,15 +433,17 @@ describe('migration 007: a legacy epic row becomes open', () => {
 
   // ADR 0002 claims the rewrite is idempotent ("re-running it matches zero rows after the first
   // pass"), and an operator can re-execute it by hand after a rolled-back deploy, so the property is
-  // pinned rather than assumed. The two statements are the tail of MIGRATIONS.
+  // pinned rather than assumed. The statements come from locate007, not from a positional tail, and
+  // SQLite counts matched rows, so the zeroes also pin each WHERE filter.
   test('migration 007 is idempotent: re-running its statements matches zero rows', () => {
+    const { openIdx, clearIdx } = locate007()
     const path = makeTempDbPath('epic-open-007-idempotent')
     try {
-      seedPre007Db(path)
+      seedPre007Db(path, openIdx)
       const upgraded = openDatabase(path)
 
-      const first = upgraded.run(MIGRATIONS[MIGRATIONS.length - 2])
-      const second = upgraded.run(MIGRATIONS[MIGRATIONS.length - 1])
+      const first = upgraded.run(MIGRATIONS[openIdx])
+      const second = upgraded.run(MIGRATIONS[clearIdx])
       expect(Number(first.changes)).toBe(0)
       expect(Number(second.changes)).toBe(0)
 
@@ -758,9 +772,19 @@ describe('an epic takes no assignee (review #1740 P2)', () => {
     expect(text(res)).toBe('INVALID: an epic takes no assignee: it holds no lease')
   })
 
-  test('an epic row stores a NULL assignee', () => {
-    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
-    expect(getTaskRow(db, epic)!.assignee).toBeNull()
+  test('the store hard-writes a NULL assignee for an epic even when handed one', () => {
+    // Review #1744 nit 3: the refusal above means the MCP path can never hand the store an assignee,
+    // so only a direct store call exercises repo.ts:63 — the last line of defence behind that guard,
+    // which a bypass or a cross-process race would reach with a value in hand.
+    const id = repo.insertTask({
+      title: 'Epic', description: null, priority: 'p2', assignee: 'boss', reporter: 'dev',
+      depends_on: '[]', now: nowIso(), isEpic: true, projectId: testProjectId(repo)
+    })
+    const task = getTaskRow(db, id)
+    expect(task.status).toBe('open')
+    expect(task.is_epic).toBe(true)
+    expect(task.assignee).toBeNull()
+    expect(task.lease_expires_at).toBeNull()
   })
 
   test('a regular task still keeps its assignee', () => {
