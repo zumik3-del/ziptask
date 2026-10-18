@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { nowIso, clampLimit, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './core/tasks'
-import type { TaskStore } from './core/types'
+import type { Store } from './core/types'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
@@ -125,7 +125,7 @@ describe('claimTask atomic transaction (#1705)', () => {
 })
 
 describe('reap cooldown (#104)', () => {
-  function fakeStore(reapCb?: () => void): TaskStore {
+  function fakeStore(reapCb?: () => void): Store {
     return taskStoreStubs({ expiredLeases: () => { reapCb?.(); return [] } })
   }
 

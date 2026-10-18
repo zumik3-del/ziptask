@@ -117,9 +117,14 @@
                   },
                   "../core/types": {
                     "allowImportNames": [
+                      "AuditStore",
                       "CommentRow",
+                      "CommentStore",
+                      "LeaseStore",
                       "ProjectListItem",
                       "ProjectRow",
+                      "ProjectStore",
+                      "Store",
                       "TaskStore"
                     ]
                   }
