@@ -93,10 +93,8 @@ export type MonotonicClock = Clock
 // The single time source: every stamp is strictly greater than the previous one, even when two
 // calls land in the same millisecond, so no ordering invariant depends on the wall clock ticking.
 let lastTimestampMs = 0
-let globalClock: Clock | null = null
 
 export function monotonicNowMs(): number {
-  if (globalClock) return globalClock.nowMs()
   const now = Date.now()
   const next = now > lastTimestampMs ? now : lastTimestampMs + 1
   lastTimestampMs = next
@@ -104,29 +102,8 @@ export function monotonicNowMs(): number {
 }
 
 export function nowIso(): string {
-  if (globalClock) return globalClock.nowIso()
   return new Date(monotonicNowMs()).toISOString()
 }
-
-export function isoFromNow(offsetMs: number): string {
-  return new Date(monotonicNowMs() + offsetMs).toISOString()
-}
-
-// Reset hook for tests: clears the monotonic high-water mark and any injected global clock.
-export function resetMonotonicClock(): void {
-  lastTimestampMs = 0
-  globalClock = null
-}
-export const resetMonotonicNowMs = resetMonotonicClock
-export const resetClock = resetMonotonicClock
-export const resetMonotonic = resetMonotonicClock
-
-// Inject a global clock for tests; pass null to restore the default monotonic clock.
-export function setClock(clock: Clock | null): void {
-  globalClock = clock
-}
-export const setMonotonicClock = setClock
-export const useClock = setClock
 
 // Normalize an unknown value into a Clock or null (shared by TaskRepo/TaskService/etc.).
 export function asClock(input: unknown): Clock | null {

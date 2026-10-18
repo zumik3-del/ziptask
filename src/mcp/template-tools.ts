@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
-import { type ToolResult, rejectUnknownArgs, textResult, errorResult } from './common'
+import { type ToolResult, rejectUnknownArgs, textResult } from './common'
 
 import taskTemplate from '../../templates/task-description.md' with { type: 'text' }
 import epicTemplate from '../../templates/epic.md' with { type: 'text' }
@@ -26,9 +26,7 @@ const GET_TEMPLATE_SHAPE = {
 export function handleGetTemplate(args: { name: TemplateName }): ToolResult {
   const unknown = rejectUnknownArgs('get_template', GET_TEMPLATE_SHAPE, args)
   if (unknown) return unknown
-  const template = TEMPLATES[args.name]
-  if (template === undefined) return errorResult(`Template not found: ${args.name}`)
-  return textResult(template)
+  return textResult(TEMPLATES[args.name])
 }
 
 export function registerTemplateTools(server: McpServer, _svc: TaskService) {

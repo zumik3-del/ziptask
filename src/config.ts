@@ -171,10 +171,9 @@ export function setNested(obj: Record<string, unknown>, path: string, value: unk
       }
     }
     const next = current[key]
-    if (!isPlainObject(next)) {
-      return
-    }
-    current = next
+    // `next` is always a plain object here: missing/non-plain intermediates were
+    // replaced above, so the guard is intentionally omitted.
+    current = next as Record<string, unknown>
   }
   const last = keys[keys.length - 1]
   if (last.length === 0 || isDangerousKey(last)) return
