@@ -5,7 +5,7 @@ import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
 import { LeaseReaper } from './reaper'
-import { createTaskGuard, updateStatusGuard, claimEligibilityError } from './guards'
+import { createTaskGuard, updateStatusGuard, claimEligibilityError, epicNotClaimableError } from './guards'
 import { requiredError, tooLongError } from './validation'
 import { resolveProject, createProject, updateProject, deleteProject } from './projects'
 import {
@@ -180,6 +180,11 @@ export class TaskLifecycleService {
     if (args.taskId !== undefined) {
       task = this.store.getTaskRow(args.taskId)
       if (!task) return fail('NOT_FOUND')
+      // ADR 0002: an epic is born `open`, outside the status window below, so its refusal has to come
+      // first or claim_task(epic) degrades to CONFLICT: status=open. A non-epic passes straight
+      // through, keeping the window (CONFLICT: status=<x>) ahead of the dependency check.
+      const epicErr = epicNotClaimableError(task)
+      if (epicErr) return fail(epicErr)
       if (task.status !== 'queued' && task.status !== 'blocked') return fail('CONFLICT', `status=${task.status}`)
       const claimErr = claimEligibilityError(task, this.store)
       if (claimErr) return fail(claimErr)
