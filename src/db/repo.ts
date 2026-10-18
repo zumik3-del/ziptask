@@ -100,7 +100,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     const n = clampLimit(limit, 0)
     const o = clampLimit(offset ?? 0, 0)
     const rows = this.db.query(
-      `${TASK_SELECT} WHERE t.status = 'queued' AND t.is_epic = 0 AND t.project_id = ?
+      `SELECT t.*, p.slug AS project FROM tasks t INDEXED BY idx_tasks_queued_candidates LEFT JOIN projects p ON p.id = t.project_id WHERE t.status = 'queued' AND t.is_epic = 0 AND t.project_id = ?
        ORDER BY ${PRIORITY_ORDER_SQL}, t.created_at ASC, t.id ASC
        LIMIT ? OFFSET ?`
     ).all(projectId, n, o) as TaskRow[]
@@ -170,7 +170,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
 
   expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>> {
     return this.db.query(
-      "SELECT id, version, attempts, max_attempts FROM tasks WHERE status = 'in_progress' AND is_epic = 0 AND lease_expires_at IS NOT NULL AND lease_expires_at < ?"
+      "SELECT id, version, attempts, max_attempts FROM tasks INDEXED BY idx_tasks_lease_expires_at WHERE status = 'in_progress' AND is_epic = 0 AND lease_expires_at IS NOT NULL AND lease_expires_at < ?"
     ).all(nowIso) as Array<{ id: number; version: number; attempts: number; max_attempts: number }>
   }
 
@@ -284,7 +284,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
          COUNT(CASE WHEN t.status NOT IN ${TERMINAL_STATUSES_SQL} THEN 1 END) AS open
        FROM projects p
        LEFT JOIN tasks t ON t.project_id = p.id
-       GROUP BY p.id, p.slug, p.folder_path
+       GROUP BY p.id
        ORDER BY p.slug ASC`
     ).all() as ProjectListItem[]
   }
