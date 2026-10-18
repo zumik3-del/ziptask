@@ -163,7 +163,7 @@ describe('projects: fresh DB and migration v4 -> v5 (ADR D1)', () => {
     expect(createHash('sha256').update(JSON.stringify(frozen)).digest('hex')).toBe(FROZEN_V4_PREFIX_SHA256)
     // a released statement must never be dropped or rewritten in place; only appended
     expect(MIGRATIONS.length).toBeGreaterThan(V4_STATEMENT_COUNT)
-    expect(MIGRATIONS.length).toBe(30)
+    expect(MIGRATIONS.length).toBe(32)
   })
 })
 

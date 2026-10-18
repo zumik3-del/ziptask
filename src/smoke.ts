@@ -277,7 +277,7 @@ try {
     name: 'create_task',
     arguments: { title: 'Epic root', reporter: 'smoke', epic: true, project: 'smoke' }
   }))
-  assert(epicCreate.status === 'queued' && epicCreate.id > 0, `create epic → {id, status:queued}, id=${epicCreate.id}`)
+  assert(epicCreate.status === 'open' && epicCreate.id > 0, `create epic → {id, status:open}, id=${epicCreate.id}`)
   const epicId = epicCreate.id
 
   const epicGet = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epicId, fields: ['id', 'is_epic'] } }))
@@ -288,7 +288,13 @@ try {
     arguments: { agent: 'smoke', task_id: epicId }
   })
   assert(epicClaim.isError === true, 'claim epic → error (not claimable)')
-  assert(textOf(epicClaim).toLowerCase().includes('epic'), `claim error mentions epic: ${textOf(epicClaim)}`)
+  // ADR 0002 keeps the epic refusal ahead of the status window (src/core/service.ts:185), so the
+  // claim names the real reason on an epic whatever its status — the same sentence the update_status
+  // acquisition guard uses two blocks below, and the one docs/epics.md documents for this door.
+  assert(
+    textOf(epicClaim) === `INVALID: #${epicId} is an epic, not claimable`,
+    `claim error is the epic refusal: ${textOf(epicClaim)}`
+  )
 
   const subCreate = parseToolResult(await client.callTool({
     name: 'create_task',
@@ -339,10 +345,11 @@ try {
     arguments: { title: 'Guard sub', reporter: 'smoke', epic_id: epic2Id, project: 'smoke' }
   }))
   // ── lease acquisition guard: in_progress needs claim-grade eligibility (#1075) ─
-  // An epic holds no work, so it is never leased: update_status must refuse the acquisition, and the
-  // sanctioned lease-free on-ramp to review is queued → blocked → review. Both refusal strings are
-  // wire-visible, and on a pre-redeploy build the failure mode is a silent success, so they are
-  // asserted over MCP rather than left to the unit suite.
+  // An epic holds no work, so it is never leased: update_status must refuse the acquisition, and
+  // since ADR 0002 an epic never parks either — `open` refuses blocked/review/queued, so its only
+  // exits are the terminal outcomes. Both refusal strings are wire-visible, and on a
+  // pre-redeploy build the failure mode is a silent success, so they are asserted over MCP rather
+  // than left to the unit suite.
   const e2v1 = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epic2Id, fields: ['version'] } }))
   const epicLease = await client.callTool({
     name: 'update_status',
@@ -357,9 +364,18 @@ try {
     name: 'get_task', arguments: { id: epic2Id, fields: ['status', 'version', 'lease_expires_at'] }
   }))
   assert(
-    epicAfterRefusal.status === 'queued' && epicAfterRefusal.version === e2v1.version && epicAfterRefusal.lease_expires_at === undefined,
+    epicAfterRefusal.status === 'open' && epicAfterRefusal.version === e2v1.version && epicAfterRefusal.lease_expires_at === undefined,
     `refused epic acquisition left the row untouched: ${JSON.stringify(epicAfterRefusal)}`
   )
+
+  // the retired on-ramp: an epic can no longer be parked, so the hop that used to reach review is
+  // refused outright and the row stays `open`
+  const epicPark = await client.callTool({
+    name: 'update_status',
+    arguments: { id: epic2Id, agent: 'smoke', status: 'blocked', version: e2v1.version }
+  })
+  assert(epicPark.isError === true, 'epic update_status → blocked is refused (ADR 0002: no park status)')
+  assert(textOf(epicPark) === `INVALID: open → blocked`, `epic park refusal is the contract text: ${textOf(epicPark)}`)
 
   const depA = parseToolResult(await client.callTool({ name: 'create_task', arguments: { title: 'Lease dep', reporter: 'smoke', project: 'smoke' } }))
   const depB = parseToolResult(await client.callTool({
@@ -380,14 +396,10 @@ try {
     `refused dep acquisition left the row untouched: ${JSON.stringify(depAfter)}`
   )
 
-  // Drive epic2 to review the legal way (queued→blocked→review)
-  parseToolResult(await client.callTool({ name: 'update_status', arguments: { id: epic2Id, agent: 'smoke', status: 'blocked', version: e2v1.version } }))
-  const e2v2 = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: epic2Id, fields: ['version'] } }))
-  const guardReview = parseToolResult(await client.callTool({ name: 'update_status', arguments: { id: epic2Id, agent: 'smoke', status: 'review', version: e2v2.version } }))
-  assert(guardReview.status === 'review', `epic can transition to review (non-terminal)`)
+  // the terminal guard, straight off `open` — no on-ramp needed any more
   const guardDone = await client.callTool({
     name: 'update_status',
-    arguments: { id: epic2Id, agent: 'smoke', status: 'done', version: guardReview.version }
+    arguments: { id: epic2Id, agent: 'smoke', status: 'done', version: e2v1.version }
   })
   assert(guardDone.isError === true, 'epic with open children → done rejected')
   assert(textOf(guardDone).toLowerCase().includes('children'), `rejection mentions children: ${textOf(guardDone)}`)
