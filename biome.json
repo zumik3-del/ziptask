@@ -37,5 +37,119 @@
       "trailingCommas": "none",
       "arrowParentheses": "asNeeded"
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": [
+        "src/mcp/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "../db",
+                      "../db/*",
+                      "../db/**",
+                      "../logger",
+                      "../logger/*",
+                      "../logger/**",
+                      "bun:sqlite"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "src/core/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "../mcp",
+                      "../mcp/*",
+                      "../mcp/**"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "src/db/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "../core/tasks": {
+                    "allowImportNames": [
+                      "asClock",
+                      "Task",
+                      "TaskStatus",
+                      "TaskPriority",
+                      "CommentType",
+                      "clampLimit",
+                      "Clock",
+                      "nowIso",
+                      "TERMINAL_STATUSES"
+                    ]
+                  },
+                  "../core/types": {
+                    "allowImportNames": [
+                      "AuditStore",
+                      "CommentRow",
+                      "CommentStore",
+                      "LeaseStore",
+                      "ProjectListItem",
+                      "ProjectRow",
+                      "ProjectStore",
+                      "Store",
+                      "TaskStore"
+                    ]
+                  }
+                },
+                "patterns": [
+                  {
+                    "group": [
+                      "../mcp",
+                      "../mcp/*",
+                      "../mcp/**",
+                      "../core",
+                      "../core/*",
+                      "../core/**",
+                      "!../core/tasks",
+                      "!../core/types"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

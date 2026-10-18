@@ -227,7 +227,7 @@ try {
   assert(batch === `${idA}|4\n${idB}|1\n999|0`, `list_tasks ids pipe id|code (+unknown → |0): "${batch}"`)
 
   const batchA = textOf(await client.callTool({ name: 'list_tasks', arguments: { ids: [idA, idB, 999], fields: ['assignee'] } }))
-  assert(batchA === `${idA}|4|smoke-agent\n${idB}|1|-\n999|0|-`, `list_tasks ids pipe id|code|assignee (null → -): "${batchA}"`)
+  assert(batchA === `${idA}|4|-\n${idB}|1|-\n999|0|-`, `list_tasks ids pipe id|code|assignee (null → -): "${batchA}"`)
 
   const brief = parseToolResult(await client.callTool({ name: 'get_task', arguments: { id: idB } }))
   assert(

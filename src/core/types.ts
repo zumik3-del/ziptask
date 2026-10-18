@@ -1,14 +1,13 @@
 import type { Task, TaskStatus, TaskPriority, CommentType } from './tasks'
 
-// The lease reaper (core/reaper.ts) needs only a narrow slice of the store — the sweep, its CAS
-// transition and the audit row it writes — so it cannot reach the rest of the store.
+// Lease reaping needs only the sweep, its CAS transition and (via AuditStore) the audit row.
 export interface LeaseStore {
   expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>>
   reapTransition(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number
-  auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void
 }
 
-export interface TaskStore extends LeaseStore {
+// Task-scoped storage: task CRUD, deps, leases, epic roll-up. No project/comment/audit methods.
+export interface TaskStore {
   getTaskRow(id: number): Task | null
   insertTask(task: { title: string; description: string | null; priority: TaskPriority;
     assignee: string | null; reporter: string; depends_on: string; now: string; maxAttempts?: number
@@ -29,9 +28,10 @@ export interface TaskStore extends LeaseStore {
   childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number; canceled: number }
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void
   appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void
-  insertComment(taskId: number, agent: string, content: string, type?: 'comment' | 'resolution'): number
-  timelineEntries(taskId: number, limit: number): TimelineRow[]
-  commentsOf(taskId: number): CommentRow[]
+}
+
+// Project administration storage.
+export interface ProjectStore {
   insertProject(project: { slug: string; folderPath: string; now: string }): number
   projectBySlug(slug: string): ProjectRow | null
   projectSlugs(): string[]
@@ -40,6 +40,21 @@ export interface TaskStore extends LeaseStore {
   deleteProject(id: number): number
   projectTaskCount(id: number): number
 }
+
+// Comment storage.
+export interface CommentStore {
+  insertComment(taskId: number, agent: string, content: string, type?: 'comment' | 'resolution'): number
+  commentsOf(taskId: number): CommentRow[]
+}
+
+// Audit storage.
+export interface AuditStore {
+  auditAppend(taskId: number, agent: string, action: string, oldValue?: string, newValue?: string): void
+  timelineEntries(taskId: number, limit: number): TimelineRow[]
+}
+
+// Aggregate store implemented by TaskRepo; use this when a component needs every slice.
+export interface Store extends TaskStore, ProjectStore, CommentStore, AuditStore, LeaseStore {}
 
 // The internal id never crosses the tool boundary; `slug` is the identity every call speaks.
 export type ProjectRow = {

@@ -1,6 +1,6 @@
-import type { TaskStatus } from './tasks'
+import type { TaskStatus, Clock } from './tasks'
 import { nowIso, monotonicNowMs } from './tasks'
-import type { LeaseStore } from './types'
+import type { AuditStore, LeaseStore } from './types'
 import { SECOND_MS } from '../defaults'
 
 // Lease reaping is its own responsibility: it owns the cooldown clock and the sweep, so the
@@ -8,15 +8,37 @@ import { SECOND_MS } from '../defaults'
 // paths via reap(); read paths use reapIfStale().
 export class LeaseReaper {
   private lastReapAt = 0
+  private readonly clock: Clock | null
 
   constructor(
-    private readonly store: LeaseStore,
+    private readonly store: LeaseStore & AuditStore,
     private readonly reapCooldownSec: number,
-    private readonly auditLog: boolean
-  ) {}
+    private readonly auditLog: boolean,
+    clock?: unknown
+  ) {
+    // Accept a Clock or a bare nowMs function, mirroring TaskRepo.
+    if (clock == null) this.clock = null
+    else if (typeof clock === 'function') this.clock = { nowMs: clock as () => number, nowIso: () => new Date((clock as () => number)()).toISOString() }
+    else if (typeof (clock as { nowIso?: unknown }).nowIso === 'function') this.clock = clock as Clock
+    else if (typeof (clock as { nowMs?: unknown }).nowMs === 'function') {
+      const fn = (clock as { nowMs: () => number }).nowMs
+      this.clock = { nowMs: fn, nowIso: () => new Date(fn()).toISOString() }
+    } else if (typeof (clock as { now?: unknown }).now === 'function') {
+      const fn = (clock as { now: () => number }).now
+      this.clock = { nowMs: fn, nowIso: () => new Date(fn()).toISOString() }
+    } else this.clock = null
+  }
+
+  private _nowMs(): number {
+    return this.clock ? this.clock.nowMs() : monotonicNowMs()
+  }
+
+  private _nowIso(): string {
+    return this.clock ? this.clock.nowIso() : nowIso()
+  }
 
   private _shouldReap(): boolean {
-    return monotonicNowMs() - this.lastReapAt >= this.reapCooldownSec * SECOND_MS
+    return this._nowMs() - this.lastReapAt >= this.reapCooldownSec * SECOND_MS
   }
 
   reapIfStale(): void {
@@ -24,7 +46,7 @@ export class LeaseReaper {
   }
 
   reap(): void {
-    const now = nowIso()
+    const now = this._nowIso()
     const expired = this.store.expiredLeases(now)
     for (const task of expired) {
       const newAttempts = task.attempts + 1
@@ -32,6 +54,6 @@ export class LeaseReaper {
       const changes = this.store.reapTransition(task.id, task.version, newStatus, newAttempts, now)
       if (changes === 1 && this.auditLog) this.store.auditAppend(task.id, 'system', 'lease_expired', 'in_progress', newStatus)
     }
-    this.lastReapAt = monotonicNowMs()
+    this.lastReapAt = this._nowMs()
   }
 }

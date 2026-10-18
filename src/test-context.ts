@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { nowIso } from './core/tasks'
 import type { TaskPriority } from './core/tasks'
 import { openDatabase } from './db/db'
-import type { ProjectRow, TaskStore } from './core/types'
+import type { ProjectRow, ProjectStore, Store } from './core/types'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { createLogger } from './logger'
@@ -46,8 +46,7 @@ export function testProjectRow(): ProjectRow {
 
 // The project half of a hand-rolled TaskStore literal: only `test` resolves, so a fixture store
 // behaves like a seeded test DB without duplicating seven stubs per literal.
-export function projectStoreStubs(): Pick<TaskStore,
-  'insertProject' | 'projectBySlug' | 'projectSlugs' | 'listProjects' | 'updateProject' | 'deleteProject' | 'projectTaskCount'> {
+export function projectStoreStubs(): ProjectStore {
   return {
     insertProject: () => 1,
     projectBySlug: (slug: string) => slug === TEST_PROJECT_SLUG ? testProjectRow() : null,
@@ -61,7 +60,7 @@ export function projectStoreStubs(): Pick<TaskStore,
 
 // A TaskStore whose every method is inert, so a test can hand a service a store without a DB
 // and override only the calls it is about. Callers describe behaviour, not twenty default stubs.
-export function taskStoreStubs(overrides: Partial<TaskStore> = {}): TaskStore {
+export function taskStoreStubs(overrides: Partial<Store> = {}): Store {
   return {
     getTaskRow: () => null,
     insertTask: () => 1,
@@ -162,6 +161,7 @@ export type TestServerOpts = {
   logger?: Logger
   sessionTtlMs?: number
   maxSessions?: number
+  host?: string
 }
 
 export type TestServer = {
@@ -182,7 +182,7 @@ export function startTestServer(opts: TestServerOpts = {}): TestServer {
   seedProject(db)
   const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: TEST_PROJECT_SLUG })
   const logger = opts.logger ?? createLogger('test', 'off')
-  const httpOpts: StartHttpOptions = { svc, port: 0, host: '127.0.0.1', dbPath, logger }
+  const httpOpts: StartHttpOptions = { svc, port: 0, host: opts.host ?? '127.0.0.1', dbPath, logger }
   if (opts.sessionTtlMs !== undefined) httpOpts.sessionTtlMs = opts.sessionTtlMs
   if (opts.maxSessions !== undefined) httpOpts.maxSessions = opts.maxSessions
   const server = startHttp(httpOpts)

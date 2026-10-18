@@ -1,7 +1,7 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
-import type { Task, TaskStatus, TaskPriority, CommentType } from '../core/tasks'
-import { clampLimit, monotonicNowMs, TERMINAL_STATUSES } from '../core/tasks'
-import type { CommentRow, ProjectListItem, ProjectRow, TaskStore } from '../core/types'
+import type { Task, TaskStatus, TaskPriority, CommentType, Clock } from '../core/tasks'
+import { asClock, clampLimit, nowIso, TERMINAL_STATUSES } from '../core/tasks'
+import type { AuditStore, CommentRow, CommentStore, LeaseStore, ProjectListItem, ProjectRow, ProjectStore, TaskStore } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
 import { PRIORITY_ORDER_SQL, TASK_SELECT, TERMINAL_STATUSES_SQL } from './sql'
 
@@ -20,11 +20,18 @@ function toTask(row: TaskRow): Task {
   return { ...rest, project: rest.project ?? null, is_epic: rest.is_epic !== 0 }
 }
 
-export class TaskRepo implements TaskStore {
-  constructor(private db: Database) {}
+export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditStore, LeaseStore {
+  private readonly db: Database
+  private readonly clock: Clock | null
+
+  constructor(db: Database, clock?: unknown) {
+    this.db = db
+    this.clock = asClock(clock)
+  }
 
   private monotonicIso(): string {
-    return new Date(monotonicNowMs()).toISOString()
+    if (this.clock) return this.clock.nowIso()
+    return nowIso()
   }
 
   private inClause(count: number): string {
@@ -82,18 +89,22 @@ export class TaskRepo implements TaskStore {
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
     const limit = clampLimit(filters.limit, 0)
+    // One pass: the window function carries the filtered total on every row, so no
+    // second COUNT query is needed. When the filter yields no rows the window has
+    // nothing to attach to, so total defaults to 0 (which is the correct total).
+    type RowWithTotal = TaskRow & { __total: number }
     const rows = this.db.query(
-      `${TASK_SELECT} ${where} ORDER BY t.created_at DESC, t.id DESC LIMIT ?`
-    ).all(...bindParams([...params, limit])) as TaskRow[]
-    const total = (this.db.query(`SELECT COUNT(*) as cnt FROM tasks t ${where}`).get(...bindParams(params)) as { cnt: number }).cnt
-    return { rows: rows.map(toTask), total }
+      `SELECT *, COUNT(*) OVER() AS __total FROM (${TASK_SELECT} ${where}) ORDER BY created_at DESC, id DESC LIMIT ?`
+    ).all(...bindParams([...params, limit])) as RowWithTotal[]
+    const total = rows.length > 0 ? rows[0].__total : 0
+    return { rows: rows.map(({ __total: _ignored, ...rest }) => toTask(rest as TaskRow)), total }
   }
 
   queuedCandidates(limit: number, projectId: number, offset?: number): Task[] {
     const n = clampLimit(limit, 0)
     const o = clampLimit(offset ?? 0, 0)
     const rows = this.db.query(
-      `${TASK_SELECT} WHERE t.status = 'queued' AND t.is_epic = 0 AND t.project_id = ?
+      `SELECT t.*, p.slug AS project FROM tasks t INDEXED BY idx_tasks_queued_candidates LEFT JOIN projects p ON p.id = t.project_id WHERE t.status = 'queued' AND t.is_epic = 0 AND t.project_id = ?
        ORDER BY ${PRIORITY_ORDER_SQL}, t.created_at ASC, t.id ASC
        LIMIT ? OFFSET ?`
     ).all(projectId, n, o) as TaskRow[]
@@ -116,8 +127,13 @@ export class TaskRepo implements TaskStore {
   batchTasks(ids: number[]): Map<number, Task | null> {
     const map = new Map<number, Task | null>()
     if (ids.length === 0) return map
-    const rows = this.db.query(`${TASK_SELECT} WHERE t.id ${this.inClause(ids.length)}`).all(...bindParams(ids)) as TaskRow[]
-    for (const row of rows) map.set(row.id, toTask(row))
+    // Chunk to stay under SQLite's bound-variable limit (portable builds cap at 999).
+    const chunkSize = 500
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const chunk = ids.slice(i, i + chunkSize)
+      const rows = this.db.query(`${TASK_SELECT} WHERE t.id ${this.inClause(chunk.length)}`).all(...bindParams(chunk)) as TaskRow[]
+      for (const row of rows) map.set(row.id, toTask(row))
+    }
     return map
   }
 
@@ -144,7 +160,8 @@ export class TaskRepo implements TaskStore {
       params.push(leaseUntilIso, holder)
     } else {
       assignments.push('lease_expires_at = NULL')
-      if (status === 'canceled') assignments.push('assignee = NULL')
+      // Terminal transitions drop ownership metadata so no stale assignee survives.
+      if (TERMINAL_STATUSES.includes(status)) assignments.push('assignee = NULL')
     }
     if (resetAttempts === 1) assignments.push('attempts = 0')
     params.push(id, expectedVersion)
@@ -157,7 +174,7 @@ export class TaskRepo implements TaskStore {
 
   expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>> {
     return this.db.query(
-      "SELECT id, version, attempts, max_attempts FROM tasks WHERE status = 'in_progress' AND is_epic = 0 AND lease_expires_at IS NOT NULL AND lease_expires_at < ?"
+      "SELECT id, version, attempts, max_attempts FROM tasks INDEXED BY idx_tasks_lease_expires_at WHERE status = 'in_progress' AND is_epic = 0 AND lease_expires_at IS NOT NULL AND lease_expires_at < ?"
     ).all(nowIso) as Array<{ id: number; version: number; attempts: number; max_attempts: number }>
   }
 
@@ -174,7 +191,8 @@ export class TaskRepo implements TaskStore {
       'completed_at = COALESCE(?, completed_at)'
     ]
     const params: SqlParam[] = [status, attempts, now, completedAt]
-    if (status === 'queued') assignments.push('assignee = NULL')
+    // Terminal transitions (and re-queue) drop ownership metadata so no stale assignee survives.
+    if (status === 'queued' || TERMINAL_STATUSES.includes(status)) assignments.push('assignee = NULL')
     params.push(id, expectedVersion)
     const result = this.db.run(
       `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND status = 'in_progress' AND version = ?`,
@@ -267,8 +285,11 @@ export class TaskRepo implements TaskStore {
   listProjects(): ProjectListItem[] {
     return this.db.query(
       `SELECT p.slug AS slug, p.folder_path AS folder_path,
-         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status NOT IN ${TERMINAL_STATUSES_SQL}) AS open
-       FROM projects p ORDER BY p.slug ASC`
+         COUNT(CASE WHEN t.status NOT IN ${TERMINAL_STATUSES_SQL} THEN 1 END) AS open
+       FROM projects p
+       LEFT JOIN tasks t ON t.project_id = p.id
+       GROUP BY p.id
+       ORDER BY p.slug ASC`
     ).all() as ProjectListItem[]
   }
 

@@ -109,5 +109,10 @@ export const MIGRATIONS = [
    WHERE EXISTS (SELECT 1 FROM tasks)`,
 
   `UPDATE tasks SET project_id = (SELECT id FROM projects WHERE slug = 'legacy')
-   WHERE project_id IS NULL`
+   WHERE project_id IS NULL`,
+
+  // 006: performance indexes (audit follow-up). Append-only.
+  `CREATE INDEX IF NOT EXISTS idx_tasks_lease_expires_at ON tasks(lease_expires_at) WHERE status = 'in_progress' AND lease_expires_at IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_tasks_queued_candidates ON tasks(project_id, priority, created_at, id) WHERE status = 'queued' AND is_epic = 0`,
+  `CREATE INDEX IF NOT EXISTS idx_tasks_created_at_id ON tasks(created_at DESC, id DESC)`
 ]

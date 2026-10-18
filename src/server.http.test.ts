@@ -4,8 +4,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { TaskService } from './core/service'
 import { VERSION } from './version'
-import { startTestServer, textOf } from './test-context'
+import { startTestServer, textOf, TEST_PROJECT_SLUG } from './test-context'
 import type { TestServer } from './test-context'
+import { readBodyWithLimit } from './server'
+import { DEFAULT_HTTP_MAX_BODY_BYTES } from './defaults'
 
 // The HTTP/MCP surface: the task-view endpoint, the schema guards in front of the tools, and the
 // argument contract as it reaches the wire. Session lifecycle and the event store live in the
@@ -154,6 +156,103 @@ describe('GET /api/task/:id HTTP endpoint', () => {
   })
 })
 
+describe('GET /api/tasks HTTP endpoint', () => {
+  let srv: TestServer
+
+  beforeEach(() => { srv = startTestServer() })
+  afterEach(() => { srv.stop() })
+
+  test('GET /api/tasks?project=<slug> returns 200 with { tasks, total } shape', async () => {
+    const id1 = getId(srv.svc.createTask({ title: 'Task 1', reporter: 'dev', priority: 'p1' }))
+    const id2 = getId(srv.svc.createTask({ title: 'Task 2', reporter: 'dev', priority: 'p2' }))
+
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.total).toBe(2)
+    expect(Array.isArray(body.tasks)).toBe(true)
+    expect(body.tasks.length).toBe(2)
+    expect(body.tasks[0]).toEqual({
+      id: id2,
+      title: 'Task 2',
+      status: 'queued',
+      priority: 'p2'
+    })
+    expect(body.tasks[1]).toEqual({
+      id: id1,
+      title: 'Task 1',
+      status: 'queued',
+      priority: 'p1'
+    })
+  })
+
+  test('returns empty tasks list and total 0 when project has no tasks', async () => {
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body).toEqual({ tasks: [], total: 0 })
+  })
+
+  test('status query filter returns matching tasks for valid status', async () => {
+    getId(srv.svc.createTask({ title: 'Queued task', reporter: 'dev' }))
+    const pId = getId(srv.svc.createTask({ title: 'In progress task', reporter: 'dev' }))
+    const claim = srv.svc.claimTask({ agent: 'dev', taskId: pId })
+    expect(claim.ok).toBe(true)
+
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&status=in_progress`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.total).toBe(1)
+    expect(body.tasks.length).toBe(1)
+    expect(body.tasks[0].id).toBe(pId)
+    expect(body.tasks[0].status).toBe('in_progress')
+  })
+
+  test('status query filter returns 400 with INVALID: invalid status for invalid status', async () => {
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&status=nonexistent_status`)
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error).toBe('INVALID: invalid status')
+  })
+
+  test('limit query param limits returned tasks when positive integer', async () => {
+    getId(srv.svc.createTask({ title: 'Task 1', reporter: 'dev' }))
+    getId(srv.svc.createTask({ title: 'Task 2', reporter: 'dev' }))
+    getId(srv.svc.createTask({ title: 'Task 3', reporter: 'dev' }))
+
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&limit=2`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.total).toBe(3)
+    expect(body.tasks.length).toBe(2)
+  })
+
+  test('limit query param returns 400 with INVALID: invalid limit for negative or non-integer values', async () => {
+    const badLimits = ['-1', '0', 'abc', '1.5', 'NaN']
+    for (const bad of badLimits) {
+      const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&limit=${bad}`)
+      expect(res.status).toBe(400)
+      const body = await res.json() as any
+      expect(body.error).toBe('INVALID: invalid limit')
+    }
+  })
+
+  test('missing project parameter returns 400 with INVALID: project required', async () => {
+    ;(srv.svc.projects as any).scope = undefined
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks`)
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error).toBe('INVALID: project required')
+  })
+
+  test('unknown project returns 400 with INVALID: unknown project...', async () => {
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=unknown_project`)
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error).toContain("INVALID: unknown project 'unknown_project'")
+  })
+})
+
 describe('MCP schema guards (#431)', () => {
   let srv: TestServer
   let client: Client
@@ -201,6 +300,26 @@ describe('MCP schema guards (#431)', () => {
     expect(bad.isError).toBe(true)
 
     const good = await client.callTool({ name: 'list_tasks', arguments: { status: 'queued', project: 'test' } })
+    expect(good.isError).toBeUndefined()
+  })
+
+  test('create_task depends_on rejects zero or negative integers (#1705)', async () => {
+    const zero = await client.callTool({
+      name: 'create_task',
+      arguments: { title: 'Zero dep', reporter: 'dev', depends_on: [0], project: 'test' }
+    })
+    expect(zero.isError).toBe(true)
+
+    const negative = await client.callTool({
+      name: 'create_task',
+      arguments: { title: 'Negative dep', reporter: 'dev', depends_on: [-1], project: 'test' }
+    })
+    expect(negative.isError).toBe(true)
+
+    const good = await client.callTool({
+      name: 'create_task',
+      arguments: { title: 'Valid dep', reporter: 'dev', depends_on: [999], project: 'test' }
+    })
     expect(good.isError).toBeUndefined()
   })
 })
@@ -451,5 +570,204 @@ describe('argument contract over MCP (F1 #1040)', () => {
       expect(res.isError).toBe(true)
       expect((srv.db.query('SELECT status FROM tasks WHERE id = ?').get(bait) as any).status).toBe('queued')
     })
+  })
+})
+
+// CORS on the browser-facing /api/* surface and the request-body cap that protects peekInitialize.
+describe('CORS on /api/* (#1704)', () => {
+  let srv: TestServer
+
+  beforeEach(() => { srv = startTestServer() })
+  afterEach(() => { srv.stop() })
+
+  test('GET /api/tasks carries Access-Control-Allow-Origin', async () => {
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+  })
+
+  test('GET /api/task/:id carries Access-Control-Allow-Origin', async () => {
+    const id = getId(srv.svc.createTask({ title: 'CORS task', reporter: 'dev' }))
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/${id}`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+  })
+
+  test('an /api error response still carries the CORS header', async () => {
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/99999`)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+  })
+
+  test('OPTIONS preflight on /api/tasks and /api/task/:id → 204 with CORS headers', async () => {
+    for (const path of ['/api/tasks', '/api/task/1']) {
+      const res = await fetch(`http://127.0.0.1:${srv.port}${path}`, {
+        method: 'OPTIONS',
+        headers: {
+          origin: 'http://example.com',
+          'access-control-request-method': 'GET'
+        }
+      })
+      expect(`${path}: ${res.status}`).toBe(`${path}: 204`)
+      expect(res.headers.get('access-control-allow-origin')).toBe('*')
+      expect(res.headers.get('access-control-allow-methods')).toContain('GET')
+      expect(res.headers.get('access-control-allow-headers')).toContain('Content-Type')
+    }
+  })
+})
+
+describe('request body size limit (#1704)', () => {
+  let srv: TestServer
+
+  beforeEach(() => { srv = startTestServer() })
+  afterEach(() => { srv.stop() })
+
+  test('oversized POST /mcp body → 413', async () => {
+    const big = 'x'.repeat(DEFAULT_HTTP_MAX_BODY_BYTES + 1)
+    const res = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: big
+    })
+    expect(res.status).toBe(413)
+    await res.text()
+  })
+
+  test('a body under the cap is processed normally (no 413)', async () => {
+    // A non-initialize request answers 400 SESSION_REQUIRED — deterministic proof the request
+    // reached the handler instead of being cut off by the size limit.
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+      params: { _pad: 'x'.repeat(DEFAULT_HTTP_MAX_BODY_BYTES - 512) }
+    })
+    expect(new TextEncoder().encode(body).byteLength).toBeLessThanOrEqual(DEFAULT_HTTP_MAX_BODY_BYTES)
+    const res = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body
+    })
+    expect(res.status).toBe(400)
+    expect(await res.text()).toContain('Mcp-Session-Id')
+  })
+
+  test('readBodyWithLimit assembles a chunked body within the cap', async () => {
+    const req = new Request('http://127.0.0.1/mcp', {
+      method: 'POST',
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"a":'))
+          controller.enqueue(new TextEncoder().encode('1}'))
+          controller.close()
+        }
+      })
+    })
+    const result = await readBodyWithLimit(req, 1024)
+    expect(result).toEqual({ body: '{"a":1}', oversized: false })
+  })
+
+  test('readBodyWithLimit abandons a chunked body once it crosses the cap, without Content-Length', async () => {
+    const req = new Request('http://127.0.0.1/mcp', {
+      method: 'POST',
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(64))
+          controller.enqueue(new Uint8Array(64))
+          controller.close()
+        }
+      })
+    })
+    expect(req.headers.get('content-length')).toBeNull()
+    const result = await readBodyWithLimit(req, 100)
+    expect(result).toEqual({ body: '', oversized: true })
+  })
+
+  test('readBodyWithLimit rejects a declared Content-Length over the cap without reading the body', async () => {
+    // The body is only 3 bytes, so the streaming loop can never cross the 1024-byte cap: the test
+    // fails if the declared Content-Length fast path is removed.
+    const req = new Request('http://127.0.0.1/mcp', {
+      method: 'POST',
+      headers: { 'content-length': '9999' },
+      body: 'abc'
+    })
+    expect(req.headers.get('content-length')).toBe('9999')
+    const result = await readBodyWithLimit(req, 1024)
+    expect(result).toEqual({ body: '', oversized: true })
+  })
+
+  test('a session-bearing POST /mcp over the cap → 413', async () => {
+    // The peek only runs on a sessionless POST, so the cap on this path is the transport's own
+    // maxRequestBodySize. Without it the SDK default (4 MiB) applies and this returns 200.
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${srv.port}/mcp`))
+    const client = new Client({ name: 'cap-session-test', version: '1.0.0' })
+    await client.connect(transport)
+    const sessionId = transport.sessionId
+    expect(sessionId).toBeDefined()
+
+    const big = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+      params: { _pad: 'x'.repeat(DEFAULT_HTTP_MAX_BODY_BYTES) }
+    })
+    expect(new TextEncoder().encode(big).byteLength).toBeGreaterThan(DEFAULT_HTTP_MAX_BODY_BYTES)
+    const res = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': sessionId as string
+      },
+      body: big
+    })
+    expect(res.status).toBe(413)
+    await res.text()
+    await client.close()
+  })
+
+  test('a session-bearing POST /mcp under the cap is processed normally', async () => {
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${srv.port}/mcp`))
+    const client = new Client({ name: 'cap-session-ok', version: '1.0.0' })
+    await client.connect(transport)
+    const sessionId = transport.sessionId as string
+
+    const res = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': sessionId
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
+    })
+    expect(res.status).toBe(200)
+    await res.text()
+    await client.close()
+  })
+
+  test('/mcp responses carry no CORS headers', async () => {
+    // /mcp is an agent-to-server channel; only /api/* is cross-origin callable. A future global
+    // withCors would slip through if nothing pins this.
+    const sessionless = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+    })
+    expect(sessionless.status).toBe(400)
+
+    const oversized = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'x'.repeat(DEFAULT_HTTP_MAX_BODY_BYTES + 1)
+    })
+    expect(oversized.status).toBe(413)
+
+    for (const res of [sessionless, oversized]) {
+      expect(res.headers.get('access-control-allow-origin')).toBeNull()
+      expect(res.headers.get('access-control-allow-methods')).toBeNull()
+      expect(res.headers.get('access-control-allow-headers')).toBeNull()
+      await res.text()
+    }
   })
 })

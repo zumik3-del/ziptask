@@ -1,21 +1,63 @@
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import type { EventStore } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
+import { readRequestBody } from '@modelcontextprotocol/sdk/server/requestBody.js'
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { TaskService } from './core/service'
 import { formatError } from './core/result'
 import { TASK_STATUS_VALUES, monotonicNowMs } from './core/tasks'
+import type { TaskStatus } from './core/tasks'
 import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
+import { isLoopbackHost } from './config'
 import { createLogger, normalizeError } from './logger'
 import { VERSION } from './version'
 import { SessionRegistry, type Session } from './session-registry'
-import { DEFAULT_HTTP_MAX_SESSIONS, DEFAULT_HTTP_SESSION_TTL_MS, SESSION_CLEANUP_INTERVAL_MS } from './defaults'
+import {
+  DEFAULT_HTTP_MAX_BODY_BYTES,
+  DEFAULT_HTTP_MAX_SESSIONS,
+  DEFAULT_HTTP_SESSION_TTL_MS,
+  SESSION_CLEANUP_INTERVAL_MS
+} from './defaults'
 
 export type { Session } from './session-registry'
 
 export const SSE_KEEPALIVE_MS = 10_000
 export const HTTP_IDLE_TIMEOUT_SEC = 60
 export const MAX_EVENT_STORE_EVENTS = 1000
+
+// The browser-facing /api/* surface is read-only and needs to be callable cross-origin, so the
+// three headers are fixed here rather than negotiated per request. /mcp is deliberately left out:
+// it is an agent-to-server channel, not something a page fetches through the same-origin policy.
+export const CORS_ALLOW_ORIGIN = '*'
+export const CORS_ALLOW_METHODS = 'GET, OPTIONS'
+export const CORS_ALLOW_HEADERS = 'Content-Type'
+
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': CORS_ALLOW_ORIGIN,
+  'Access-Control-Allow-Methods': CORS_ALLOW_METHODS,
+  'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS
+}
+
+// Rebuilds the response so the CORS headers land on success and error alike (a 400/404 that
+// omits them is unreadable in a browser). The body is passed through untouched, so a streaming
+// response keeps streaming.
+export function withCors(response: Response): Response {
+  const headers = new Headers(response.headers)
+  for (const [name, value] of Object.entries(CORS_HEADERS)) headers.set(name, value)
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  })
+}
+
+// Thin adapter over the SDK's own body reader, so the peek below and the transport it feeds agree
+// on one cap and one Content-Length fast path: two copies drift (a local one enforced 1 MiB here
+// while the transport still accepted 4 MiB). The caller turns `oversized` into a 413.
+export async function readBodyWithLimit(req: Request, maxBytes: number): Promise<{ body: string; oversized: boolean }> {
+  const result = await readRequestBody(req, maxBytes)
+  return result.tooLarge ? { body: '', oversized: true } : { body: result.text, oversized: false }
+}
 
 export function trackStreamActivity(response: Response, session: Session): Response {
   const contentType = response.headers.get('content-type') ?? ''
@@ -92,9 +134,23 @@ export interface StartHttpOptions {
   onShutdown?: () => void
 }
 
-async function peekInitialize(req: Request, logger: Logger): Promise<{ request: Request; agentName: string; isInitialize: boolean }> {
-  if (req.method !== 'POST') return { request: req, agentName: 'unknown', isInitialize: false }
-  const body = await req.text()
+// The oversized case carries no request: the caller answers 413 and never replays the body, so the
+// union states that invariant instead of handing back a request no caller reads.
+type PeekResult =
+  | { oversized: true }
+  | { oversized: false; request: Request; agentName: string; isInitialize: boolean }
+
+async function peekInitialize(
+  req: Request,
+  logger: Logger,
+  maxBodyBytes: number
+): Promise<PeekResult> {
+  if (req.method !== 'POST') return { oversized: false, request: req, agentName: 'unknown', isInitialize: false }
+  const { body, oversized } = await readBodyWithLimit(req, maxBodyBytes)
+  if (oversized) {
+    logger.warn('peekInitialize: request body exceeds the size limit', { maxBodyBytes })
+    return { oversized: true }
+  }
   const request = new Request(req.url, { method: req.method, headers: req.headers, body })
   let agentName = 'unknown'
   let isInitialize = false
@@ -109,7 +165,7 @@ async function peekInitialize(req: Request, logger: Logger): Promise<{ request: 
     // treating the request as a non-initialize one (the caller answers 400).
     logger.debug('peekInitialize: failed to parse request body', { err: err instanceof Error ? err.message : String(err) })
   }
-  return { request, agentName, isInitialize }
+  return { oversized: false, request, agentName, isInitialize }
 }
 
 // JSON-RPC server-error codes live in the -32000..-32099 range; name them so both transport
@@ -135,7 +191,7 @@ function handleTaskList(svc: TaskService, url: URL): Response {
       return Response.json({ error: 'INVALID: invalid limit' }, { status: 400 })
     }
   }
-  const result = svc.listTasks({ project, status: status as any, limit })
+  const result = svc.listTasks({ project, status: status as TaskStatus, limit })
   if (!result.ok) {
     const httpStatus = result.error.code === 'NOT_FOUND' ? 404 : 400
     return Response.json({ error: formatError(result.error) }, { status: httpStatus })
@@ -169,9 +225,14 @@ function handleTaskView(svc: TaskService, pathname: string): Response {
   })
 }
 
+export { isLoopbackHost } from './config'
+
 export function startHttp(opts: StartHttpOptions) {
   const { svc, port, host, dbPath, maxSessions = DEFAULT_HTTP_MAX_SESSIONS, sessionTtlMs = DEFAULT_HTTP_SESSION_TTL_MS, logger, onShutdown } = opts
   const svcLogger = logger ?? createLogger('http', 'off')
+  if (!isLoopbackHost(host)) {
+    svcLogger.warn('listening on non-loopback host; HTTP has no authentication by design', { host })
+  }
   const registry = new SessionRegistry({ logger: svcLogger, maxSessions, sessionTtlMs })
 
   const cleanup = setInterval(() => registry.sweep(), SESSION_CLEANUP_INTERVAL_MS)
@@ -188,12 +249,17 @@ export function startHttp(opts: StartHttpOptions) {
           return Response.json({ ok: true, version: VERSION })
         }
 
-        if (req.method === 'GET' && url.pathname === '/api/tasks') {
-          return handleTaskList(svc, url)
-        }
-
-        if (req.method === 'GET' && url.pathname.startsWith('/api/task/')) {
-          return handleTaskView(svc, url.pathname)
+        if (url.pathname.startsWith('/api/')) {
+          if (req.method === 'OPTIONS') {
+            return new Response(null, { status: 204, headers: CORS_HEADERS })
+          }
+          if (req.method === 'GET' && url.pathname === '/api/tasks') {
+            return withCors(handleTaskList(svc, url))
+          }
+          if (req.method === 'GET' && url.pathname.startsWith('/api/task/')) {
+            return withCors(handleTaskView(svc, url.pathname))
+          }
+          return new Response('Not Found', { status: 404, headers: CORS_HEADERS })
         }
 
         if (url.pathname !== '/mcp') {
@@ -215,8 +281,11 @@ export function startHttp(opts: StartHttpOptions) {
           return Response.json({ error: 'Too many sessions' }, { status: 429 })
         }
         try {
-          const { request, agentName, isInitialize } = await peekInitialize(req, svcLogger)
-          if (!isInitialize) {
+          const peek = await peekInitialize(req, svcLogger, DEFAULT_HTTP_MAX_BODY_BYTES)
+          if (peek.oversized) {
+            return new Response('Payload Too Large', { status: 413 })
+          }
+          if (!peek.isInitialize) {
             return Response.json(SESSION_REQUIRED, { status: 400 })
           }
 
@@ -226,8 +295,11 @@ export function startHttp(opts: StartHttpOptions) {
             sessionIdGenerator: () => crypto.randomUUID(),
             keepAliveMs: SSE_KEEPALIVE_MS,
             eventStore,
+            // The same cap as the peek, applied by the transport itself: a session-bearing POST
+            // never runs the peek, so without this it would fall back to the SDK's 4 MiB default.
+            maxRequestBodySize: DEFAULT_HTTP_MAX_BODY_BYTES,
             onsessioninitialized: (id) => {
-              registry.open(id, { transport, lastAccess: Date.now(), agent: agentName })
+              registry.open(id, { transport, lastAccess: Date.now(), agent: peek.agentName })
             },
             onsessionclosed: (id) => {
               registry.close(id)
@@ -236,7 +308,7 @@ export function startHttp(opts: StartHttpOptions) {
           transport.onclose = () => eventStore.clear()
 
           await mcpServer.connect(transport)
-          const response = await transport.handleRequest(request)
+          const response = await transport.handleRequest(peek.request)
           const session = transport.sessionId ? registry.get(transport.sessionId) : undefined
           if (!session) {
             transport.close().catch(() => {})

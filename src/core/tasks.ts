@@ -81,11 +81,22 @@ export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
   return VALID_TRANSITIONS[from]?.includes(to) ?? false
 }
 
+// Clock contract: a pluggable time source. The default implementation is the process-wide monotonic
+// clock below; tests may inject a deterministic clock or reset the global one.
+export interface Clock {
+  nowMs(): number
+  nowIso(): string
+}
+
+export type MonotonicClock = Clock
+
 // The single time source: every stamp is strictly greater than the previous one, even when two
 // calls land in the same millisecond, so no ordering invariant depends on the wall clock ticking.
 let lastTimestampMs = 0
+let globalClock: Clock | null = null
 
 export function monotonicNowMs(): number {
+  if (globalClock) return globalClock.nowMs()
   const now = Date.now()
   const next = now > lastTimestampMs ? now : lastTimestampMs + 1
   lastTimestampMs = next
@@ -93,11 +104,62 @@ export function monotonicNowMs(): number {
 }
 
 export function nowIso(): string {
+  if (globalClock) return globalClock.nowIso()
   return new Date(monotonicNowMs()).toISOString()
 }
 
 export function isoFromNow(offsetMs: number): string {
   return new Date(monotonicNowMs() + offsetMs).toISOString()
+}
+
+// Reset hook for tests: clears the monotonic high-water mark and any injected global clock.
+export function resetMonotonicClock(): void {
+  lastTimestampMs = 0
+  globalClock = null
+}
+export const resetMonotonicNowMs = resetMonotonicClock
+export const resetClock = resetMonotonicClock
+export const resetMonotonic = resetMonotonicClock
+
+// Inject a global clock for tests; pass null to restore the default monotonic clock.
+export function setClock(clock: Clock | null): void {
+  globalClock = clock
+}
+export const setMonotonicClock = setClock
+export const useClock = setClock
+
+// Normalize an unknown value into a Clock or null (shared by TaskRepo/TaskService/etc.).
+export function asClock(input: unknown): Clock | null {
+  if (input == null) return null
+  if (typeof input === 'function') {
+    const fn = input as () => number
+    return { nowMs: fn, nowIso: () => new Date(fn()).toISOString() }
+  }
+  if (typeof input !== 'object') return null
+  const o = input as Record<string, unknown>
+  if (typeof o.clock !== 'undefined') return asClock(o.clock)
+  if (typeof o.nowIso === 'function') {
+    const nowIsoFn = (o.nowIso as () => string).bind(o)
+    const nowMsFn = typeof o.nowMs === 'function'
+      ? (o.nowMs as () => number).bind(o)
+      : typeof o.now === 'function'
+        ? (o.now as () => number).bind(o)
+        : typeof o.monotonicNowMs === 'function'
+          ? (o.monotonicNowMs as () => number).bind(o)
+          : () => Date.parse(nowIsoFn())
+    return { nowMs: nowMsFn, nowIso: nowIsoFn }
+  }
+  if (typeof o.nowMs === 'function' || typeof o.now === 'function' || typeof o.monotonicNowMs === 'function') {
+    const nowMsFn = ((o.nowMs ?? o.now ?? o.monotonicNowMs) as () => number).bind(o)
+    return { nowMs: nowMsFn, nowIso: () => new Date(nowMsFn()).toISOString() }
+  }
+  return null
+}
+
+// Default process-wide clock handle (reflects the global monotonic source).
+export const defaultClock: Clock = {
+  nowMs: monotonicNowMs,
+  nowIso: nowIso
 }
 
 export const MAX_TITLE_LENGTH = 200

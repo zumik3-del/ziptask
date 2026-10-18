@@ -1,12 +1,8 @@
 import { basename, isAbsolute, resolve } from 'node:path'
-import type { ProjectRow, SvcError, SvcResult, TaskStore } from './types'
+import type { ProjectRow, ProjectStore, SvcError, SvcResult } from './types'
 import { fail, ok } from './result'
 import { requiredError } from './validation'
 import { nowIso } from './tasks'
-
-// Only the project-table reads and writes these verbs perform; the task half of the store is out of reach.
-type ProjectStore = Pick<TaskStore,
-  'projectBySlug' | 'projectSlugs' | 'insertProject' | 'updateProject' | 'deleteProject' | 'projectTaskCount'>
 
 export const PROJECT_SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]{0,31}$/
 export const PROJECT_SLUG_MAX = 32

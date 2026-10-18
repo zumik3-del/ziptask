@@ -1,6 +1,6 @@
-import type { Task, TaskStatus, TaskPriority } from './tasks'
-import { TERMINAL_STATUSES, nowIso, isoFromNow, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './tasks'
-import type { ProjectListItem, ProjectRow, TaskStore, TimelineRow, CommentRow, SvcResult, SvcError, UpdateStatusData } from './types'
+import type { Task, TaskStatus, TaskPriority, Clock } from './tasks'
+import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, asClock } from './tasks'
+import type { CommentRow, ProjectListItem, ProjectRow, ProjectStore, Store, TimelineRow, SvcResult, SvcError, UpdateStatusData } from './types'
 import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
@@ -35,12 +35,11 @@ export type TaskServiceOptions = {
   leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number
   defaultPriority?: TaskPriority; defaultReporter?: string; listLimit?: number; timelineLimit?: number; queueLimit?: number
   scope?: string
+  clock?: unknown
 }
 
-type ResolvedOptions = Required<Omit<TaskServiceOptions, 'scope'>> & Pick<TaskServiceOptions, 'scope'>
+type ResolvedOptions = Required<Omit<TaskServiceOptions, 'scope' | 'clock'>> & Pick<TaskServiceOptions, 'scope'>
 
-// The single defaults merge: undefined means "unset", so a partially filled options object never
-// needs a per-field fallback at the point of use.
 function resolveOptions(opts: TaskServiceOptions): ResolvedOptions {
   return {
     leaseTtlMin: opts.leaseTtlMin ?? DEFAULT_LEASE_TTL_MIN,
@@ -57,13 +56,17 @@ function resolveOptions(opts: TaskServiceOptions): ResolvedOptions {
   }
 }
 
-// Project administration is its own seam: the MCP layer drives these verbs through this façade,
-// while TaskService reaches projects only through resolve(), for the scope of its enumerating calls.
-export class ProjectService {
-  constructor(private readonly store: TaskStore, private readonly scope?: string) {}
+function agentError(agent: string): SvcError | null {
+  return requiredError(agent, 'agent') ?? tooLongError(agent, MAX_AGENT_LENGTH, 'agent')
+}
 
-  // The single resolution point: every enumerating call funnels its `project` (or the test-only
-  // `scope` fallback) through here, so a missing or unknown slug refuses identically everywhere.
+function contentError(content: string): SvcError | null {
+  return requiredError(content, 'content') ?? tooLongError(content, MAX_CONTENT_LENGTH, 'content')
+}
+
+export class ProjectService {
+  constructor(private readonly store: ProjectStore, private readonly scope?: string) {}
+
   resolve(project?: string): SvcResult<ProjectRow> {
     return resolveProject(this.store, project ?? this.scope)
   }
@@ -85,31 +88,35 @@ export class ProjectService {
   }
 }
 
-export class TaskService {
+export class TaskLifecycleService {
   private readonly opts: ResolvedOptions
+  private readonly clock: Clock | null
   private readonly reaper: LeaseReaper
   readonly projects: ProjectService
 
-  constructor(private store: TaskStore, opts: TaskServiceOptions = {}) {
+  constructor(private store: Store, opts: TaskServiceOptions = {}, reaper?: LeaseReaper, projects?: ProjectService) {
     this.opts = resolveOptions(opts)
-    this.reaper = new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog)
-    this.projects = new ProjectService(store, this.opts.scope)
+    this.clock = asClock(opts.clock)
+    this.reaper = reaper ?? new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
+    this.projects = projects ?? new ProjectService(store, this.opts.scope)
+  }
+
+  private _nowMs(): number {
+    return this.clock ? this.clock.nowMs() : monotonicNowMs()
+  }
+
+  private _nowIso(): string {
+    return this.clock ? this.clock.nowIso() : nowIso()
+  }
+
+  private _isoFromNow(offsetMs: number): string {
+    return new Date(this._nowMs() + offsetMs).toISOString()
   }
 
   private _leaseUntil(ttlMin: number = this.opts.leaseTtlMin): string {
-    return isoFromNow(ttlMin * MINUTE_MS)
+    return this._isoFromNow(ttlMin * MINUTE_MS)
   }
 
-  private _agentError(agent: string): SvcError | null {
-    return requiredError(agent, 'agent') ?? tooLongError(agent, MAX_AGENT_LENGTH, 'agent')
-  }
-
-  private _contentError(content: string): SvcError | null {
-    return requiredError(content, 'content') ?? tooLongError(content, MAX_CONTENT_LENGTH, 'content')
-  }
-
-  // Pure precondition set for create_task: title/actor lengths, the epic↔(epic_id|deps) conflicts,
-  // the dep-on-epic rule, the epic_id target shape, and the project scope. Returns the first failure or null.
   private _createTaskGuard(args: CreateTaskArgs, project: ProjectRow): SvcError | null {
     return createTaskGuard({
       ...args,
@@ -126,7 +133,7 @@ export class TaskService {
     if (guard) return fail(guard)
     const deps = args.depends_on ?? []
     const reporter = args.reporter ?? this.opts.defaultReporter
-    const now = nowIso()
+    const now = this._nowIso()
     const epicId = args.epic_id ?? null
     return this.store.transaction((): SvcResult<{ id: number; status: 'queued' }> => {
       const id = this.store.insertTask({
@@ -148,7 +155,6 @@ export class TaskService {
       }
       if (this.opts.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
 
-      // D2: auto-promote target epic and D6: mirror subtask_add (same transaction)
       if (epicId !== null) {
         this.store.promoteEpicWithMirror(epicId, reporter, 'subtask_add',
           `#${id} ${sanitizePipe(args.title)}`, now, this.opts.auditLog)
@@ -158,51 +164,9 @@ export class TaskService {
     })
   }
 
-  getTaskView(id: number): SvcResult<{ task: Readonly<Task>; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number; canceled: number } }> {
-    this.reaper.reapIfStale()
-    const task = this.store.getTaskRow(id)
-    if (!task) return fail('NOT_FOUND')
-    const deps = parseDeps(task.depends_on)
-    const depStatuses = this.store.statusesOf(deps)
-    const blockedBy = blockingDeps(depStatuses, deps)
-    // D3: derived roll-up for epics
-    if (task.is_epic) {
-      const counts = this.store.childStatusCounts(id)
-      if (counts.total > 0) {
-        return ok({ task, blockedBy, subtasks: counts })
-      }
-    }
-    return ok({ task, blockedBy })
-  }
-
-  listTasks(args: ListTasksArgs): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number }> {
-    const project = this.projects.resolve(args.project)
-    if (!project.ok) return fail(project.error)
-    this.reaper.reapIfStale()
-    const { rows, total } = this.store.listTasks({
-      assignee: args.assignee,
-      status: args.status,
-      updatedSinceIso: args.updated_since !== undefined ? new Date(args.updated_since).toISOString() : undefined,
-      epicId: args.epic_id,
-      limit: clampLimit(args.limit, this.opts.listLimit),
-      projectId: project.data.id
-    })
-    return ok({ tasks: rows, total })
-  }
-
-  getTasksByIds(ids: number[]): SvcResult<{ items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
-    this.reaper.reapIfStale()
-    const batch = this.store.batchTasks(ids)
-    return ok({
-      items: ids.map(id => ({ id, task: batch.get(id) ?? null })),
-      total: ids.length
-    })
-  }
-
   claimTask(args: ClaimTaskArgs): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> {
-    const agentErr = this._agentError(args.agent)
+    const agentErr = agentError(args.agent)
     if (agentErr) return fail(agentErr)
-    // Only the auto-pick branch enumerates, so only it resolves a scope; a by-id claim stays unscoped.
     let projectId: number | undefined
     if (args.taskId === undefined) {
       const project = this.projects.resolve(args.project)
@@ -223,26 +187,27 @@ export class TaskService {
     }
 
     if (!task) return fail('EMPTY', 'no claimable tasks')
+    const claimedTask = task
 
-    const now = nowIso()
-    // a per-claim override lives only for this call: the instance default is never mutated
+    const now = this._nowIso()
     const leaseTtlMin = args.leaseTtlMin ?? this.opts.leaseTtlMin
     const leaseUntil = this._leaseUntil(leaseTtlMin)
-    const changes = this.store.markClaimed(task.id, task.version, args.agent, leaseUntil, now)
-    const updated = this.store.getTaskRow(task.id)
-    if (changes !== 1 || !updated) return fail('CONFLICT', 'version mismatch')
-    if (this.opts.auditLog) this.store.auditAppend(task.id, args.agent, 'claim', task.status, 'in_progress')
-    return ok({ id: task.id, leaseTtlMin, task: updated })
+    return this.store.transaction((): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> => {
+      const changes = this.store.markClaimed(claimedTask.id, claimedTask.version, args.agent, leaseUntil, now)
+      const updated = this.store.getTaskRow(claimedTask.id)
+      if (changes !== 1 || !updated) return fail('CONFLICT', 'version mismatch')
+      if (this.opts.auditLog) this.store.auditAppend(claimedTask.id, args.agent, 'claim', claimedTask.status, 'in_progress')
+      return ok({ id: claimedTask.id, leaseTtlMin, task: updated })
+    })
   }
 
   updateStatus(args: UpdateStatusArgs): SvcResult<UpdateStatusData> {
-    const agentErr = this._agentError(args.agent)
+    const agentErr = agentError(args.agent)
     if (agentErr) return fail(agentErr)
     if (args.comment !== undefined) {
-      const commentErr = this._contentError(args.comment)
+      const commentErr = contentError(args.comment)
       if (commentErr) return fail(commentErr)
     }
-    // an audited escape hatch without a stated reason is what hides the next accidents
     const refund = args.reset_attempts === true
     if (refund && !args.comment?.trim()) return fail('INVALID', 'reset_attempts requires a comment')
     this.reaper.reap()
@@ -255,23 +220,18 @@ export class TaskService {
 
   private _applyTransition(args: UpdateStatusArgs, task: Task, refund: boolean): SvcResult<UpdateStatusData> {
     const renewal = task.status === 'in_progress' && args.status === 'in_progress' && args.renew === true
-    const now = nowIso()
+    const now = this._nowIso()
     const completedAt = TERMINAL_STATUSES.includes(args.status) ? now : null
     const leaseUntil = args.status === 'in_progress' ? this._leaseUntil() : null
-    // D6: mirror subtask_done/subtask_failed onto the parent epic
     const subtaskMirror = args.status === 'done' ? 'subtask_done' : args.status === 'failed' ? 'subtask_failed' : null
 
     return this.store.transaction((): SvcResult<UpdateStatusData> => {
-      // CAS on the version read in the guard when the caller omitted it, so an omitted version is not a
-      // lost update: a write landing between the read and here still fails as CONFLICT.
       const expectedVersion = args.version ?? task.version
       const changes = this.store.transitionStatus(args.id, expectedVersion, args.status, now, completedAt, leaseUntil, args.agent, refund ? 1 : 0)
       if (changes !== 1) return fail('CONFLICT', 'concurrent modification')
       const updated = this.store.getTaskRow(args.id)
       if (!updated) return fail('CONFLICT', 'concurrent modification')
       if (this.opts.auditLog) {
-        // a pure renewal audits as lease_renewed: an update_status row would cut the in_progress
-        // segment in statusDurations at every heartbeat
         if (renewal) {
           this.store.auditAppend(args.id, args.agent, 'lease_renewed', task.lease_expires_at ?? undefined, updated.lease_expires_at ?? undefined)
         } else {
@@ -284,18 +244,76 @@ export class TaskService {
         this.store.insertComment(args.id, args.agent, args.comment, type)
       }
 
-      // No existence guard needed: epic_id is never rewritten after insert, the self-FK plus
-      // PRAGMA foreign_keys = ON rejects a child whose parent is missing, and the only deleteTask
-      // call site (createTask cycle rollback) removes a just-inserted task by its own id — never a
-      // parent some child still references.
       if (task.epic_id !== null && subtaskMirror !== null && this.opts.auditLog) {
         this.store.appendEpicAuditMirror(task.epic_id, args.agent, subtaskMirror,
           `#${task.id} ${sanitizePipe(task.title)}`)
       }
 
-      // attempts is echoed only on a refund: its absence is the in-band signal that the flag was
-      // silently dropped by an older build (R1)
       return ok({ id: args.id, status: args.status, version: updated.version, ...(refund ? { attempts: updated.attempts } : {}) })
+    })
+  }
+
+  reapExpiredLeases(): void {
+    this.reaper.reap()
+  }
+}
+
+export class TaskQueryService {
+  private readonly opts: ResolvedOptions
+  private readonly clock: Clock | null
+  private readonly reaper: LeaseReaper
+  readonly projects: ProjectService
+
+  constructor(private store: Store, opts: TaskServiceOptions = {}, reaper?: LeaseReaper, projects?: ProjectService) {
+    this.opts = resolveOptions(opts)
+    this.clock = asClock(opts.clock)
+    this.reaper = reaper ?? new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
+    this.projects = projects ?? new ProjectService(store, this.opts.scope)
+  }
+
+  getTaskView(id: number): SvcResult<{ task: Readonly<Task>; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number; canceled: number } }> {
+    this.reaper.reapIfStale()
+    const task = this.store.getTaskRow(id)
+    if (!task) return fail('NOT_FOUND')
+    const deps = parseDeps(task.depends_on)
+    const depStatuses = this.store.statusesOf(deps)
+    const blockedBy = blockingDeps(depStatuses, deps)
+    if (task.is_epic) {
+      const counts = this.store.childStatusCounts(id)
+      if (counts.total > 0) {
+        return ok({ task, blockedBy, subtasks: counts })
+      }
+    }
+    return ok({ task, blockedBy })
+  }
+
+  listTasks(args: ListTasksArgs): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number }> {
+    const project = this.projects.resolve(args.project)
+    if (!project.ok) return fail(project.error)
+    if (args.updated_since !== undefined) {
+      if (!Number.isFinite(args.updated_since)) return fail('INVALID', 'invalid updated_since')
+      const updatedSinceDate = new Date(args.updated_since)
+      if (Number.isNaN(updatedSinceDate.getTime())) return fail('INVALID', 'invalid updated_since')
+    }
+    this.reaper.reapIfStale()
+    const updatedSinceIso = args.updated_since !== undefined ? new Date(args.updated_since).toISOString() : undefined
+    const { rows, total } = this.store.listTasks({
+      assignee: args.assignee,
+      status: args.status,
+      updatedSinceIso,
+      epicId: args.epic_id,
+      limit: clampLimit(args.limit, this.opts.listLimit),
+      projectId: project.data.id
+    })
+    return ok({ tasks: rows, total })
+  }
+
+  getTasksByIds(ids: number[]): SvcResult<{ items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
+    this.reaper.reapIfStale()
+    const batch = this.store.batchTasks(ids)
+    return ok({
+      items: ids.map(id => ({ id, task: batch.get(id) ?? null })),
+      total: ids.length
     })
   }
 
@@ -312,8 +330,8 @@ export class TaskService {
     const task = this.store.getTaskRow(args.id)
     if (!task) return fail('NOT_FOUND')
     const validationErr =
-      this._agentError(args.agent) ??
-      this._contentError(args.content)
+      agentError(args.agent) ??
+      contentError(args.content)
     if (validationErr) return fail(validationErr)
     const comment_id = this.store.insertComment(args.id, args.agent, args.content)
     return ok({ comment_id })
@@ -334,8 +352,73 @@ export class TaskService {
     if (!task) return fail('NOT_FOUND')
     return ok(this.store.commentsOf(id))
   }
+}
+
+export class TaskService {
+  protected readonly store: Store
+  private readonly opts: ResolvedOptions
+  private readonly clock: Clock | null
+  private readonly reaper: LeaseReaper
+  readonly projects: ProjectService
+  readonly lifecycle: TaskLifecycleService
+  readonly query: TaskQueryService
+
+  constructor(store: Store, opts: TaskServiceOptions = {}) {
+    this.store = store
+    this.opts = resolveOptions(opts)
+    this.clock = asClock(opts.clock)
+    this.reaper = new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
+    this.projects = new ProjectService(store, this.opts.scope)
+    this.lifecycle = new TaskLifecycleService(store, opts, this.reaper, this.projects)
+    this.query = new TaskQueryService(store, opts, this.reaper, this.projects)
+  }
+
+  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' }> {
+    return this.lifecycle.createTask(args)
+  }
+
+  getTaskView(id: number): SvcResult<{ task: Readonly<Task>; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number; canceled: number } }> {
+    return this.query.getTaskView(id)
+  }
+
+  listTasks(args: ListTasksArgs): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number }> {
+    return this.query.listTasks(args)
+  }
+
+  getTasksByIds(ids: number[]): SvcResult<{ items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
+    return this.query.getTasksByIds(ids)
+  }
+
+  claimTask(args: ClaimTaskArgs): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> {
+    return this.lifecycle.claimTask(args)
+  }
+
+  updateStatus(args: UpdateStatusArgs): SvcResult<UpdateStatusData> {
+    return this.lifecycle.updateStatus(args)
+  }
+
+  listQueue(args: ListQueueArgs): SvcResult<ReadonlyArray<Readonly<Task>>> {
+    return this.query.listQueue(args)
+  }
+
+  addComment(args: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
+    return this.query.addComment(args)
+  }
+
+  getTimeline(id: number, limit?: number): SvcResult<ReadonlyArray<Readonly<TimelineRow>>> {
+    return this.query.getTimeline(id, limit)
+  }
+
+  listComments(id: number): SvcResult<ReadonlyArray<Readonly<CommentRow>>> {
+    return this.query.listComments(id)
+  }
 
   reapExpiredLeases(): void {
-    this.reaper.reap()
+    this.lifecycle.reapExpiredLeases()
   }
 }
+
+export { TaskLifecycleService as TaskLifecycle }
+export { TaskLifecycleService as LifecycleService }
+export { TaskQueryService as TaskQuery }
+export { TaskQueryService as QueryService }
