@@ -1,6 +1,6 @@
 import type { Task, TaskStatus, TaskPriority } from './tasks'
 import { TERMINAL_STATUSES, nowIso, isoFromNow, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './tasks'
-import type { ProjectListItem, ProjectRow, TaskStore, TimelineRow, CommentRow, SvcResult, SvcError, UpdateStatusData } from './types'
+import type { CommentRow, ProjectListItem, ProjectRow, ProjectStore, Store, TimelineRow, SvcResult, SvcError, UpdateStatusData } from './types'
 import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
@@ -60,7 +60,7 @@ function resolveOptions(opts: TaskServiceOptions): ResolvedOptions {
 // Project administration is its own seam: the MCP layer drives these verbs through this façade,
 // while TaskService reaches projects only through resolve(), for the scope of its enumerating calls.
 export class ProjectService {
-  constructor(private readonly store: TaskStore, private readonly scope?: string) {}
+  constructor(private readonly store: ProjectStore, private readonly scope?: string) {}
 
   // The single resolution point: every enumerating call funnels its `project` (or the test-only
   // `scope` fallback) through here, so a missing or unknown slug refuses identically everywhere.
@@ -90,7 +90,7 @@ export class TaskService {
   private readonly reaper: LeaseReaper
   readonly projects: ProjectService
 
-  constructor(private store: TaskStore, opts: TaskServiceOptions = {}) {
+  constructor(private store: Store, opts: TaskServiceOptions = {}) {
     this.opts = resolveOptions(opts)
     this.reaper = new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog)
     this.projects = new ProjectService(store, this.opts.scope)

@@ -1,7 +1,7 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
 import type { Task, TaskStatus, TaskPriority, CommentType } from '../core/tasks'
 import { clampLimit, monotonicNowMs, TERMINAL_STATUSES } from '../core/tasks'
-import type { CommentRow, ProjectListItem, ProjectRow, TaskStore } from '../core/types'
+import type { AuditStore, CommentRow, CommentStore, LeaseStore, ProjectListItem, ProjectRow, ProjectStore, TaskStore } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
 import { PRIORITY_ORDER_SQL, TASK_SELECT, TERMINAL_STATUSES_SQL } from './sql'
 
@@ -20,7 +20,7 @@ function toTask(row: TaskRow): Task {
   return { ...rest, project: rest.project ?? null, is_epic: rest.is_epic !== 0 }
 }
 
-export class TaskRepo implements TaskStore {
+export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditStore, LeaseStore {
   constructor(private db: Database) {}
 
   private monotonicIso(): string {

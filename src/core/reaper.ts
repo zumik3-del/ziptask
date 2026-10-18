@@ -1,6 +1,6 @@
 import type { TaskStatus } from './tasks'
 import { nowIso, monotonicNowMs } from './tasks'
-import type { LeaseStore } from './types'
+import type { AuditStore, LeaseStore } from './types'
 import { SECOND_MS } from '../defaults'
 
 // Lease reaping is its own responsibility: it owns the cooldown clock and the sweep, so the
@@ -10,7 +10,7 @@ export class LeaseReaper {
   private lastReapAt = 0
 
   constructor(
-    private readonly store: LeaseStore,
+    private readonly store: LeaseStore & AuditStore,
     private readonly reapCooldownSec: number,
     private readonly auditLog: boolean
   ) {}
