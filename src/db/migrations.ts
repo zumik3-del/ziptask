@@ -114,5 +114,9 @@ export const MIGRATIONS = [
   // 006: performance indexes (audit follow-up). Append-only.
   `CREATE INDEX IF NOT EXISTS idx_tasks_lease_expires_at ON tasks(lease_expires_at) WHERE status = 'in_progress' AND lease_expires_at IS NOT NULL`,
   `CREATE INDEX IF NOT EXISTS idx_tasks_queued_candidates ON tasks(project_id, priority, created_at, id) WHERE status = 'queued' AND is_epic = 0`,
-  `CREATE INDEX IF NOT EXISTS idx_tasks_created_at_id ON tasks(created_at DESC, id DESC)`
+  `CREATE INDEX IF NOT EXISTS idx_tasks_created_at_id ON tasks(created_at DESC, id DESC)`,
+
+  // 007: simplify epic lifecycle (ADR 0002) — data-only rewrite of non-terminal epics to 'open'.
+  `UPDATE tasks SET status = 'open', lease_expires_at = NULL, assignee = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE is_epic = 1 AND status IN ('queued', 'in_progress', 'review', 'blocked')`,
+  `UPDATE tasks SET lease_expires_at = NULL, assignee = NULL WHERE is_epic = 1 AND (lease_expires_at IS NOT NULL OR assignee IS NOT NULL)`
 ]

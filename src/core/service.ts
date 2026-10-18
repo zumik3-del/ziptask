@@ -126,7 +126,7 @@ export class TaskLifecycleService {
     }, this.store)
   }
 
-  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' }> {
+  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' | 'open' }> {
     const project = this.projects.resolve(args.project)
     if (!project.ok) return fail(project.error)
     const guard = this._createTaskGuard(args, project.data)
@@ -135,7 +135,8 @@ export class TaskLifecycleService {
     const reporter = args.reporter ?? this.opts.defaultReporter
     const now = this._nowIso()
     const epicId = args.epic_id ?? null
-    return this.store.transaction((): SvcResult<{ id: number; status: 'queued' }> => {
+    const createdStatus: 'queued' | 'open' = args.epic ? 'open' : 'queued'
+    return this.store.transaction((): SvcResult<{ id: number; status: 'queued' | 'open' }> => {
       const id = this.store.insertTask({
         title: args.title,
         description: args.description ?? null,
@@ -153,14 +154,14 @@ export class TaskLifecycleService {
         this.store.deleteTask(id)
         return fail('CYCLE', 'dependency graph contains a cycle')
       }
-      if (this.opts.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
+      if (this.opts.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, createdStatus)
 
       if (epicId !== null) {
         this.store.promoteEpicWithMirror(epicId, reporter, 'subtask_add',
           `#${id} ${sanitizePipe(args.title)}`, now, this.opts.auditLog)
       }
 
-      return ok({ id, status: 'queued' as const })
+      return ok({ id, status: createdStatus })
     })
   }
 
@@ -373,7 +374,7 @@ export class TaskService {
     this.query = new TaskQueryService(store, opts, this.reaper, this.projects)
   }
 
-  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' }> {
+  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' | 'open' }> {
     return this.lifecycle.createTask(args)
   }
 

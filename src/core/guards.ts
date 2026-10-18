@@ -97,6 +97,17 @@ export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: b
     return { code: 'CONFLICT', message: `expected version ${task.version}, got ${args.version}` }
   }
 
+  // ADR 0002: `open` is epic-only and epics never hold queued/in_progress/review/blocked.
+  if (!task.is_epic && args.status === 'open') {
+    return { code: 'INVALID', message: `${task.status} → open` }
+  }
+  if (task.is_epic && (args.status === 'queued' || args.status === 'review' || args.status === 'blocked')) {
+    return { code: 'INVALID', message: `${task.status} → ${args.status}` }
+  }
+  if (task.is_epic && args.status === 'in_progress' && !TERMINAL_STATUSES.includes(task.status)) {
+    return { code: 'INVALID', message: `#${task.id} is an epic, not claimable` }
+  }
+
   // Lease heartbeat: only the holder re-arms its own in_progress lease. The reap above is the fence,
   // so a late heartbeat sees a requeued task and fails here instead of resurrecting the lease.
   const selfEdge = task.status === 'in_progress' && args.status === 'in_progress'
