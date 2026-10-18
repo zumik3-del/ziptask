@@ -1,6 +1,6 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
-import type { Task, TaskStatus, TaskPriority, CommentType } from '../core/tasks'
-import { clampLimit, monotonicNowMs, TERMINAL_STATUSES } from '../core/tasks'
+import type { Task, TaskStatus, TaskPriority, CommentType, Clock } from '../core/tasks'
+import { clampLimit, nowIso, TERMINAL_STATUSES } from '../core/tasks'
 import type { AuditStore, CommentRow, CommentStore, LeaseStore, ProjectListItem, ProjectRow, ProjectStore, TaskStore } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
 import { PRIORITY_ORDER_SQL, TASK_SELECT, TERMINAL_STATUSES_SQL } from './sql'
@@ -20,11 +20,47 @@ function toTask(row: TaskRow): Task {
   return { ...rest, project: rest.project ?? null, is_epic: rest.is_epic !== 0 }
 }
 
+// Normalize the optional clock argument into a Clock or null. Accepts a Clock, a bare
+// function returning ms, or an options object carrying `clock`/`nowMs`/`now`/`nowIso`.
+function normalizeClock(input: unknown): Clock | null {
+  if (input == null) return null
+  if (typeof input === 'function') {
+    const fn = input as () => number
+    return { nowMs: fn, nowIso: () => new Date(fn()).toISOString() }
+  }
+  if (typeof input !== 'object') return null
+  const o = input as Record<string, unknown>
+  if (typeof o.clock !== 'undefined') return normalizeClock(o.clock)
+  if (typeof o.nowIso === 'function') {
+    const nowIsoFn = (o.nowIso as () => string).bind(o)
+    const nowMsFn = typeof o.nowMs === 'function'
+      ? (o.nowMs as () => number).bind(o)
+      : typeof o.now === 'function'
+        ? (o.now as () => number).bind(o)
+        : typeof o.monotonicNowMs === 'function'
+          ? (o.monotonicNowMs as () => number).bind(o)
+          : () => Date.parse(nowIsoFn())
+    return { nowMs: nowMsFn, nowIso: nowIsoFn }
+  }
+  if (typeof o.nowMs === 'function' || typeof o.now === 'function' || typeof o.monotonicNowMs === 'function') {
+    const nowMsFn = ((o.nowMs ?? o.now ?? o.monotonicNowMs) as () => number).bind(o)
+    return { nowMs: nowMsFn, nowIso: () => new Date(nowMsFn()).toISOString() }
+  }
+  return null
+}
+
 export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditStore, LeaseStore {
-  constructor(private db: Database) {}
+  private readonly db: Database
+  private readonly clock: Clock | null
+
+  constructor(db: Database, clock?: unknown) {
+    this.db = db
+    this.clock = normalizeClock(clock)
+  }
 
   private monotonicIso(): string {
-    return new Date(monotonicNowMs()).toISOString()
+    if (this.clock) return this.clock.nowIso()
+    return nowIso()
   }
 
   private inClause(count: number): string {

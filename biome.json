@@ -111,7 +111,8 @@
                       "TaskPriority",
                       "CommentType",
                       "clampLimit",
-                      "monotonicNowMs",
+                      "Clock",
+                      "nowIso",
                       "TERMINAL_STATUSES"
                     ]
                   },

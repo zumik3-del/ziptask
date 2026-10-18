@@ -1,5 +1,5 @@
-import type { Task, TaskStatus, TaskPriority } from './tasks'
-import { TERMINAL_STATUSES, nowIso, isoFromNow, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './tasks'
+import type { Task, TaskStatus, TaskPriority, Clock } from './tasks'
+import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, asClock } from './tasks'
 import type { CommentRow, ProjectListItem, ProjectRow, ProjectStore, Store, TimelineRow, SvcResult, SvcError, UpdateStatusData } from './types'
 import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
@@ -35,9 +35,10 @@ export type TaskServiceOptions = {
   leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number
   defaultPriority?: TaskPriority; defaultReporter?: string; listLimit?: number; timelineLimit?: number; queueLimit?: number
   scope?: string
+  clock?: unknown
 }
 
-type ResolvedOptions = Required<Omit<TaskServiceOptions, 'scope'>> & Pick<TaskServiceOptions, 'scope'>
+type ResolvedOptions = Required<Omit<TaskServiceOptions, 'scope' | 'clock'>> & Pick<TaskServiceOptions, 'scope'>
 
 // The single defaults merge: undefined means "unset", so a partially filled options object never
 // needs a per-field fallback at the point of use.
@@ -87,17 +88,31 @@ export class ProjectService {
 
 export class TaskService {
   private readonly opts: ResolvedOptions
+  private readonly clock: Clock | null
   private readonly reaper: LeaseReaper
   readonly projects: ProjectService
 
   constructor(private store: Store, opts: TaskServiceOptions = {}) {
     this.opts = resolveOptions(opts)
-    this.reaper = new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog)
+    this.clock = asClock(opts.clock)
+    this.reaper = new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
     this.projects = new ProjectService(store, this.opts.scope)
   }
 
+  private _nowMs(): number {
+    return this.clock ? this.clock.nowMs() : monotonicNowMs()
+  }
+
+  private _nowIso(): string {
+    return this.clock ? this.clock.nowIso() : nowIso()
+  }
+
+  private _isoFromNow(offsetMs: number): string {
+    return new Date(this._nowMs() + offsetMs).toISOString()
+  }
+
   private _leaseUntil(ttlMin: number = this.opts.leaseTtlMin): string {
-    return isoFromNow(ttlMin * MINUTE_MS)
+    return this._isoFromNow(ttlMin * MINUTE_MS)
   }
 
   private _agentError(agent: string): SvcError | null {
@@ -126,7 +141,7 @@ export class TaskService {
     if (guard) return fail(guard)
     const deps = args.depends_on ?? []
     const reporter = args.reporter ?? this.opts.defaultReporter
-    const now = nowIso()
+    const now = this._nowIso()
     const epicId = args.epic_id ?? null
     return this.store.transaction((): SvcResult<{ id: number; status: 'queued' }> => {
       const id = this.store.insertTask({
@@ -225,7 +240,7 @@ export class TaskService {
     if (!task) return fail('EMPTY', 'no claimable tasks')
     const claimedTask = task
 
-    const now = nowIso()
+    const now = this._nowIso()
     // a per-claim override lives only for this call: the instance default is never mutated
     const leaseTtlMin = args.leaseTtlMin ?? this.opts.leaseTtlMin
     const leaseUntil = this._leaseUntil(leaseTtlMin)
@@ -258,7 +273,7 @@ export class TaskService {
 
   private _applyTransition(args: UpdateStatusArgs, task: Task, refund: boolean): SvcResult<UpdateStatusData> {
     const renewal = task.status === 'in_progress' && args.status === 'in_progress' && args.renew === true
-    const now = nowIso()
+    const now = this._nowIso()
     const completedAt = TERMINAL_STATUSES.includes(args.status) ? now : null
     const leaseUntil = args.status === 'in_progress' ? this._leaseUntil() : null
     // D6: mirror subtask_done/subtask_failed onto the parent epic
