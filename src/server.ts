@@ -7,6 +7,7 @@ import { formatError } from './core/result'
 import { TASK_STATUS_VALUES, monotonicNowMs } from './core/tasks'
 import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
+import { isLoopbackHost } from './config'
 import { createLogger, normalizeError } from './logger'
 import { VERSION } from './version'
 import { SessionRegistry, type Session } from './session-registry'
@@ -223,9 +224,14 @@ function handleTaskView(svc: TaskService, pathname: string): Response {
   })
 }
 
+export { isLoopbackHost } from './config'
+
 export function startHttp(opts: StartHttpOptions) {
   const { svc, port, host, dbPath, maxSessions = DEFAULT_HTTP_MAX_SESSIONS, sessionTtlMs = DEFAULT_HTTP_SESSION_TTL_MS, logger, onShutdown } = opts
   const svcLogger = logger ?? createLogger('http', 'off')
+  if (!isLoopbackHost(host)) {
+    svcLogger.warn('listening on non-loopback host; HTTP has no authentication by design', { host })
+  }
   const registry = new SessionRegistry({ logger: svcLogger, maxSessions, sessionTtlMs })
 
   const cleanup = setInterval(() => registry.sweep(), SESSION_CLEANUP_INTERVAL_MS)

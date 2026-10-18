@@ -13,7 +13,7 @@ An optional JSON file; `settings.example.json` shows the full shape. Every key i
 | Variable | Default | Description |
 |---|---|---|
 | `ZIPTASK_DB` | `./data/ziptask.db` | SQLite path (directory auto-created) |
-| `ZIPTASK_HOST` | `127.0.0.1` | HTTP listen host |
+| `ZIPTASK_HOST` | `127.0.0.1` | HTTP listen host. Binding to a non-loopback host logs a startup warning: the HTTP surface has no authentication by design, so expose it through an authenticating reverse proxy. |
 | `ZIPTASK_PORT` | `0` (random) | HTTP listen port |
 | `ZIPTASK_LEASE_TTL_MIN` | `15` | Claim lease length in minutes |
 | `ZIPTASK_MAX_ATTEMPTS` | `3` | Attempts before a reaped task is failed (needs human) |

@@ -146,6 +146,13 @@ function isDangerousKey(key: string): boolean {
   return DANGEROUS_KEYS.has(key)
 }
 
+// Loopback hosts are the only safe bind targets: the HTTP surface has no authentication by
+// design, so binding anywhere else is an explicit operator choice that must be acknowledged.
+export function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase()
+  return normalized === '127.0.0.1' || normalized === 'localhost'
+}
+
 export function setNested(obj: Record<string, unknown>, path: string, value: unknown): void {
   const keys = path.split('.')
   if (keys.length === 0 || keys.some((k) => k.length === 0) || keys.some(isDangerousKey)) {

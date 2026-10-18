@@ -162,6 +162,7 @@ export type TestServerOpts = {
   logger?: Logger
   sessionTtlMs?: number
   maxSessions?: number
+  host?: string
 }
 
 export type TestServer = {
@@ -182,7 +183,7 @@ export function startTestServer(opts: TestServerOpts = {}): TestServer {
   seedProject(db)
   const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: TEST_PROJECT_SLUG })
   const logger = opts.logger ?? createLogger('test', 'off')
-  const httpOpts: StartHttpOptions = { svc, port: 0, host: '127.0.0.1', dbPath, logger }
+  const httpOpts: StartHttpOptions = { svc, port: 0, host: opts.host ?? '127.0.0.1', dbPath, logger }
   if (opts.sessionTtlMs !== undefined) httpOpts.sessionTtlMs = opts.sessionTtlMs
   if (opts.maxSessions !== undefined) httpOpts.maxSessions = opts.maxSessions
   const server = startHttp(httpOpts)
