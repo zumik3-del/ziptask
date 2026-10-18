@@ -185,7 +185,8 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
       params.push(leaseUntilIso, holder)
     } else {
       assignments.push('lease_expires_at = NULL')
-      if (status === 'canceled') assignments.push('assignee = NULL')
+      // Terminal transitions drop ownership metadata so no stale assignee survives.
+      if (TERMINAL_STATUSES.includes(status)) assignments.push('assignee = NULL')
     }
     if (resetAttempts === 1) assignments.push('attempts = 0')
     params.push(id, expectedVersion)
@@ -215,7 +216,8 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
       'completed_at = COALESCE(?, completed_at)'
     ]
     const params: SqlParam[] = [status, attempts, now, completedAt]
-    if (status === 'queued') assignments.push('assignee = NULL')
+    // Terminal transitions (and re-queue) drop ownership metadata so no stale assignee survives.
+    if (status === 'queued' || TERMINAL_STATUSES.includes(status)) assignments.push('assignee = NULL')
     params.push(id, expectedVersion)
     const result = this.db.run(
       `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND status = 'in_progress' AND version = ?`,

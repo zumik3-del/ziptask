@@ -513,14 +513,14 @@ describe('assignee release on reap and cancel (#431)', () => {
     expect(task.assignee).toBeNull()
   })
 
-  test('reap → failed keeps assignee', () => {
+  test('reap → failed clears assignee', () => {
     const id = createTaskRow({ title: 'ReapKeep', reporter: 'dev' })
     handleClaimTask(svc, { agent: 'agent-a', task_id: id })
     db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour'), attempts = 3 WHERE id = ?", [id])
     svc.reapExpiredLeases()
     const task = getTaskRow(db, id)
     expect(task.status).toBe('failed')
-    expect(task.assignee).toBe('agent-a')
+    expect(task.assignee).toBeNull()
   })
 
   test('canceled clears assignee', () => {
