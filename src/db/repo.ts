@@ -259,12 +259,12 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   }
 
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void {
-    // Only a `queued` row is promoted, and only `queued` is rewritten: that is the one state with no
-    // holder and no work to destroy, so the status change cannot silently cancel in-flight work.
-    // createTaskGuard refuses every other non-terminal status up front; the CASE keeps the rewrite a
-    // no-op rather than a hazard if that guard is ever bypassed.
+    // The WHERE confines promotion to a `queued` non-epic: that is the one state with no holder and no
+    // work to destroy, so the rewrite cannot silently cancel in-flight work. Any other target matches
+    // no row, leaving is_epic, status, assignee, lease_expires_at and version untouched. createTaskGuard
+    // refuses every other non-terminal status up front; this is the defence behind it.
     this.db.run(
-      "UPDATE tasks SET is_epic = 1, status = CASE WHEN status = 'queued' THEN 'open' ELSE status END, lease_expires_at = NULL, assignee = NULL, updated_at = ? WHERE id = ? AND is_epic = 0",
+      "UPDATE tasks SET is_epic = 1, status = 'open', lease_expires_at = NULL, assignee = NULL, updated_at = ? WHERE id = ? AND is_epic = 0 AND status = 'queued'",
       [now, id]
     )
     if (auditLog) {
