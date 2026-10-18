@@ -592,3 +592,90 @@ describe('atomic epic promotion (#108)', () => {
     expect(mirrors.length).toBe(1)
   })
 })
+
+// Review #1740 P1: promotion rewrote the target's status to `open` and cleared its lease, so
+// attaching a child to a task somebody was already working silently destroyed that work. Promotion
+// is now confined to a `queued` target; every other non-terminal status is refused up front.
+describe('promotion cannot destroy in-flight work (review #1740 P1)', () => {
+  function seedTask(title: string, status: 'queued' | 'in_progress' | 'review' | 'blocked', assignee?: string): number {
+    const id = json(handleCreateTask(svc, { title, reporter: 'dev', ...(assignee ? { assignee } : {}) })).id
+    if (status === 'in_progress') {
+      handleClaimTask(svc, { agent: assignee ?? 'dev', task_id: id })
+    } else if (status === 'review') {
+      handleUpdateStatus(svc, { id, agent: assignee ?? 'dev', status: 'in_progress', version: versionOf(id) })
+      handleUpdateStatus(svc, { id, agent: assignee ?? 'dev', status: 'review', version: versionOf(id) })
+    } else if (status === 'blocked') {
+      handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: versionOf(id) })
+    }
+    return id
+  }
+
+  function versionOf(id: number): number {
+    return json(handleGetTask(svc, { id, fields: ['version'] })).version
+  }
+
+  for (const status of ['in_progress', 'review', 'blocked'] as const) {
+    test(`attaching a child to a ${status} task is refused and the row does not move`, () => {
+      const target = seedTask(`Target ${status}`, status, 'worker')
+      const before = getTaskRow(db, target)!
+      const res: any = handleCreateTask(svc, { title: 'Child', reporter: 'dev', epic_id: target })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe(
+        `INVALID: cannot promote #${target} from ${status}: only a queued task can become an epic`
+      )
+      const after = getTaskRow(db, target)!
+      expect(after.status).toBe(before.status)
+      expect(after.assignee).toBe(before.assignee)
+      expect(after.lease_expires_at).toBe(before.lease_expires_at)
+      expect(after.is_epic).toBe(false)
+    })
+  }
+
+  test('a live lease survives a refused promotion attempt', () => {
+    const target = seedTask('Leased work', 'in_progress', 'worker')
+    const leaseBefore = getTaskRow(db, target)!.lease_expires_at
+    handleCreateTask(svc, { title: 'Child', reporter: 'dev', epic_id: target })
+    expect(getTaskRow(db, target)!.lease_expires_at).toBe(leaseBefore)
+    // the holder can still heartbeat: the refusal left no trace at all
+    const res = handleUpdateStatus(svc, {
+      id: target, agent: 'worker', status: 'in_progress', version: versionOf(target), renew: true
+    })
+    expect(res.isError).toBeFalsy()
+  })
+
+  test('a queued task is still promoted, and only queued', () => {
+    const target = seedTask('Fresh', 'queued')
+    const child = handleCreateTask(svc, { title: 'Child', reporter: 'dev', epic_id: target })
+    expect(child.isError).toBeFalsy()
+    const after = getTaskRow(db, target)!
+    expect(after.is_epic).toBe(true)
+    expect(after.status).toBe('open')
+  })
+
+  test('attaching further children to an existing epic is still allowed', () => {
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    expect(handleCreateTask(svc, { title: 'C1', reporter: 'dev', epic_id: epic }).isError).toBeFalsy()
+    // the epic is `open`, not `queued`, and no promotion happens, so this must not be refused
+    expect(handleCreateTask(svc, { title: 'C2', reporter: 'dev', epic_id: epic }).isError).toBeFalsy()
+  })
+})
+
+// Review #1740 P2: `assignee` means "lease holder" everywhere else, and an epic holds no lease, so
+// the value is refused rather than silently dropped.
+describe('an epic takes no assignee (review #1740 P2)', () => {
+  test('create_task(epic, assignee) is refused', () => {
+    const res: any = handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true, assignee: 'boss' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: an epic takes no assignee: it holds no lease')
+  })
+
+  test('an epic row stores a NULL assignee', () => {
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    expect(getTaskRow(db, epic)!.assignee).toBeNull()
+  })
+
+  test('a regular task still keeps its assignee', () => {
+    const task = json(handleCreateTask(svc, { title: 'Task', reporter: 'dev', assignee: 'worker' })).id
+    expect(getTaskRow(db, task)!.assignee).toBe('worker')
+  })
+})

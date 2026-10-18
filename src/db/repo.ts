@@ -55,13 +55,16 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   }): number {
     const maxAttempts = task.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const epicId = task.epicId ?? null
-    const epicFlag = task.isEpic ? 1 : 0
+    const isEpic = task.isEpic === true
+    const epicFlag = isEpic ? 1 : 0
     const projectId = task.projectId ?? null
-    const status = task.isEpic ? 'open' : 'queued'
+    // ADR 0002: an epic is born `open` and holds no lease, so it never carries an assignee.
+    const status = isEpic ? 'open' : 'queued'
+    const assignee = isEpic ? null : task.assignee
     const result = this.db.run(
       `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic, project_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
-      [task.title, task.description, status, task.priority, task.assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, epicFlag, projectId]
+      [task.title, task.description, status, task.priority, assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, epicFlag, projectId]
     )
     return Number(result.lastInsertRowid)
   }
@@ -256,7 +259,14 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   }
 
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void {
-    this.db.run("UPDATE tasks SET is_epic = 1, status = CASE WHEN status IN ('queued', 'in_progress', 'review', 'blocked') THEN 'open' ELSE status END, lease_expires_at = NULL, assignee = NULL, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
+    // Only a `queued` row is promoted, and only `queued` is rewritten: that is the one state with no
+    // holder and no work to destroy, so the status change cannot silently cancel in-flight work.
+    // createTaskGuard refuses every other non-terminal status up front; the CASE keeps the rewrite a
+    // no-op rather than a hazard if that guard is ever bypassed.
+    this.db.run(
+      "UPDATE tasks SET is_epic = 1, status = CASE WHEN status = 'queued' THEN 'open' ELSE status END, lease_expires_at = NULL, assignee = NULL, updated_at = ? WHERE id = ? AND is_epic = 0",
+      [now, id]
+    )
     if (auditLog) {
       this.auditAppend(id, agent, action, undefined, newValue)
     }

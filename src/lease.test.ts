@@ -259,17 +259,17 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
   })
 
   test('a heartbeat on an epic is refused (epics have no lease semantics)', () => {
-    // ADR 0002 put the epic in_progress acquisition guard (src/core/guards.ts) above the
-    // renewal-path epic check, so this door now answers with the claim-grade wording; the row still
-    // does not move and the lease is never extended. Seeded through the store fixture (the
-    // production write), never through update_status.
+    // ADR 0002 keeps `open` epic-only but leaves the renewal self-edge alone: a heartbeat on a legacy
+    // leased epic is a renewal, so the renewal path answers it with `is an epic` (the claim-grade
+    // wording is for acquisition). The row does not move and the lease is never extended.
+    // Seeded through the store fixture (the production write), never through update_status.
     const epic = seedLeasedEpic('Epic', HOLDER)
     const before = row(epic)
     expect(before.is_epic).toBe(true)
     expect(before.status).toBe('in_progress')
 
     const res = leaseField(epic, HOLDER, before.version)
-    expect(text(res)).toBe(`INVALID: #${epic} is an epic, not claimable`)
+    expect(text(res)).toBe(`INVALID: #${epic} is an epic`)
     expect(row(epic).version).toBe(before.version)
     expect(row(epic).lease_expires_at).toBe(before.lease_expires_at)
     expect(countAudit(epic, 'lease_renewed')).toBe(0)
@@ -824,7 +824,7 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
 
     for (let beat = 0; beat < 2; beat++) {
       const res = leaseField(epic, 'orchestrator', versionOf(epic))
-      expect(text(res)).toBe(`INVALID: #${epic} is an epic, not claimable`)
+      expect(text(res)).toBe(`INVALID: #${epic} is an epic`)
     }
     expect(row(epic).version).toBe(before.version)
     expect(row(epic).lease_expires_at).toBe(before.lease_expires_at)

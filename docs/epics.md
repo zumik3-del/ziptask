@@ -11,7 +11,17 @@ The created task comes back with `status: 'open'` (never `queued`). Or attach th
 ```
 create_task {title: 'Sub-work', reporter: 'orchestrator', project: 'myproj', epic_id: <epic-id>}
 ```
-The target is auto-promoted to an epic (audit row `subtask_add`) and its status is rewritten to `open` when it was previously non-terminal (`queued`/`in_progress`/`review`/`blocked`); lease metadata is cleared. The API exposes it as `is_epic: true` (`is_epic = 1` in SQL).
+The target is auto-promoted to an epic (audit row `subtask_add`) and its status is rewritten from `queued` to `open`; lease metadata is cleared. The API exposes it as `is_epic: true` (`is_epic = 1` in SQL).
+
+Promotion is confined to a **`queued`** target: rewriting the status drops the lease, so promoting a row somebody is already working would silently destroy that work. Attaching to an `in_progress`/`review`/`blocked` task is refused:
+
+```
+INVALID: cannot promote #42 from in_progress: only a queued task can become an epic
+```
+
+Attaching a *further* child to an epic that already exists promotes nothing and is always allowed — the target's status is irrelevant there.
+
+An epic takes no `assignee`: the field means "lease holder" everywhere else and an epic holds no lease. `create_task(epic: true, assignee: '...')` is refused with `INVALID: an epic takes no assignee: it holds no lease`, and the column is `NULL` on every epic row (migration 007 clears it on pre-existing rows too).
 
 ## Attaching sub-tasks
 
@@ -44,11 +54,13 @@ Nested membership is rejected (epic cannot be a sub-task; sub-task cannot be an 
 |---|---|
 | `epic: true` + `epic_id` | `INVALID: epic cannot have a parent epic` |
 | `epic: true` + `depends_on` | `INVALID: epic cannot have depends_on` |
+| `epic: true` + `assignee` | `INVALID: an epic takes no assignee: it holds no lease` |
 | `depends_on` pointing at an epic | `INVALID: dependencies on epic tasks not allowed (#N)` |
 | `depends_on` pointing outside the new task's project | `INVALID: dependency #N belongs to project 'y'` |
 | `epic_id` pointing outside the new task's project | `INVALID: epic #N belongs to project 'y'` |
 | `epic_id` pointing at a terminal task | `INVALID: cannot attach to a terminal task` |
 | `epic_id` pointing at a sub-task (nesting) | `INVALID: cannot attach to a sub-task (no nesting)` |
+| `epic_id` pointing at a non-`queued` task that is not yet an epic | `INVALID: cannot promote #N from <status>: only a queued task can become an epic` |
 | Explicit `claim_task` on an epic | `INVALID: #N is an epic, not claimable` |
 | `queued`/`in_progress`/`review`/`blocked` on an epic | `INVALID: <status> → <status>` (epics only accept `done`/`failed`/`canceled`) |
 | Terminal close with non-terminal children | `CHILDREN: N sub-tasks not terminal` |
