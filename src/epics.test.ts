@@ -11,7 +11,7 @@ import {
   handleListQueue, handleListTasks
 } from './mcp/tools'
 import {
-  createTestDb, closeTestDb, getTaskRow, json, text, driveToDone, makeTempDbPath, removeTempDb, testProjectId
+  createTestDb, closeTestDb, getTaskRow, json, text, driveToDone, makeTempDbPath, removeTempDb, testProjectId, seedProject
 } from './test-context'
 
 let db: Database
@@ -790,5 +790,75 @@ describe('an epic takes no assignee (review #1740 P2)', () => {
   test('a regular task still keeps its assignee', () => {
     const task = json(handleCreateTask(svc, { title: 'Task', reporter: 'dev', assignee: 'worker' })).id
     expect(getTaskRow(db, task)!.assignee).toBe('worker')
+  })
+})
+
+describe('list_tasks is_epic filter', () => {
+  test('is_epic=true returns only epic rows', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    const regularId = json(handleCreateTask(svc, { title: 'Regular', reporter: 'dev' })).id
+    const result = json(handleListTasks(svc, { is_epic: true }))
+    const ids = result.tasks.map((t: any) => t.id)
+    expect(ids).toContain(epicId)
+    expect(ids).not.toContain(regularId)
+    expect(result.total).toBe(1)
+  })
+
+  test('is_epic=false returns only non-epic rows', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    const regularId = json(handleCreateTask(svc, { title: 'Regular', reporter: 'dev' })).id
+    const result = json(handleListTasks(svc, { is_epic: false }))
+    const ids = result.tasks.map((t: any) => t.id)
+    expect(ids).toContain(regularId)
+    expect(ids).not.toContain(epicId)
+    expect(result.total).toBe(1)
+  })
+
+  test('is_epic=true combined with status filter', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    json(handleCreateTask(svc, { title: 'Regular', reporter: 'dev' }))
+    const openEpics = json(handleListTasks(svc, { is_epic: true, status: 'open' }))
+    expect(openEpics.tasks.map((t: any) => t.id)).toContain(epicId)
+    expect(openEpics.total).toBe(1)
+    const queuedEpics = json(handleListTasks(svc, { is_epic: true, status: 'queued' }))
+    expect(queuedEpics.total).toBe(0)
+  })
+
+  test('is_epic=false combined with status filter', () => {
+    const regularId = json(handleCreateTask(svc, { title: 'Regular', reporter: 'dev' })).id
+    json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true }))
+    const queuedNonEpics = json(handleListTasks(svc, { is_epic: false, status: 'queued' }))
+    expect(queuedNonEpics.tasks.map((t: any) => t.id)).toContain(regularId)
+    expect(queuedNonEpics.total).toBe(1)
+    const openNonEpics = json(handleListTasks(svc, { is_epic: false, status: 'open' }))
+    expect(openNonEpics.total).toBe(0)
+  })
+
+  test('is_epic=false with epic_id returns the children', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
+    const nonEpics = json(handleListTasks(svc, { epic_id: epicId, is_epic: false }))
+    expect(nonEpics.tasks.map((t: any) => t.id)).toContain(subId)
+    expect(nonEpics.total).toBe(1)
+    const epics = json(handleListTasks(svc, { epic_id: epicId, is_epic: true }))
+    expect(epics.total).toBe(0)
+  })
+
+  test('is_epic filter respects project scoping', () => {
+    seedProject(db, 'alpha')
+    const alphaEpic = json(handleCreateTask(svc, { title: 'AlphaEpic', reporter: 'dev', project: 'alpha', epic: true })).id
+    const alphaRegular = json(handleCreateTask(svc, { title: 'AlphaReg', reporter: 'dev', project: 'alpha' })).id
+    const testEpic = json(handleCreateTask(svc, { title: 'TestEpic', reporter: 'dev', epic: true })).id
+    const r = json(handleListTasks(svc, { project: 'alpha', is_epic: true }))
+    const ids = r.tasks.map((t: any) => t.id)
+    expect(ids).toContain(alphaEpic)
+    expect(ids).not.toContain(alphaRegular)
+    expect(ids).not.toContain(testEpic)
+    expect(r.total).toBe(1)
+    const r2 = json(handleListTasks(svc, { project: 'alpha', is_epic: false }))
+    const ids2 = r2.tasks.map((t: any) => t.id)
+    expect(ids2).toContain(alphaRegular)
+    expect(ids2).not.toContain(alphaEpic)
+    expect(r2.total).toBe(1)
   })
 })
