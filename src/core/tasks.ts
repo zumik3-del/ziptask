@@ -7,7 +7,8 @@ export const TASK_STATUS_VALUES = Object.freeze([
   'done',
   'failed',
   'blocked',
-  'canceled'
+  'canceled',
+  'open'
 ] as const)
 
 export type TaskStatus = (typeof TASK_STATUS_VALUES)[number]
@@ -68,7 +69,8 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = Object.freeze({
   done: [],
   failed: [],
   blocked: ['queued', 'in_progress', 'review', 'canceled'],
-  canceled: []
+  canceled: [],
+  open: ['done', 'failed', 'canceled']
 })
 
 // Terminal means "no outgoing transition": the transition table is the only place that says so,

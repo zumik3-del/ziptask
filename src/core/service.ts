@@ -5,7 +5,7 @@ import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
 import { LeaseReaper } from './reaper'
-import { createTaskGuard, updateStatusGuard, claimEligibilityError } from './guards'
+import { createTaskGuard, updateStatusGuard, claimEligibilityError, epicNotClaimableError } from './guards'
 import { requiredError, tooLongError } from './validation'
 import { resolveProject, createProject, updateProject, deleteProject } from './projects'
 import {
@@ -126,7 +126,7 @@ export class TaskLifecycleService {
     }, this.store)
   }
 
-  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' }> {
+  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' | 'open' }> {
     const project = this.projects.resolve(args.project)
     if (!project.ok) return fail(project.error)
     const guard = this._createTaskGuard(args, project.data)
@@ -135,7 +135,8 @@ export class TaskLifecycleService {
     const reporter = args.reporter ?? this.opts.defaultReporter
     const now = this._nowIso()
     const epicId = args.epic_id ?? null
-    return this.store.transaction((): SvcResult<{ id: number; status: 'queued' }> => {
+    const createdStatus: 'queued' | 'open' = args.epic ? 'open' : 'queued'
+    return this.store.transaction((): SvcResult<{ id: number; status: 'queued' | 'open' }> => {
       const id = this.store.insertTask({
         title: args.title,
         description: args.description ?? null,
@@ -153,14 +154,14 @@ export class TaskLifecycleService {
         this.store.deleteTask(id)
         return fail('CYCLE', 'dependency graph contains a cycle')
       }
-      if (this.opts.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, 'queued')
+      if (this.opts.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, createdStatus)
 
       if (epicId !== null) {
         this.store.promoteEpicWithMirror(epicId, reporter, 'subtask_add',
           `#${id} ${sanitizePipe(args.title)}`, now, this.opts.auditLog)
       }
 
-      return ok({ id, status: 'queued' as const })
+      return ok({ id, status: createdStatus })
     })
   }
 
@@ -179,6 +180,11 @@ export class TaskLifecycleService {
     if (args.taskId !== undefined) {
       task = this.store.getTaskRow(args.taskId)
       if (!task) return fail('NOT_FOUND')
+      // ADR 0002: an epic is born `open`, outside the status window below, so its refusal has to come
+      // first or claim_task(epic) degrades to CONFLICT: status=open. A non-epic passes straight
+      // through, keeping the window (CONFLICT: status=<x>) ahead of the dependency check.
+      const epicErr = epicNotClaimableError(task)
+      if (epicErr) return fail(epicErr)
       if (task.status !== 'queued' && task.status !== 'blocked') return fail('CONFLICT', `status=${task.status}`)
       const claimErr = claimEligibilityError(task, this.store)
       if (claimErr) return fail(claimErr)
@@ -373,7 +379,7 @@ export class TaskService {
     this.query = new TaskQueryService(store, opts, this.reaper, this.projects)
   }
 
-  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' }> {
+  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' | 'open' }> {
     return this.lifecycle.createTask(args)
   }
 

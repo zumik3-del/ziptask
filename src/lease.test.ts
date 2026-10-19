@@ -75,6 +75,13 @@ const seedLease = (id: number, holder: string, msFromNow: number) => {
 }
 const seedLeasedEpic = (title: string, holder: string, msFromNow = 15 * 60_000) =>
   seedLease(json(handleCreateTask(svc, { title, reporter: 'dev', epic: true })).id as number, holder, msFromNow)
+// A parked epic, which ADR 0002 makes unreachable: `open` refuses blocked. Seeded for the same
+// reason as seedLeasedEpic — a legacy or hand-edited row the acquisition guard must still refuse.
+const seedBlockedEpic = (title: string) => {
+  const id = json(handleCreateTask(svc, { title, reporter: 'dev', epic: true })).id as number
+  db.run("UPDATE tasks SET status = 'blocked', assignee = NULL, lease_expires_at = NULL, version = version + 1 WHERE id = ?", [id])
+  return id
+}
 const seedReview = (id: number) => {
   db.run("UPDATE tasks SET status = 'review', version = version + 1 WHERE id = ?", [id])
   return id
@@ -252,8 +259,9 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
   })
 
   test('a heartbeat on an epic is refused (epics have no lease semantics)', () => {
-    // The in_progress acquisition guard makes a leased epic unreachable through the service, so the
-    // renewal-path epic refusal is only reachable from a legacy or hand-edited in_progress epic row.
+    // ADR 0002 keeps `open` epic-only but leaves the renewal self-edge alone: a heartbeat on a legacy
+    // leased epic is a renewal, so the renewal path answers it with `is an epic` (the claim-grade
+    // wording is for acquisition). The row does not move and the lease is never extended.
     // Seeded through the store fixture (the production write), never through update_status.
     const epic = seedLeasedEpic('Epic', HOLDER)
     const before = row(epic)
@@ -395,14 +403,16 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
 
   test('reset_attempts on an epic is refused (its attempts are always 0)', () => {
     const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
-    // no in_progress on-ramp (an epic is never leased): refund the epic from queued through blocked
+    // ADR 0002: an epic is born `open` and refuses blocked/review/queued, so the refund is probed
+    // on canceled — the only remaining target the transition table accepts for an epic, and one that
+    // needs no on-ramp through a park status to reach.
     const before = row(epic)
-    expect(before.status).toBe('queued')
+    expect(before.status).toBe('open')
     expect(before.attempts).toBe(0)
 
-    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'blocked', version: before.version, reset_attempts: true, comment: 'why' })
+    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'canceled', version: before.version, reset_attempts: true, comment: 'why' })
     expect(text(res)).toBe(`INVALID: cannot reset attempts on epic #${epic}`)
-    expect(row(epic).status).toBe('queued')
+    expect(row(epic).status).toBe('open')
     expect(row(epic).attempts).toBe(0)
     expect(row(epic).version).toBe(before.version)
     expect(countAudit(epic, 'attempts_reset')).toBe(0)
@@ -675,7 +685,7 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     return { dep, blocked }
   }
 
-  test('an epic is refused on queued → in_progress, and the row does not move', () => {
+  test('an epic is refused on open → in_progress, and the row does not move', () => {
     const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
     const before = row(epic)
 
@@ -683,23 +693,29 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     expect(text(res)).toBe(`INVALID: #${epic} is an epic, not claimable`)
 
     const after = row(epic)
-    expect(after.status).toBe('queued')
+    expect(after.status).toBe('open')
     expect(after.version).toBe(before.version)
     expect(after.lease_expires_at).toBeNull()
     expect(after.assignee).toBeNull()
     expect(countAudit(epic, 'update_status')).toBe(0)
-    // one wording, two call sites: identical to what claim_task says about the same row
+    // Both doors speak one sentence: the epic refusal is checked ahead of the status window on each
+    // of them (#1739), so an `open` epic cannot degrade into `CONFLICT: status=open` on the claim
+    // verb while update_status still names the reason.
     expect(claimError(epic, 'orchestrator')).toBe(`INVALID: #${epic} is an epic, not claimable`)
+    // and the claim refusal wrote nothing either: no version bump, no claim audit row, still no lease
+    expect(row(epic).version).toBe(before.version)
+    expect(row(epic).lease_expires_at).toBeNull()
+    expect(countAudit(epic, 'claim')).toBe(0)
   })
 
-  test('an epic is refused on blocked → in_progress too (the guard is not queued-only)', () => {
-    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
-    const parked = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'blocked', version: versionOf(epic) })
-    expect(json(parked).status).toBe('blocked')
+  test('a legacy blocked epic row is refused on blocked → in_progress too (the guard is not open-only)', () => {
+    // An epic can no longer be parked: open refuses blocked outright, so this row is seeded
+    // directly — the shape a rolled-back deploy or a hand-edit leaves behind.
+    const epic = seedBlockedEpic('LegacyBlockedEpic')
     const before = row(epic)
-    // the park is a real transition, so the baseline is what it wrote — the refusal must add nothing
+    // the seed is a bare row write, so the baseline is the create audit alone
     const auditBefore = auditActions(epic)
-    expect(auditBefore).toEqual(['create', 'update_status'])
+    expect(auditBefore).toEqual(['create'])
 
     const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'in_progress', version: before.version })
     expect(text(res)).toBe(`INVALID: #${epic} is an epic, not claimable`)
@@ -814,11 +830,27 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     expect(row(epic).lease_expires_at).toBe(before.lease_expires_at)
     expect(countAudit(epic, 'lease_renewed')).toBe(0)
 
-    // the honest cost of the belt: stranded-and-visible, not terminal. It is listed, and a single
-    // non-leased hop releases it.
+    // The honest cost of the belt: stranded-and-visible, not terminal. It is listed, and since
+    // ADR 0002 an epic refuses every non-terminal hop (blocked/review/queued), so the only way out
+    // is a terminal outcome — the same exit a live epic has.
     expect(json(handleListTasks(svc, { status: 'in_progress' })).tasks.map((t: any) => t.id)).toContain(epic)
-    const freed = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'blocked', version: versionOf(epic) })
-    expect(json(freed).status).toBe('blocked')
+    const freed = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'canceled', version: versionOf(epic) })
+    expect(json(freed).status).toBe('canceled')
+  })
+
+  test('a legacy leased epic cannot reach review any more (the park statuses are closed to epics)', () => {
+    // The load-bearing case for the ADR 0002 status-shape guard: in_progress → review is a valid
+    // transition, so before this change a stranded leased epic could walk itself into review. Now
+    // the guard refuses every non-terminal target for an epic, whatever its status.
+    const epic = seedLeasedEpic('LegacyEpic', 'orchestrator', -HOUR)
+    const before = row(epic)
+
+    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'review', version: before.version })
+    expect(text(res)).toBe('INVALID: in_progress → review')
+    expect(row(epic).status).toBe('in_progress')
+    expect(row(epic).version).toBe(before.version)
+    expect(row(epic).lease_expires_at).toBe(before.lease_expires_at)
+    expect(countAudit(epic, 'update_status')).toBe(0)
   })
 
   test('a refused acquisition writes no audit row at all — no update_status, no lease_renewed, no attempts_reset', () => {
@@ -839,17 +871,19 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     }
     // the timeline is the free detection surface for "acquired without claim": no claim row, no
     // update_status row, and the row is not in_progress
-    expect(text(handleGetTimeline(svc, { id: epic }))).not.toContain('update_status: queued->in_progress')
-    expect(row(epic).status).toBe('queued')
+    expect(text(handleGetTimeline(svc, { id: epic }))).not.toContain('update_status: open->in_progress')
+    expect(row(epic).status).toBe('open')
   })
 
   test('refund on an epic stays refused with no state change, and there is no in-progress on-ramp left', () => {
     const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
     const before = row(epic)
 
-    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'blocked', version: before.version, reset_attempts: true, comment: 'why' })
+    // canceled: the only refund target an `open` epic can reach at all (blocked/review/queued are
+    // refused by the status-shape guard before the refund branch)
+    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'canceled', version: before.version, reset_attempts: true, comment: 'why' })
     expect(text(res)).toBe(`INVALID: cannot reset attempts on epic #${epic}`)
-    expect(row(epic).status).toBe('queued')
+    expect(row(epic).status).toBe('open')
     expect(row(epic).attempts).toBe(0)
     expect(row(epic).version).toBe(before.version)
     expect(countAudit(epic, 'attempts_reset')).toBe(0)
@@ -864,11 +898,11 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
 
     const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'in_progress', version: before.version, reset_attempts: true, comment: 'why' })
     expect(text(res)).toBe(`INVALID: #${epic} is an epic, not claimable`)
-    expect(row(epic).status).toBe('queued')
+    expect(row(epic).status).toBe('open')
     expect(row(epic).version).toBe(before.version)
     expect(countAudit(epic, 'attempts_reset')).toBe(0)
     // the refund refusal is still reachable on its own, from a status that is not an acquisition
-    expect(text(handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'blocked', version: before.version, reset_attempts: true, comment: 'why' })))
+    expect(text(handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'canceled', version: before.version, reset_attempts: true, comment: 'why' })))
       .toBe(`INVALID: cannot reset attempts on epic #${epic}`)
   })
 

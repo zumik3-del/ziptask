@@ -1,14 +1,17 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
+import { Database as SqliteDb } from 'bun:sqlite'
 import { nowIso } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
+import { openDatabase } from './db/db'
+import { MIGRATIONS } from './db/migrations'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus,
   handleListQueue, handleListTasks
 } from './mcp/tools'
 import {
-  createTestDb, closeTestDb, getTaskRow, json, text, driveToDone
+  createTestDb, closeTestDb, getTaskRow, json, text, driveToDone, makeTempDbPath, removeTempDb, testProjectId
 } from './test-context'
 
 let db: Database
@@ -17,13 +20,22 @@ let svc: TaskService
 beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
 afterEach(() => { closeTestDb(db) })
 
+// A refusal writes nothing — not the row, not the audit log (docs/epics.md). Every no-write case
+// below reads this before and after, so "the row did not move" is an assertion, not an assumption.
+const auditCount = (id: number): number =>
+  (db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n
+const versionOf = (id: number): number => json(handleGetTask(svc, { id, fields: ['version'] })).version
+
 describe('epic creation', () => {
   test('epic: true creates non-claimable task with is_epic=1', () => {
     const res = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true }))
-    expect(res.status).toBe('queued')
+    expect(res.status).toBe('open')
     const task = getTaskRow(db, res.id)
     expect(task.is_epic).toBe(true)
     expect(task.epic_id).toBeNull()
+    // ADR 0002: an epic holds no lease, so the birth INSERT never names the lease column. The
+    // assignee half is refused upstream and pinned at the store in 'an epic takes no assignee'.
+    expect(task.lease_expires_at).toBeNull()
   })
 
   test('epic is excluded from list_queue', () => {
@@ -36,9 +48,21 @@ describe('epic creation', () => {
 
   test('claim_task rejects epic (not claimable)', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    const before = getTaskRow(db, epicId)
     const res = handleClaimTask(svc, { agent: 'dev', task_id: epicId })
     expect(res.isError).toBe(true)
-    expect(text(res)).toContain('epic')
+    // ADR 0002 checks the epic refusal ahead of the status window (src/core/service.ts:185), so an
+    // epic born `open` still gets the sentence naming the real reason instead of degrading to
+    // `CONFLICT: status=open`, and claim_task agrees word for word with the update_status guard.
+    expect(text(res)).toBe(`INVALID: #${epicId} is an epic, not claimable`)
+    const after = getTaskRow(db, epicId)
+    expect(after.status).toBe(before.status)
+    expect(after.version).toBe(before.version)
+    // a refusal is not an attempt: the row is untouched down to the audit log
+    expect(after.attempts).toBe(before.attempts)
+    expect(after.assignee).toBeNull()
+    expect(after.lease_expires_at).toBeNull()
+    expect(auditCount(epicId)).toBe(1) // the create row only
   })
 
   test('auto-claim picks regular tasks, skips epic', () => {
@@ -144,26 +168,12 @@ describe('subtask_add mirror', () => {
 })
 
 describe('epic terminal guard', () => {
-  // An epic holds no work, so it is never leased: update_status refuses epic → in_progress
-  // ("INVALID: #N is an epic, not claimable"). The lease-free on-ramp to review is
-  // queued → blocked → review, and neither hop grants a lease.
-  function driveEpicToReview(svc: TaskService, epicId: number, agent: string) {
-    const t1 = getTaskRow(db, epicId)
-    handleUpdateStatus(svc, { id: epicId, agent, status: 'blocked', version: t1.version })
-    const t2 = getTaskRow(db, epicId)
-    handleUpdateStatus(svc, { id: epicId, agent, status: 'review', version: t2.version })
-    const t3 = getTaskRow(db, epicId)
-    // asserted, not assumed: a swallowed refusal here would leave the epic in `blocked` and every
-    // CHILDREN: test below would then pass for the wrong reason (INVALID: blocked → done)
-    expect(t3.status).toBe('review')
-    expect(t3.lease_expires_at).toBeNull()
-    return t3
-  }
-
+  // An epic holds no work, so it is never leased and never parks: ADR 0002 gives it the epic-only
+  // `open` status whose only outgoing edges are the terminal outcomes (done/failed/canceled), each
+  // gated by the non-terminal-children guard. No on-ramp through blocked/review exists any more.
   test('epic with open children cannot go done', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
     json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId }))
-    driveEpicToReview(svc, epicId, 'dev')
     const epicTask = getTaskRow(db, epicId)
     const guard = handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'done', version: epicTask.version })
     expect(guard.isError).toBe(true)
@@ -173,7 +183,6 @@ describe('epic terminal guard', () => {
   test('epic with open children cannot go failed', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
     json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId }))
-    driveEpicToReview(svc, epicId, 'dev')
     const epicTask = getTaskRow(db, epicId)
     const guard = handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'failed', version: epicTask.version })
     expect(guard.isError).toBe(true)
@@ -181,9 +190,11 @@ describe('epic terminal guard', () => {
   })
 
   test('epic without children can go done', () => {
-    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
-    driveEpicToReview(svc, epicId, 'dev')
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
     const epicTask = getTaskRow(db, epicId)
+    // asserted, not assumed: a plain task would be `queued` and `queued → done` an unrelated refusal,
+    // so the direct terminal hop below must start from a real `open` epic
+    expect(epicTask.status).toBe('open')
     const done = json(handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'done', version: epicTask.version }))
     expect(done.status).toBe('done')
     expect(done.version).toBe(epicTask.version + 1)
@@ -198,10 +209,249 @@ describe('epic terminal guard', () => {
     handleUpdateStatus(svc, { id: subId, agent: 'dev', status: 'review', version: subTask.version })
     const v = json(handleGetTask(svc, { id: subId, fields: ['version'] })).version
     handleUpdateStatus(svc, { id: subId, agent: 'dev', status: 'done', version: v })
-    // Epic should still be queued (not auto-promoted to done)
+    // Epic should still be open (not auto-promoted to done)
     const epic = getTaskRow(db, epicId)
-    expect(epic.status).toBe('queued')
+    expect(epic.status).toBe('open')
     expect(epic.is_epic).toBe(true)
+  })
+})
+
+describe('epic-only open status (ADR 0002)', () => {
+  // The status-shape guards of src/core/guards.ts: `open` is reserved for epics, and an epic never
+  // holds queued/review/blocked — its only exits are the terminal outcomes. Both are refusal paths
+  // with no write, so every case asserts the row and the audit log are untouched. Note the wording
+  // is identical to what the transition table produces for the same pair, so these cases pin the
+  // wire contract rather than isolating one guard; the guard branch that only it can reach (a legacy
+  // leased epic asking for review) is covered in lease.test.ts.
+
+  test('a regular task cannot be moved to open', () => {
+    const id = json(handleCreateTask(svc, { title: 'Regular', reporter: 'dev' })).id
+    const before = getTaskRow(db, id)
+
+    const res = handleUpdateStatus(svc, { id, agent: 'dev', status: 'open', version: before.version })
+    expect(text(res)).toBe('INVALID: queued → open')
+    const after = getTaskRow(db, id)
+    expect(after.status).toBe('queued')
+    expect(after.version).toBe(before.version)
+    expect(auditCount(id)).toBe(1) // the create row only
+  })
+
+  test('an epic never holds queued, review or blocked', () => {
+    for (const status of ['queued', 'review', 'blocked'] as const) {
+      const id = json(handleCreateTask(svc, { title: `Epic ${status}`, reporter: 'dev', epic: true })).id
+      const before = getTaskRow(db, id)
+
+      const res = handleUpdateStatus(svc, { id, agent: 'dev', status, version: before.version })
+      expect(`${status}: ${text(res)}`).toBe(`${status}: INVALID: open → ${status}`)
+      const after = getTaskRow(db, id)
+      expect(`${status}: ${after.status}`).toBe(`${status}: open`)
+      expect(`${status}: ${after.version}`).toBe(`${status}: ${before.version}`)
+      expect(`${status}: ${auditCount(id)}`).toBe(`${status}: 1`)
+    }
+  })
+
+  test('open reaches canceled directly, the third terminal outcome', () => {
+    // done/failed are covered by the children guard above; canceled carries no extra precondition
+    // beyond that same guard, so it is asserted here as the plain open → terminal hop.
+    const id = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    const before = getTaskRow(db, id)
+
+    const res = json(handleUpdateStatus(svc, { id, agent: 'dev', status: 'canceled', version: before.version }))
+    expect(res.status).toBe('canceled')
+    const after = getTaskRow(db, id)
+    expect(after.completed_at).not.toBeNull()
+    expect(after.assignee).toBeNull()
+    expect(after.lease_expires_at).toBeNull()
+  })
+})
+
+// The order of claim_task's three refusals is wire-visible, and each rung outranks the next
+// (src/core/service.ts:183-190): epic → status window → deps. Moving a rung is not a refactor, it
+// changes what a caller reads — a claim that names the status instead of the epic reads as a stale
+// task, and one that names the deps instead of the status as unfinished work. Each case pins the
+// whole row too: a refusal is not a write, so status, version, attempts and the audit log all hold.
+describe('claim_task refusal order: epic → status window → deps', () => {
+  const claimRefusal = (id: number, agent: string): string => {
+    const res = handleClaimTask(svc, { agent, task_id: id })
+    expect(res.isError).toBe(true)
+    return text(res)
+  }
+
+  // The row is the other half of every refusal: nothing moved, and no attempt was spent on a call
+  // that never leased anything.
+  const expectUntouched = (id: number, before: { status: string; version: number; attempts: number; audit: number }) => {
+    const after = getTaskRow(db, id)
+    expect(after.status).toBe(before.status)
+    expect(after.version).toBe(before.version)
+    expect(after.attempts).toBe(before.attempts)
+    expect(after.assignee).toBeNull()
+    expect(after.lease_expires_at).toBeNull()
+    expect(auditCount(id)).toBe(before.audit)
+  }
+
+  // The snapshot is taken before the refusal and the audit count rides along, so expectUntouched
+  // proves the call appended nothing — a baseline read afterwards would absorb the very write it is
+  // meant to catch.
+  const baseline = (id: number) => ({ ...getTaskRow(db, id), audit: auditCount(id) })
+
+  // A closed epic is still an epic: docs/epics.md documents the refusal for "explicit claim_task on
+  // an epic" without qualifying the status, so all three terminal outcomes must say the same thing.
+  test('a terminal epic keeps the epic refusal, whichever outcome closed it', () => {
+    for (const terminal of ['done', 'failed', 'canceled'] as const) {
+      const id = json(handleCreateTask(svc, { title: `Epic ${terminal}`, reporter: 'dev', epic: true })).id
+      const open = getTaskRow(db, id)
+      expect(`${terminal}: ${open.status}`).toBe(`${terminal}: open`)
+      json(handleUpdateStatus(svc, { id, agent: 'dev', status: terminal, version: open.version }))
+
+      const before = baseline(id)
+      expect(`${terminal}: ${before.status}`).toBe(`${terminal}: ${terminal}`)
+      expect(`${terminal}: ${claimRefusal(id, 'dev')}`).toBe(`${terminal}: INVALID: #${id} is an epic, not claimable`)
+      expectUntouched(id, before)
+    }
+  })
+
+  // The rung below the epic: a non-epic past the window is named by its status, and the status is
+  // the only thing the caller can act on (a terminal task is recovered by recreating it).
+  test('a terminal non-epic answers the status window with its own outcome', () => {
+    // done: the full path; failed: in_progress → failed; canceled: withdrawn straight from queued.
+    const done = json(handleCreateTask(svc, { title: 'Done', reporter: 'dev' })).id
+    driveToDone(svc, done, 'dev')
+    const failed = json(handleCreateTask(svc, { title: 'Failed', reporter: 'dev' })).id
+    json(handleUpdateStatus(svc, { id: failed, agent: 'dev', status: 'in_progress', version: versionOf(failed) }))
+    json(handleUpdateStatus(svc, { id: failed, agent: 'dev', status: 'failed', version: versionOf(failed) }))
+    const canceled = json(handleCreateTask(svc, { title: 'Canceled', reporter: 'dev' })).id
+    json(handleUpdateStatus(svc, { id: canceled, agent: 'dev', status: 'canceled', version: versionOf(canceled) }))
+
+    for (const id of [done, failed, canceled]) {
+      const before = baseline(id)
+      expect(`${before.status}: ${claimRefusal(id, 'dev')}`).toBe(`${before.status}: CONFLICT: status=${before.status}`)
+      expectUntouched(id, before)
+    }
+  })
+
+  // The rung below that: queued/blocked is inside the window, so only the dependency check can
+  // refuse — the wording the lease guard reuses for update_status → in_progress.
+  test('a dep-blocked non-epic answers the dependency refusal, from queued and from blocked', () => {
+    const dep = json(handleCreateTask(svc, { title: 'Dep', reporter: 'dev' })).id
+    const blocked = json(handleCreateTask(svc, { title: 'Dependent', reporter: 'dev', depends_on: [dep] })).id
+    expect(getTaskRow(db, blocked).status).toBe('queued')
+
+    const queued = baseline(blocked)
+    expect(claimRefusal(blocked, 'dev')).toBe('BLOCKED: dependencies not satisfied')
+    expectUntouched(blocked, queued)
+
+    json(handleUpdateStatus(svc, { id: blocked, agent: 'dev', status: 'blocked', version: versionOf(blocked) }))
+    const parked = baseline(blocked)
+    expect(claimRefusal(blocked, 'dev')).toBe('BLOCKED: dependencies not satisfied')
+    expectUntouched(blocked, parked)
+  })
+
+  // The one case where the two rungs overlap: a terminal task still holding an open dep. It is
+  // refused by the window, because the dep is no longer the reason — nothing can reopen the task,
+  // so waiting for the dependency would be advice that leads nowhere.
+  test('a terminal non-epic with an open dep is refused by the status window, not by the deps', () => {
+    const dep = json(handleCreateTask(svc, { title: 'Open dep', reporter: 'dev' })).id
+    const withdrawn = json(handleCreateTask(svc, { title: 'Withdrawn dependent', reporter: 'dev', depends_on: [dep] })).id
+    // queued → canceled is the withdraw path, and it leaves the dependency open on purpose
+    json(handleUpdateStatus(svc, { id: withdrawn, agent: 'dev', status: 'canceled', version: versionOf(withdrawn) }))
+    // asserted, not assumed: a closed dep would turn this into the dep case above for the wrong reason
+    expect(getTaskRow(db, dep).status).toBe('queued')
+    expect(json(handleGetTask(svc, { id: withdrawn, fields: ['blocked_by'] })).blocked_by).toEqual([dep])
+
+    const before = baseline(withdrawn)
+    expect(claimRefusal(withdrawn, 'dev')).toBe('CONFLICT: status=canceled')
+    expectUntouched(withdrawn, before)
+  })
+})
+
+describe('migration 007: a legacy epic row becomes open', () => {
+  // The data half of ADR 0002 runs once, on a real upgrade: the first test drives it through
+  // openDatabase on a real pre-007 database, the second re-executes the raw 007 statements by hand.
+  // Both locate the pair by SQL identity, never by a positional tail — appending a migration 008
+  // must not silently re-point them, and deleting 007a or 007b must fail the lookup, not pass.
+  const OPEN_MARKER = "SET status = 'open', lease_expires_at = NULL, assignee = NULL"
+  const CLEAR_MARKER = "SET lease_expires_at = NULL, assignee = NULL WHERE is_epic = 1"
+  const locate007 = (): { openIdx: number; clearIdx: number } => {
+    const openIdx = MIGRATIONS.findIndex(stmt => stmt.includes(OPEN_MARKER))
+    const clearIdx = MIGRATIONS.findIndex(stmt => stmt.includes(CLEAR_MARKER))
+    if (openIdx < 0 || clearIdx !== openIdx + 1) {
+      throw new Error(`migration 007 statements not located as a pair (open=${openIdx}, clear=${clearIdx})`)
+    }
+    return { openIdx, clearIdx }
+  }
+  const SEED_TIME = '2026-01-01T00:00:00.000Z'
+  const FUTURE_LEASE = '2099-01-01T00:00:00.000Z'
+
+  // A real pre-007 database: the frozen prefix replayed, legacy epic rows seeded through raw SQL, and
+  // the version stamped one short so openDatabase applies exactly the two migration-007 statements.
+  const seedPre007Db = (path: string, prefixLength: number) => {
+    const raw = new SqliteDb(path)
+    for (const stmt of MIGRATIONS.slice(0, prefixLength)) raw.exec(stmt)
+    raw.run(
+      "INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES ('legacy-epics', '', ?, ?)",
+      [SEED_TIME, SEED_TIME]
+    )
+    const projectId = (raw.query('SELECT id FROM projects WHERE slug = ?').get('legacy-epics') as { id: number }).id
+    const seedEpic = (title: string, status: string, assignee: string | null, lease: string | null) =>
+      raw.run(
+        `INSERT INTO tasks (title, reporter, status, assignee, lease_expires_at, is_epic, project_id, created_at, updated_at)
+         VALUES (?, 'dev', ?, ?, ?, 1, ?, ?, ?)`,
+        [title, status, assignee, lease, projectId, SEED_TIME, SEED_TIME]
+      )
+    seedEpic('QueuedEpic', 'queued', null, null)
+    seedEpic('LeasedEpic', 'in_progress', 'developer', FUTURE_LEASE)
+    seedEpic('DoneEpic', 'done', 'developer', FUTURE_LEASE)
+    raw.run('DELETE FROM schema_version')
+    raw.run('INSERT INTO schema_version (version) VALUES (?)', [prefixLength])
+    raw.close()
+  }
+
+  test('non-terminal epics become open and lose assignee/lease, a terminal epic keeps its outcome', () => {
+    const { openIdx } = locate007()
+    const path = makeTempDbPath('epic-open-007')
+    try {
+      seedPre007Db(path, openIdx)
+
+      const upgraded = openDatabase(path)
+      expect((upgraded.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number }).version).toBe(MIGRATIONS.length)
+      const rows = upgraded.query('SELECT title, status, assignee, lease_expires_at, updated_at FROM tasks ORDER BY id').all() as any[]
+      upgraded.close()
+
+      const byTitle = Object.fromEntries(rows.map(r => [r.title, r]))
+      expect(byTitle.QueuedEpic.status).toBe('open')
+      expect(byTitle.LeasedEpic.status).toBe('open')
+      // the rewritten rows are visibly stamped, not silently relabelled
+      expect(byTitle.QueuedEpic.updated_at).not.toBe(SEED_TIME)
+      // the stale lease is dropped from every epic, terminal or not
+      expect(byTitle.LeasedEpic.assignee).toBeNull()
+      expect(byTitle.LeasedEpic.lease_expires_at).toBeNull()
+      expect(byTitle.DoneEpic.status).toBe('done')
+      expect(byTitle.DoneEpic.assignee).toBeNull()
+      expect(byTitle.DoneEpic.lease_expires_at).toBeNull()
+    } finally { removeTempDb(path) }
+  })
+
+  // ADR 0002 claims the rewrite is idempotent ("re-running it matches zero rows after the first
+  // pass"), and an operator can re-execute it by hand after a rolled-back deploy, so the property is
+  // pinned rather than assumed. The statements come from locate007, not from a positional tail, and
+  // SQLite counts matched rows, so the zeroes also pin each WHERE filter.
+  test('migration 007 is idempotent: re-running its statements matches zero rows', () => {
+    const { openIdx, clearIdx } = locate007()
+    const path = makeTempDbPath('epic-open-007-idempotent')
+    try {
+      seedPre007Db(path, openIdx)
+      const upgraded = openDatabase(path)
+
+      const first = upgraded.run(MIGRATIONS[openIdx])
+      const second = upgraded.run(MIGRATIONS[clearIdx])
+      expect(Number(first.changes)).toBe(0)
+      expect(Number(second.changes)).toBe(0)
+
+      const rows = upgraded.query('SELECT title, status FROM tasks ORDER BY id').all() as any[]
+      upgraded.close()
+      // the re-run moved nothing: the rewritten rows stay open and the closed epic stays closed
+      expect(rows.map(r => `${r.title}=${r.status}`)).toEqual(['QueuedEpic=open', 'LeasedEpic=open', 'DoneEpic=done'])
+    } finally { removeTempDb(path) }
   })
 })
 
@@ -325,14 +575,9 @@ describe('canceled children do not block epic closure (#112)', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
     const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
     cancelChild(subId)
-    // lease-free on-ramp (an epic is never in_progress): queued → blocked → review → done
+    // epics go directly to terminal outcomes
     const t1 = getTaskRow(db, epicId)
-    handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'blocked', version: t1.version })
-    const t2 = getTaskRow(db, epicId)
-    handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'review', version: t2.version })
-    const t3 = getTaskRow(db, epicId)
-    expect(t3.status).toBe('review')
-    const done = json(handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'done', version: t3.version }))
+    const done = json(handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'done', version: t1.version }))
     expect(done.status).toBe('done')
   })
 
@@ -388,5 +633,162 @@ describe('atomic epic promotion (#108)', () => {
       "SELECT action FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
     ).all(epicId) as any[]
     expect(mirrors.length).toBe(1)
+  })
+})
+
+// Review #1740 P1: promotion rewrote the target's status to `open` and cleared its lease, so
+// attaching a child to a task somebody was already working silently destroyed that work. Promotion
+// is now confined to a `queued` target; every other non-terminal status is refused up front.
+describe('promotion cannot destroy in-flight work (review #1740 P1)', () => {
+  function seedTask(title: string, status: 'queued' | 'in_progress' | 'review' | 'blocked', assignee?: string): number {
+    const id = json(handleCreateTask(svc, { title, reporter: 'dev', ...(assignee ? { assignee } : {}) })).id
+    if (status === 'in_progress') {
+      handleClaimTask(svc, { agent: assignee ?? 'dev', task_id: id })
+    } else if (status === 'review') {
+      handleUpdateStatus(svc, { id, agent: assignee ?? 'dev', status: 'in_progress', version: versionOf(id) })
+      handleUpdateStatus(svc, { id, agent: assignee ?? 'dev', status: 'review', version: versionOf(id) })
+    } else if (status === 'blocked') {
+      handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: versionOf(id) })
+    }
+    return id
+  }
+
+  function versionOf(id: number): number {
+    return json(handleGetTask(svc, { id, fields: ['version'] })).version
+  }
+
+  for (const status of ['in_progress', 'review', 'blocked'] as const) {
+    test(`attaching a child to a ${status} task is refused and the row does not move`, () => {
+      const target = seedTask(`Target ${status}`, status, 'worker')
+      const before = getTaskRow(db, target)!
+      const res: any = handleCreateTask(svc, { title: 'Child', reporter: 'dev', epic_id: target })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe(
+        `INVALID: cannot promote #${target} from ${status}: only a queued task can become an epic`
+      )
+      const after = getTaskRow(db, target)!
+      expect(after.status).toBe(before.status)
+      expect(after.assignee).toBe(before.assignee)
+      expect(after.lease_expires_at).toBe(before.lease_expires_at)
+      expect(after.is_epic).toBe(false)
+    })
+  }
+
+  test('a live lease survives a refused promotion attempt', () => {
+    const target = seedTask('Leased work', 'in_progress', 'worker')
+    const leaseBefore = getTaskRow(db, target)!.lease_expires_at
+    handleCreateTask(svc, { title: 'Child', reporter: 'dev', epic_id: target })
+    expect(getTaskRow(db, target)!.lease_expires_at).toBe(leaseBefore)
+    // the holder can still heartbeat: the refusal left no trace at all
+    const res = handleUpdateStatus(svc, {
+      id: target, agent: 'worker', status: 'in_progress', version: versionOf(target), renew: true
+    })
+    expect(res.isError).toBeFalsy()
+  })
+
+  test('a queued task is still promoted, and only queued', () => {
+    const target = seedTask('Fresh', 'queued')
+    const child = handleCreateTask(svc, { title: 'Child', reporter: 'dev', epic_id: target })
+    expect(child.isError).toBeFalsy()
+    const after = getTaskRow(db, target)!
+    expect(after.is_epic).toBe(true)
+    expect(after.status).toBe('open')
+  })
+
+  test('attaching further children to an existing epic is still allowed', () => {
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    expect(handleCreateTask(svc, { title: 'C1', reporter: 'dev', epic_id: epic }).isError).toBeFalsy()
+    // the epic is `open`, not `queued`, and no promotion happens, so this must not be refused
+    expect(handleCreateTask(svc, { title: 'C2', reporter: 'dev', epic_id: epic }).isError).toBeFalsy()
+  })
+})
+
+// #1745: createTaskGuard refuses every non-queued target, but the store-level WHERE is the defence
+// behind that guard — it is what stops a bypass or a cross-process race from deforming a live row.
+// These tests call the store directly, the only way to exercise the defence itself.
+describe('promoteEpicWithMirror is a no-op off the queued path (#1745)', () => {
+  function seedAt(status: 'in_progress' | 'review' | 'blocked'): number {
+    const id = json(handleCreateTask(svc, { title: `Target ${status}`, reporter: 'dev', assignee: 'worker' })).id
+    if (status === 'blocked') {
+      handleUpdateStatus(svc, { id, agent: 'worker', status: 'blocked', version: versionOf(id) })
+    } else {
+      handleClaimTask(svc, { agent: 'worker', task_id: id })
+      if (status === 'review') {
+        handleUpdateStatus(svc, { id, agent: 'worker', status: 'review', version: versionOf(id) })
+      }
+    }
+    return id
+  }
+
+  for (const status of ['in_progress', 'review', 'blocked'] as const) {
+    test(`a direct call on a ${status} non-epic leaves is_epic, status, assignee, lease and version untouched`, () => {
+      const target = seedAt(status)
+      const before = getTaskRow(db, target)!
+      // non-vacuity: the row really holds the state the defence has to protect
+      expect(before.status).toBe(status)
+      expect(before.assignee).toBe('worker')
+      if (status === 'in_progress') expect(before.lease_expires_at).not.toBeNull()
+
+      ;(svc as any).store.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
+
+      const after = getTaskRow(db, target)!
+      expect(after.is_epic).toBe(false)
+      expect(after.status).toBe(before.status)
+      expect(after.assignee).toBe(before.assignee)
+      expect(after.lease_expires_at).toBe(before.lease_expires_at)
+      expect(after.version).toBe(before.version)
+      expect(after.updated_at).toBe(before.updated_at)
+    })
+  }
+
+  test('a queued non-epic is still promoted: is_epic=1, status=open, no holder and no lease', () => {
+    const target = json(handleCreateTask(svc, { title: 'Fresh', reporter: 'dev' })).id
+    const before = getTaskRow(db, target)!
+    expect(before.status).toBe('queued')
+    expect(before.assignee).toBeNull()
+    expect(before.lease_expires_at).toBeNull()
+
+    ;(svc as any).store.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
+
+    const after = getTaskRow(db, target)!
+    expect(after.is_epic).toBe(true)
+    expect(after.status).toBe('open')
+    expect(after.assignee).toBeNull()
+    expect(after.lease_expires_at).toBeNull()
+    const mirrors = db.query(
+      "SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
+    ).all(target) as any[]
+    expect(mirrors.length).toBe(1)
+    expect(mirrors[0].new_value).toBe('#99 Some Sub')
+  })
+})
+
+// Review #1740 P2: `assignee` means "lease holder" everywhere else, and an epic holds no lease, so
+// the value is refused rather than silently dropped.
+describe('an epic takes no assignee (review #1740 P2)', () => {
+  test('create_task(epic, assignee) is refused', () => {
+    const res: any = handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true, assignee: 'boss' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: an epic takes no assignee: it holds no lease')
+  })
+
+  test('the store hard-writes a NULL assignee for an epic even when handed one', () => {
+    // Review #1744 nit 3: the refusal above means the MCP path can never hand the store an assignee,
+    // so only a direct store call exercises repo.ts:63 — the last line of defence behind that guard,
+    // which a bypass or a cross-process race would reach with a value in hand.
+    const id = repo.insertTask({
+      title: 'Epic', description: null, priority: 'p2', assignee: 'boss', reporter: 'dev',
+      depends_on: '[]', now: nowIso(), isEpic: true, projectId: testProjectId(repo)
+    })
+    const task = getTaskRow(db, id)
+    expect(task.status).toBe('open')
+    expect(task.is_epic).toBe(true)
+    expect(task.assignee).toBeNull()
+    expect(task.lease_expires_at).toBeNull()
+  })
+
+  test('a regular task still keeps its assignee', () => {
+    const task = json(handleCreateTask(svc, { title: 'Task', reporter: 'dev', assignee: 'worker' })).id
+    expect(getTaskRow(db, task)!.assignee).toBe('worker')
   })
 })

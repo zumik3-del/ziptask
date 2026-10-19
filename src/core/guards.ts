@@ -55,6 +55,12 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   // D5: epic cannot coexist with epic_id or depends_on
   if (args.epic && args.epic_id !== undefined) return { code: 'INVALID', message: 'epic cannot have a parent epic' }
   if (args.epic && deps.length > 0) return { code: 'INVALID', message: 'epic cannot have depends_on' }
+  // An epic is never leased, so it never has a holder; `assignee` means exactly "lease holder"
+  // everywhere else. Refuse rather than silently drop the caller's value — the repo also hard-writes
+  // NULL for epics, so the invariant holds even if this guard is ever bypassed.
+  if (args.epic && args.assignee !== undefined) {
+    return { code: 'INVALID', message: 'an epic takes no assignee: it holds no lease' }
+  }
   // G1/G2: `legacy` parks pre-v5 rows and archived projects keep their work readable but take no new
   // task; both are refusals on the resolved project row the service already looked up.
   if (args.project === RESERVED_PROJECT_SLUG) {
@@ -80,6 +86,13 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
     if (target.epic_id !== null) return { code: 'INVALID', message: 'cannot attach to a sub-task (no nesting)' }
     if (target.project !== args.project) {
       return { code: 'INVALID', message: `epic #${args.epic_id} belongs to project '${target.project ?? ''}'` }
+    }
+    // Promotion rewrites the target's status to `open` and clears its lease, so it is only safe on a
+    // task nobody has started. Promoting an in_progress/review/blocked row would silently destroy
+    // live work: the holder loses its lease and the status change leaves no audit row of its own.
+    // Attaching to an epic that already exists promotes nothing, so the existing statuses stay legal.
+    if (!target.is_epic && target.status !== 'queued') {
+      return { code: 'INVALID', message: `cannot promote #${args.epic_id} from ${target.status}: only a queued task can become an epic` }
     }
   }
   return null
@@ -108,6 +121,20 @@ export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: b
   // typo'd in_progress cannot silently become a lease bump
   if (selfEdge && !renewal) {
     return { code: 'INVALID', message: 'in_progress → in_progress requires renew: true' }
+  }
+  // ADR 0002: `open` is epic-only and epics never hold queued/in_progress/review/blocked. Sits after the
+  // renew-intent refusals and ahead of the transition table so the documented order holds and an epic
+  // reports itself (`#N is an epic`) rather than the transition table's `open → in_progress`. The
+  // in_progress clause excludes the renewal self-edge: that is a heartbeat on a legacy leased epic and
+  // is answered by the renewal path below with the shorter `#N is an epic`.
+  if (!task.is_epic && args.status === 'open') {
+    return { code: 'INVALID', message: `${task.status} → open` }
+  }
+  if (task.is_epic && (args.status === 'queued' || args.status === 'review' || args.status === 'blocked')) {
+    return { code: 'INVALID', message: `${task.status} → ${args.status}` }
+  }
+  if (task.is_epic && args.status === 'in_progress' && task.status !== 'in_progress') {
+    return { code: 'INVALID', message: `#${task.id} is an epic, not claimable` }
   }
   if (!isValidTransition(task.status, args.status)) {
     return { code: 'INVALID', message: `${task.status} → ${args.status}` }

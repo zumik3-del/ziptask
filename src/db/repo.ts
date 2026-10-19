@@ -55,12 +55,16 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   }): number {
     const maxAttempts = task.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const epicId = task.epicId ?? null
-    const epicFlag = task.isEpic ? 1 : 0
+    const isEpic = task.isEpic === true
+    const epicFlag = isEpic ? 1 : 0
     const projectId = task.projectId ?? null
+    // ADR 0002: an epic is born `open` and holds no lease, so it never carries an assignee.
+    const status = isEpic ? 'open' : 'queued'
+    const assignee = isEpic ? null : task.assignee
     const result = this.db.run(
       `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic, project_id)
-       VALUES (?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
-      [task.title, task.description, task.priority, task.assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, epicFlag, projectId]
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+      [task.title, task.description, status, task.priority, assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, epicFlag, projectId]
     )
     return Number(result.lastInsertRowid)
   }
@@ -255,7 +259,14 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   }
 
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void {
-    this.db.run("UPDATE tasks SET is_epic = 1, updated_at = ? WHERE id = ? AND is_epic = 0", [now, id])
+    // The WHERE confines promotion to a `queued` non-epic: that is the one state with no holder and no
+    // work to destroy, so the rewrite cannot silently cancel in-flight work. Any other target matches
+    // no row, leaving is_epic, status, assignee, lease_expires_at and version untouched. createTaskGuard
+    // refuses every other non-terminal status up front; this is the defence behind it.
+    this.db.run(
+      "UPDATE tasks SET is_epic = 1, status = 'open', lease_expires_at = NULL, assignee = NULL, updated_at = ? WHERE id = ? AND is_epic = 0 AND status = 'queued'",
+      [now, id]
+    )
     if (auditLog) {
       this.auditAppend(id, agent, action, undefined, newValue)
     }
