@@ -34,6 +34,7 @@ const LIST_TASKS_SHAPE = {
   limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional(),
   updated_since: z.number().finite().min(-MAX_SAFE_TIMESTAMP_MS).max(MAX_SAFE_TIMESTAMP_MS).optional(),
   epic_id: TaskId.optional(),
+  is_epic: z.boolean().optional(),
   ids: z.array(z.number().int()).max(MAX_RESULT_LIMIT).optional(),
   project: PROJECT_ARG
 }
@@ -102,6 +103,7 @@ export function handleListTasks(svc: TaskService, args: {
   limit?: number
   updated_since?: number
   epic_id?: number
+  is_epic?: boolean
   ids?: number[]
   project?: string
 }): ToolResult {
@@ -123,6 +125,7 @@ export function handleListTasks(svc: TaskService, args: {
     status: args.status,
     updated_since: args.updated_since,
     epic_id: args.epic_id,
+    is_epic: args.is_epic,
     limit: args.limit,
     project: args.project
   }
@@ -189,7 +192,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleGetTask(svc, args))
 
   server.registerTool('list_tasks', {
-    description: 'Filters: assignee,status,updated_since(unix ms),epic_id(children of epic). `project` (slug) is required unless ids is non-empty; ids batch-mode returns pipe id|code; assignee via fields:["assignee"]. description only via explicit fields',
+    description: 'Filters: assignee,status,updated_since(unix ms),epic_id(children of epic),is_epic(epic filter). `project` (slug) is required unless ids is non-empty; ids batch-mode returns pipe id|code; assignee via fields:["assignee"]. description only via explicit fields',
     inputSchema: z.object(LIST_TASKS_SHAPE).catchall(z.unknown())
   }, async (args) => handleListTasks(svc, args))
 
