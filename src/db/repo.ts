@@ -76,7 +76,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   }
 
   listTasks(filters: {
-    assignee?: string; status?: TaskStatus; updatedSinceIso?: string; epicId?: number; limit: number; projectId?: number
+    assignee?: string; status?: TaskStatus; updatedSinceIso?: string; epicId?: number; isEpic?: boolean; limit: number; projectId?: number
   }): { rows: Task[]; total: number } {
     const conditions: string[] = []
     const params: (string | number | null)[] = []
@@ -90,6 +90,10 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     if (filters.epicId !== undefined) {
       conditions.push('t.epic_id = ?')
       params.push(filters.epicId)
+    }
+    if (filters.isEpic !== undefined) {
+      conditions.push('t.is_epic = ?')
+      params.push(filters.isEpic ? 1 : 0)
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
     const limit = clampLimit(filters.limit, 0)

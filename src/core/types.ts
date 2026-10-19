@@ -13,7 +13,7 @@ export interface TaskStore {
     assignee: string | null; reporter: string; depends_on: string; now: string; maxAttempts?: number
     epicId?: number; isEpic?: boolean; projectId?: number | null }): number
   deleteTask(id: number): void
-  listTasks(filters: { assignee?: string; status?: TaskStatus; updatedSinceIso?: string; epicId?: number; limit: number; projectId?: number })
+  listTasks(filters: { assignee?: string; status?: TaskStatus; updatedSinceIso?: string; epicId?: number; isEpic?: boolean; limit: number; projectId?: number })
     : { rows: Task[]; total: number }
   queuedCandidates(limit: number, projectId: number, offset?: number): Task[]
   depsOf(id: number): string | null
