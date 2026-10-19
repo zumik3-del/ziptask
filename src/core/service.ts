@@ -20,7 +20,7 @@ type CreateTaskArgs = {
 }
 
 type ListTasksArgs = {
-  assignee?: string; status?: TaskStatus; updated_since?: number; epic_id?: number
+  assignee?: string; status?: TaskStatus; updated_since?: number; epic_id?: number; is_epic?: boolean
   limit?: number; project?: string
 }
 
@@ -308,6 +308,7 @@ export class TaskQueryService {
       status: args.status,
       updatedSinceIso,
       epicId: args.epic_id,
+      isEpic: args.is_epic,
       limit: clampLimit(args.limit, this.opts.listLimit),
       projectId: project.data.id
     })
