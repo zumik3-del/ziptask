@@ -172,8 +172,8 @@ export function handleListQueue(svc: TaskService, args: { limit?: number; projec
   const unknown = rejectUnknownArgs('list_queue', LIST_QUEUE_SHAPE, args)
   if (unknown) return unknown
   return foldResult(svc.listQueue(args), (ready) => {
-    const lines = ready.map(t => pipeJoin(t.id, t.priority, sanitizePipe(t.title)))
-    return textResult(lines.join('\n'))
+    const lines = (ready ?? []).map(t => pipeJoin(t.id, t.priority, sanitizePipe(t.title)))
+    return textResult(lines.join('\n') ?? '')
   }, errorTool)
 }
 

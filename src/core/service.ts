@@ -328,7 +328,7 @@ export class TaskQueryService {
     if (!project.ok) return fail(project.error)
     this.reaper.reapIfStale()
     const limit = clampLimit(args.limit, this.opts.queueLimit)
-    return ok(readyCandidates(this.store, limit, this.opts.autoClaimCeiling, project.data.id))
+    return ok(readyCandidates(this.store, limit, this.opts.autoClaimCeiling, project.data.id) ?? [])
   }
 
   addComment(args: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
