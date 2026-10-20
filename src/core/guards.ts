@@ -2,7 +2,7 @@ import type { Task, TaskStatus } from './tasks'
 import { isValidTransition, TERMINAL_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON } from './tasks'
 import type { TaskStore, SvcError } from './types'
 import { parseDeps, depsSatisfied } from './deps'
-import { requiredError, tooLongError, epicError } from './validation'
+import { requiredError, tooLongError, optionalFieldError, epicError } from './validation'
 import { RESERVED_PROJECT_SLUG } from './project-slug'
 
 // Only the reads a guard performs: a guard never writes, so it cannot reach the mutating half.
@@ -10,7 +10,7 @@ type GuardStore = Pick<TaskStore, 'batchTasks' | 'getTaskRow' | 'statusesOf' | '
 type DepsStore = Pick<TaskStore, 'statusesOf'>
 
 export type CreateTaskInput = {
-  title: string; description?: string; priority?: string; assignee?: string
+  title: string; description?: string | null; priority?: string; assignee?: string | null
   depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
   defaultReporter: string
   project: string; projectArchived: boolean
@@ -48,14 +48,10 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   if (titleErr) return titleErr
   const reporterErr = tooLongError(args.reporter ?? args.defaultReporter, MAX_AGENT_LENGTH, 'reporter')
   if (reporterErr) return reporterErr
-  if (args.assignee !== undefined) {
-    const assigneeErr = tooLongError(args.assignee, MAX_AGENT_LENGTH, 'assignee')
-    if (assigneeErr) return assigneeErr
-  }
-  if (args.description !== undefined) {
-    const descriptionErr = tooLongError(args.description, MAX_DESCRIPTION_LENGTH, 'description')
-    if (descriptionErr) return descriptionErr
-  }
+  const assigneeErr = optionalFieldError(args.assignee, MAX_AGENT_LENGTH, 'assignee')
+  if (assigneeErr) return assigneeErr
+  const descriptionErr = optionalFieldError(args.description, MAX_DESCRIPTION_LENGTH, 'description')
+  if (descriptionErr) return descriptionErr
   const deps = args.depends_on ?? []
   if (deps.length > MAX_DEPENDS_ON) return { code: 'INVALID', message: 'depends_on too long' }
   // D5: epic cannot coexist with epic_id or depends_on
