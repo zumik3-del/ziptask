@@ -118,9 +118,6 @@ permissions:
     resource: "command*"
     effect: allow
   - action: shell
-    resource: "git stash*"
-    effect: allow
-  - action: shell
     resource: "*smoke*"
     effect: deny
   - action: shell

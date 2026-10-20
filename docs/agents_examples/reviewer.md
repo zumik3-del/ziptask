@@ -87,15 +87,6 @@ permissions:
     resource: "true*"
     effect: allow
   - action: shell
-    resource: "bunx tsc*"
-    effect: allow
-  - action: shell
-    resource: "bunx biome*"
-    effect: allow
-  - action: shell
-    resource: "bun test*"
-    effect: allow
-  - action: shell
     resource: "timeout* rm *"
     effect: deny
   - action: shell
