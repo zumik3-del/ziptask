@@ -25,6 +25,13 @@ beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskS
 afterEach(() => { closeTestDb(db) })
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
+// The row counts a refusal must not move: a refused call writes no task row, no audit row and no
+// comment, so the three counts are the evidence that nothing was written.
+function storeCounts(): { tasks: number; audit: number; comments: number } {
+  const count = (table: string) => (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+  return { tasks: count('tasks'), audit: count('audit_log'), comments: count('comments') }
+}
+
 describe('audit_log toggle', () => {
   function makeAuditSvc(auditLog: boolean): { db: Database; repo: TaskRepo; svc: TaskService } {
     const d = createTestDb()
@@ -599,10 +606,65 @@ describe('reporter/assignee length guards in createTask (#811)', () => {
     expect(text(res)).toContain('INVALID: assignee too long')
   })
 
-  test('createTask accepts assignee == MAX_AGENT_LENGTH', () => {
-    const id = json(handleCreateTask(svc, { title: 'OkAssignee', reporter: 'dev', assignee: OK_AGENT })).id
-    const row = getTaskRow(db, id)
-    expect(row.assignee).toBe(OK_AGENT)
+  test('createTask refuses assignee == MAX_AGENT_LENGTH: the length is in bounds, the creation is not', () => {
+    // The length guard runs first, so an in-bounds name reaches the creation refusal (#1872)
+    // instead of the length error: a name that is legal as a holder is still not a holder at birth.
+    const res = handleCreateTask(svc, { title: 'OkAssignee', reporter: 'dev', assignee: OK_AGENT })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+  })
+})
+
+// #1872: `assignee` means exactly "lease holder", and a task is born `queued` without a lease, so
+// a creation-time assignee would be a holder without a lease - a holder nothing would honour (the
+// queue is shared, the auto-pick is not assignee-aware, the first claim overwrites the column).
+// The value is refused at creation, and the store hard-writes NULL behind that guard.
+describe('a creation-time assignee is refused (#1872)', () => {
+  const REFUSAL = 'INVALID: assignee is refused at creation: a task holds a lease only from in_progress'
+
+  test('createTask refuses an assignee with the documented INVALID string', () => {
+    const res = handleCreateTask(svc, { title: 'Leased', reporter: 'dev', assignee: 'worker' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe(REFUSAL)
+  })
+
+  test('the refusal writes no task row, no audit row and no comment', () => {
+    const before = storeCounts()
+    handleCreateTask(svc, { title: 'Leased', reporter: 'dev', assignee: 'worker' })
+    expect(storeCounts()).toEqual(before)
+  })
+
+  test('a task created without an assignee has no holder and no lease', () => {
+    const id = json(handleCreateTask(svc, { title: 'Born', reporter: 'dev' })).id
+    const row = getTaskRow(db, id)!
+    expect(row.status).toBe('queued')
+    expect(row.assignee).toBeNull()
+    expect(row.lease_expires_at).toBeNull()
+  })
+
+  test('the epic rule is still checked first and keeps its own message', () => {
+    const res = handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true, assignee: 'boss' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: an epic takes no assignee: it holds no lease')
+  })
+
+  test('the length guard still runs first: an over-long assignee is refused as too long', () => {
+    const res = handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: 'a'.repeat(MAX_AGENT_LENGTH + 1) })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: assignee too long')
+  })
+
+  test('the store hard-writes a NULL assignee even when a bypass hands one in', () => {
+    // The guard is the first line of defence; the repo is the last one. A bypass or a cross-process
+    // race that reaches the store with a value in hand must not leave a holder without a lease.
+    const id = repo.insertTask({
+      title: 'Bypass', description: null, priority: 'p2', assignee: 'boss', reporter: 'dev',
+      depends_on: '[]', now: nowIso(), projectId: testProjectId(repo)
+    }).id
+    const row = getTaskRow(db, id)!
+    expect(row.status).toBe('queued')
+    expect(row.assignee).toBeNull()
+    expect(row.lease_expires_at).toBeNull()
   })
 })
 
@@ -613,11 +675,6 @@ describe('create_task input bounds (#1857)', () => {
   const OK_DESCRIPTION = 'd'.repeat(MAX_DESCRIPTION_LENGTH)
   const TOO_MANY_DEPS = Array.from({ length: MAX_DEPENDS_ON + 1 }, (_, i) => 9000 + i)
   const MAX_DEPS = Array.from({ length: MAX_DEPENDS_ON }, (_, i) => 9000 + i)
-
-  function storeCounts(): { tasks: number; audit: number; comments: number } {
-    const count = (table: string) => (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
-    return { tasks: count('tasks'), audit: count('audit_log'), comments: count('comments') }
-  }
 
   test('createTask refuses a description over the limit with the documented INVALID string', () => {
     const res = handleCreateTask(svc, { title: 'LongDescription', reporter: 'dev', description: LONG_DESCRIPTION })
