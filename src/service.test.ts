@@ -194,18 +194,21 @@ describe('auto-claim ceiling (#105)', () => {
     const repo2 = new TaskRepo(db2)
     const svc2 = new TaskService(repo2, { leaseTtlMin: 15, autoClaimCeiling: 100, scope: 'test' })
 
-    for (let i = 0; i < 150; i++) {
-      repo2.insertTask({
-        title: `Blocked ${i}`,
-        description: null,
-        priority: 'p2',
-        assignee: null,
-        reporter: 'dev',
-        depends_on: JSON.stringify([999]),
-        now: nowIso(),
-        projectId: testProjectId(repo2)
-      })
-    }
+    // One transaction for the whole fixture: 150 rows, one WAL commit instead of 150.
+    repo2.transaction(() => {
+      for (let i = 0; i < 150; i++) {
+        repo2.insertTask({
+          title: `Blocked ${i}`,
+          description: null,
+          priority: 'p2',
+          assignee: null,
+          reporter: 'dev',
+          depends_on: JSON.stringify([999]),
+          now: nowIso(),
+          projectId: testProjectId(repo2)
+        })
+      }
+    })
     const _freeId = repo2.insertTask({
       title: 'Free',
       description: null,
@@ -228,18 +231,21 @@ describe('auto-claim ceiling (#105)', () => {
     const repo2 = new TaskRepo(db2)
     const svc2 = new TaskService(repo2, { leaseTtlMin: 15, scope: 'test' })
 
-    for (let i = 0; i < 150; i++) {
-      repo2.insertTask({
-        title: `Blocked ${i}`,
-        description: null,
-        priority: 'p2',
-        assignee: null,
-        reporter: 'dev',
-        depends_on: JSON.stringify([999]),
-        now: nowIso(),
-        projectId: testProjectId(repo2)
-      })
-    }
+    // One transaction for the whole fixture: 150 rows, one WAL commit instead of 150.
+    repo2.transaction(() => {
+      for (let i = 0; i < 150; i++) {
+        repo2.insertTask({
+          title: `Blocked ${i}`,
+          description: null,
+          priority: 'p2',
+          assignee: null,
+          reporter: 'dev',
+          depends_on: JSON.stringify([999]),
+          now: nowIso(),
+          projectId: testProjectId(repo2)
+        })
+      }
+    })
     const _freeId = repo2.insertTask({
       title: 'Free',
       description: null,
@@ -259,9 +265,12 @@ describe('auto-claim ceiling (#105)', () => {
 
   test('parse-once cache: auto-claim with many dep-blocked tasks finds free one', () => {
     // Regression: parse-once refactor must not change behavior for the common case
-    for (let i = 0; i < 10; i++) {
-      createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
-    }
+    // One transaction for the fixture rows: one WAL commit instead of one per row.
+    repo.transaction(() => {
+      for (let i = 0; i < 10; i++) {
+        createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
+      }
+    })
     const freeId = createTaskRow({ title: 'Free', reporter: 'dev' })
     const res = handleClaimTask(svc, { agent: 'agent-1' })
     expect(json(res).id).toBe(freeId)
