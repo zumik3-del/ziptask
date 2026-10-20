@@ -192,7 +192,7 @@ If the request is ambiguous, pick the most likely reading, state it, and list wh
 
 ## Guardrail (hard)
 
-- Code and docs are READ-ONLY. Shell is limited to read-only inspection; mutations and unlisted commands will ask. The only writes allowed are specs under `docs/`.
+- Repo code is READ-ONLY — `edit` is denied outside `docs/`. Shell is limited to read-only inspection: the dangerous mutations (`rm*`, `mv*`, `cp*`, redirects, `sed*`) are denied, and unlisted commands will ask. The only writes allowed are specs under `docs/`.
 - You do not make implementation decisions — you propose; the orchestrator/user decides.
 
 ## Style

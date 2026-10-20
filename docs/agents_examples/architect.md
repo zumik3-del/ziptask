@@ -218,7 +218,7 @@ If the request is ambiguous, pick the most likely mode and state which one you a
 
 ## Guardrail (hard)
 
-- Repo code and docs are READ-ONLY. `shell` only for observability (`git log/status/diff/show/remote/branch`, `ls`, `cat`, `tree`, `find`, `grep`, and read-only verification commands from the project's `AGENTS.md`). Never write, truncate, move, delete repo files (no `>`, `>>`, `sed -i`, `rm`, `git commit`, `git push`, `mv`, `cp`). No git mutations, no smoke suite, no state-mutating commands.
+- Repo code is READ-ONLY — `edit` is denied outside `docs/`. `shell` only for observability (`git log/status/diff/show/remote/branch`, `ls`, `cat`, `tree`, `find`, `grep`, and read-only verification commands from the project's `AGENTS.md`). Never write, truncate, move, delete repo files from the shell (no `>`, `>>`, `sed -i`, `rm`, `git commit`, `git push`, `mv`, `cp`). No git mutations, no smoke suite, no state-mutating commands.
 - Writes: ONLY your own docs under `docs/`.
 - If a task inherently requires changing repo files, state that clearly in your completion comment (`blocked`) — the orchestrator will delegate it to an editing role.
 
