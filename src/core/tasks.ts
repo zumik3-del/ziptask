@@ -71,22 +71,27 @@ export function pipeJoin(...fields: Array<string | number>): string {
 
 export type CommentType = 'comment' | 'resolution'
 
+// The legality graph: which transition is legal from which status. It is not the definition of
+// "closed for work" — a status can carry one administrative edge out of it and still be closed.
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = Object.freeze({
   queued: ['in_progress', 'blocked', 'canceled'],
   in_progress: ['in_progress', 'review', 'failed', 'blocked', 'canceled'],
   review: ['done', 'in_progress', 'failed', 'canceled'],
   done: [],
-  failed: [],
+  // The administrative withdrawal: a failed task is closed for work, but it can be closed out.
+  // It is never reopened — `failed -> queued`/`in_progress`/`review` stay illegal.
+  failed: ['canceled'],
   blocked: ['queued', 'in_progress', 'review', 'canceled'],
   canceled: [],
   open: ['done', 'failed', 'canceled']
 })
 
-// Terminal means "no outgoing transition": the transition table is the only place that says so,
-// so a new status cannot be added to one list and forgotten in the other.
-export const TERMINAL_STATUSES: readonly TaskStatus[] = Object.freeze(
-  TASK_STATUS_VALUES.filter(status => VALID_TRANSITIONS[status].length === 0)
-)
+// Closed for work: no further work is expected on these tasks, so they carry a `completed_at`,
+// hold no lease holder, and never block a dependent, a parent epic or an open count. The list is
+// written out and NOT derived from the transition table: `failed` belongs here although the table
+// gives it one outgoing edge (the administrative withdrawal), and deriving the set from "no
+// outgoing edge" would silently drop `failed` and change every behaviour that reads this list.
+export const TERMINAL_STATUSES: readonly TaskStatus[] = Object.freeze(['done', 'failed', 'canceled'])
 
 export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
   return VALID_TRANSITIONS[from]?.includes(to) ?? false

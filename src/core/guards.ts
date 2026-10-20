@@ -214,7 +214,8 @@ export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: b
   // row read, the status window by isValidTransition, so is_epic and deps are the rest. Both use
   // claimEligibilityError; review -> in_progress is a deliberate superset (work sent back) and asks
   // only for the epic half, because its deps are provably still satisfied: deps are immutable after
-  // create and terminal statuses have no outgoing edge.
+  // create and a dependency closed for work stays closed for work — the administrative edge out of
+  // `failed` (`failed -> canceled`) closes a task out, it never reopens one.
   if (args.status === 'in_progress' && !selfEdge) {
     const eligibilityErr = task.status === 'queued' || task.status === 'blocked'
       ? claimEligibilityError(task, store)
@@ -222,11 +223,15 @@ export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: b
     if (eligibilityErr) return eligibilityErr
   }
   // an epic is never leased (the in_progress acquisition guard above), so its attempts is always 0 and
-  // a refund here would be a no-op write with a misleading audit row. Terminal statuses need no guard:
-  // they have no outgoing edge, so isValidTransition refuses them all.
+  // a refund here would be a no-op write with a misleading audit row. A task closed for work is
+  // refused explicitly: the transition table refuses every edge out of `done`/`canceled`, and the one
+  // administrative edge out of `failed` (`failed -> canceled`) must not smuggle a refund in with it.
   if (refund) {
     const epicErr = epicError(task, `cannot reset attempts on epic #${task.id}`)
     if (epicErr) return epicErr
+    if (TERMINAL_STATUSES.includes(task.status)) {
+      return { code: 'INVALID', message: `cannot reset attempts on terminal task #${task.id}` }
+    }
   }
   // D3: epic terminal guard — reject done/failed while non-terminal children exist
   if (task.is_epic && TERMINAL_STATUSES.includes(args.status)) {
