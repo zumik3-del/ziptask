@@ -98,6 +98,29 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   return null
 }
 
+// -- epic promotion race -----------------------------------------------------
+
+// The one refusal for the promotion race: the epic_id target left the state the up-front guard
+// accepted, so the attach is refused. It is a conflict, not a malformed request — the target moved.
+export function epicPromotionRaceError(epicId: number): SvcError {
+  return { code: 'CONFLICT', message: `epic #${epicId} changed state during promotion` }
+}
+
+// The epic_id target preconditions, re-checked next to the write. createTaskGuard reads the target
+// before the write, and a rival can claim it in between (a claim takes the row out of `queued`), so
+// the same preconditions are verified again inside the write transaction. A target that already is
+// an epic only has to stay attachable (non-terminal, no parent); a non-epic is promoted here, and
+// only from `queued` — the one state with no holder and no work to destroy. Every mismatch means
+// the target changed after the guard accepted it, so it is reported as the race, not as a
+// precondition the caller got wrong.
+export function epicTargetChangedError(target: Task | null, epicId: number, project: string): SvcError | null {
+  if (!target) return epicPromotionRaceError(epicId)
+  if (target.epic_id !== null) return epicPromotionRaceError(epicId)
+  if (target.project !== project) return epicPromotionRaceError(epicId)
+  if (target.is_epic) return TERMINAL_STATUSES.includes(target.status) ? epicPromotionRaceError(epicId) : null
+  return target.status === 'queued' ? null : epicPromotionRaceError(epicId)
+}
+
 // -- update_status guard -----------------------------------------------------
 
 // All refusals that do not touch the row: version CAS, the lease self-edge/renew rules, the
