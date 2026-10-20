@@ -763,6 +763,199 @@ describe('promoteEpicWithMirror is a no-op off the queued path (#1745)', () => {
   })
 })
 
+// The epic-promotion race: create_task reads the epic_id target up front (the guard) and promotes it
+// in the write. A rival can move the target in between — a claim takes the row out of `queued`, and
+// promoting it would destroy live work. The target is re-read and re-checked inside the write
+// transaction, so the race is refused with a CONFLICT instead of silently rewriting somebody's row.
+//
+// The store proxy is the reproduction: it flips the target's state on the guard's `getTaskRow` read,
+// the read the guard cannot see past (src/service.test.ts:687 stubs a store the same way).
+describe('epic promotion race (#1853)', () => {
+  const LEASE_UNTIL = '2099-01-01T00:00:00.000Z'
+
+  // The invariant the race must never break: no task row may point at a parent that is not an epic.
+  const orphanChildren = (): number[] => (db.query(
+    'SELECT c.id AS id FROM tasks c JOIN tasks p ON p.id = c.epic_id WHERE p.is_epic = 0'
+  ).all() as any[]).map(r => r.id)
+  // ...and no audit row may outlive its task: a refusal leaves no row behind, the child's own
+  // create row included (comments and audit_log carry ON DELETE CASCADE, schema v4).
+  const orphanAuditRows = (): number[] => (db.query(
+    'SELECT a.rowid AS rowid FROM audit_log a LEFT JOIN tasks t ON t.id = a.task_id WHERE t.id IS NULL'
+  ).all() as any[]).map(r => r.rowid)
+  const childCount = (epicId: number): number =>
+    (db.query('SELECT COUNT(*) AS n FROM tasks WHERE epic_id = ?').get(epicId) as { n: number }).n
+  const mirrorCount = (taskId: number): number =>
+    (db.query("SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = 'subtask_add'")
+      .get(taskId) as { n: number }).n
+  const taskCount = (): number => (db.query('SELECT COUNT(*) AS n FROM tasks').get() as { n: number }).n
+
+  test('a target claimed between the guard read and the write is refused, and no child row is left', () => {
+    const target = json(handleCreateTask(svc, { title: 'Target', reporter: 'dev' })).id
+    const before = getTaskRow(db, target)!
+
+    // The store proxy: the guard's read hands back the row as it was, and the rival claims the
+    // target right after that read — the window the guard cannot see.
+    const raced = new TaskRepo(db)
+    const read = raced.getTaskRow.bind(raced)
+    let flipped = false
+    raced.getTaskRow = (id: number) => {
+      const row = read(id)
+      if (id === target && !flipped) {
+        flipped = true
+        raced.markClaimed(target, row!.version, 'rival', LEASE_UNTIL, nowIso())
+      }
+      return row
+    }
+
+    const res = handleCreateTask(new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }), {
+      title: 'Child', reporter: 'dev', epic_id: target
+    })
+
+    // non-vacuity: the guard really read the target as queued, and the rival really took it
+    expect(flipped).toBe(true)
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe(`CONFLICT: epic #${target} changed state during promotion`)
+    // the refusal leaves no row behind: no child, and nothing pointing at a non-epic
+    expect(childCount(target)).toBe(0)
+    expect(orphanChildren()).toEqual([])
+    expect(taskCount()).toBe(1)
+    // the child's own create audit row is gone with it
+    expect(orphanAuditRows()).toEqual([])
+    // the rival's row is untouched: the refused promotion rewrote nothing
+    const after = getTaskRow(db, target)!
+    expect(after.is_epic).toBe(false)
+    expect(after.status).toBe('in_progress')
+    expect(after.assignee).toBe('rival')
+    // the version moved by the rival's claim only — the refused promotion bumped nothing
+    expect(after.version).toBe(before.version + 1)
+  })
+
+  test('the race is refused in the window between the child insert and the promotion write', () => {
+    const target = json(handleCreateTask(svc, { title: 'Target', reporter: 'dev' })).id
+    const before = getTaskRow(db, target)!
+
+    // The seam of the developer's #1853 approach: the store proxy flips the target right after the
+    // child row is inserted — the guard has read the target by then, the promotion is still ahead.
+    const raced = new TaskRepo(db)
+    const insert = raced.insertTask.bind(raced)
+    raced.insertTask = (args) => {
+      const id = insert(args)
+      if (args.epicId === target) raced.markClaimed(target, before.version, 'rival', LEASE_UNTIL, nowIso())
+      return id
+    }
+
+    const res = handleCreateTask(new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }), {
+      title: 'Child', reporter: 'dev', epic_id: target
+    })
+
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe(`CONFLICT: epic #${target} changed state during promotion`)
+    expect(childCount(target)).toBe(0)
+    expect(orphanChildren()).toEqual([])
+    expect(orphanAuditRows()).toEqual([])
+    // a target that was not promoted gets no subtask_add mirror
+    expect(mirrorCount(target)).toBe(0)
+  })
+
+  test('a target that leaves the queued path before the promotion write is refused, and gets no mirror', () => {
+    const target = json(handleCreateTask(svc, { title: 'Target', reporter: 'dev' })).id
+
+    // The second window: the target is still queued when the transaction re-checks it, and the rival
+    // claims it before the promotion UPDATE lands.
+    const raced = new TaskRepo(db)
+    const promote = raced.promoteEpicWithMirror.bind(raced)
+    raced.promoteEpicWithMirror = (id, agent, action, newValue, now, auditLog) => {
+      const row = raced.getTaskRow(id)!
+      raced.markClaimed(id, row.version, 'rival', LEASE_UNTIL, nowIso())
+      return promote(id, agent, action, newValue, now, auditLog)
+    }
+
+    const res = handleCreateTask(new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }), {
+      title: 'Child', reporter: 'dev', epic_id: target
+    })
+
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe(`CONFLICT: epic #${target} changed state during promotion`)
+    // a target that was not promoted gets no subtask_add mirror
+    expect(mirrorCount(target)).toBe(0)
+    expect(childCount(target)).toBe(0)
+    expect(orphanChildren()).toEqual([])
+  })
+
+  test('a direct promotion of a target that is not queued writes no subtask_add mirror', () => {
+    const target = json(handleCreateTask(svc, { title: 'Leased', reporter: 'dev' })).id
+    json(handleClaimTask(svc, { agent: 'worker', task_id: target }))
+
+    // The store-level defence, called directly: the promotion matched no row, so the mirror that
+    // belongs to an epic must not be written either.
+    const changes = repo.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
+
+    expect(changes).toBe(0)
+    expect(mirrorCount(target)).toBe(0)
+  })
+
+  test('the promotion bumps the target version: the status rewrite is a row write', () => {
+    const target = json(handleCreateTask(svc, { title: 'Pre-Epic', reporter: 'dev' })).id
+    const before = getTaskRow(db, target)!
+    expect(before.version).toBe(1)
+
+    json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: target }))
+
+    const after = getTaskRow(db, target)!
+    expect(after.is_epic).toBe(true)
+    expect(after.status).toBe('open')
+    expect(after.version).toBe(before.version + 1)
+  })
+
+  test('a version read before the promotion no longer matches the promoted row', () => {
+    const target = json(handleCreateTask(svc, { title: 'Pre-Epic', reporter: 'dev' })).id
+    const stale = getTaskRow(db, target)!.version
+    json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: target }))
+
+    // the optimistic lock sees the rewrite: a holder's stale version cannot match the promoted row
+    const res = handleUpdateStatus(svc, { id: target, agent: 'dev', status: 'done', version: stale })
+    expect(text(res)).toBe(`CONFLICT: expected version ${stale + 1}, got ${stale}`)
+  })
+
+  test('attaching to a task that is already an epic succeeds and does not bump its version', () => {
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
+    const before = getTaskRow(db, epic)!
+
+    // an epic is born `open` and is not `queued`, so there is nothing to promote: the attach is a
+    // plain child insert, and the epic's own row is not written at all
+    const res = handleCreateTask(svc, { title: 'Child', reporter: 'dev', epic_id: epic })
+    expect(res.isError).toBeFalsy()
+    expect(childCount(epic)).toBe(1)
+    const after = getTaskRow(db, epic)!
+    expect(after.version).toBe(before.version)
+  })
+
+  test('a target somebody else promoted in the meantime still takes the child', () => {
+    const target = json(handleCreateTask(svc, { title: 'Target', reporter: 'dev' })).id
+
+    // The other writer wins the promotion: the target is an epic by the time our UPDATE lands, so
+    // the attach is not a race — there is nothing left to promote and the child has a real parent.
+    const raced = new TaskRepo(db)
+    const promote = raced.promoteEpicWithMirror.bind(raced)
+    raced.promoteEpicWithMirror = (id, agent, action, newValue, now, auditLog) => {
+      db.run(
+        "UPDATE tasks SET is_epic = 1, status = 'open', version = version + 1, updated_at = ? WHERE id = ?",
+        [now, id]
+      )
+      return promote(id, agent, action, newValue, now, auditLog)
+    }
+
+    const res = handleCreateTask(new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }), {
+      title: 'Child', reporter: 'dev', epic_id: target
+    })
+
+    expect(res.isError).toBeFalsy()
+    expect(childCount(target)).toBe(1)
+    expect(orphanChildren()).toEqual([])
+    expect(mirrorCount(target)).toBe(1)
+  })
+})
+
 // Review #1740 P2: `assignee` means "lease holder" everywhere else, and an epic holds no lease, so
 // the value is refused rather than silently dropped.
 describe('an epic takes no assignee (review #1740 P2)', () => {
