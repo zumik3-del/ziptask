@@ -38,8 +38,43 @@ permissions:
   - action: shell
     resource: "git show*"
     effect: allow
+  # branch management belongs to the `git` agent: deny the family, re-allow the read-only forms
+  - action: shell
+    resource: "git branch*"
+    effect: deny
+  - action: shell
+    resource: "git branch"
+    effect: allow
+  - action: shell
+    resource: "git branch -a*"
+    effect: allow
+  - action: shell
+    resource: "git branch -r*"
+    effect: allow
+  - action: shell
+    resource: "git branch -v*"
+    effect: allow
+  - action: shell
+    resource: "git branch --list *"
+    effect: allow
+  - action: shell
+    resource: "git branch --merged *"
+    effect: allow
+  - action: shell
+    resource: "git branch --show-current"
+    effect: allow
+  # `git remote add/remove/rename/set-url` belongs to the `git` agent: deny the family, re-allow the read-only forms
   - action: shell
     resource: "git remote*"
+    effect: deny
+  - action: shell
+    resource: "git remote"
+    effect: allow
+  - action: shell
+    resource: "git remote -v*"
+    effect: allow
+  - action: shell
+    resource: "git remote get-url*"
     effect: allow
   - action: shell
     resource: "ls*"
@@ -120,6 +155,21 @@ permissions:
     resource: "git merge*"
     effect: deny
   - action: shell
+    resource: "git add*"
+    effect: deny
+  - action: shell
+    resource: "git checkout*"
+    effect: deny
+  - action: shell
+    resource: "git switch*"
+    effect: deny
+  - action: shell
+    resource: "git revert*"
+    effect: deny
+  - action: shell
+    resource: "gh pr*"
+    effect: deny
+  - action: shell
     resource: "* > *"
     effect: deny
   - action: shell
@@ -191,7 +241,7 @@ You are a senior technical writer. You WRITE and UPDATE project documentation: R
 ## Guardrail (hard)
 
 - Edit ONLY documentation targets named in the task (docs, README, ADRs, docstrings). No code or config changes; if docs reveal a code bug, report it in your completion comment, do not fix it.
-- No git mutations (`git commit`/`push`/`reset`/`merge` are denied).
+- No git mutations (`git commit`/`push`/`reset`/`clean`/`merge`/`add`/`checkout`/`switch`/`revert` and branch/PR management are denied).
 
 ## Style
 

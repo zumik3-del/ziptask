@@ -42,14 +42,46 @@ permissions:
   - action: shell
     resource: "git diff*"
     effect: allow
+  # branch management belongs to the `git` agent: deny the family, re-allow the read-only forms
   - action: shell
     resource: "git branch*"
+    effect: deny
+  - action: shell
+    resource: "git branch"
+    effect: allow
+  - action: shell
+    resource: "git branch -a*"
+    effect: allow
+  - action: shell
+    resource: "git branch -r*"
+    effect: allow
+  - action: shell
+    resource: "git branch -v*"
+    effect: allow
+  - action: shell
+    resource: "git branch --list *"
+    effect: allow
+  - action: shell
+    resource: "git branch --merged *"
+    effect: allow
+  - action: shell
+    resource: "git branch --show-current"
     effect: allow
   - action: shell
     resource: "git show*"
     effect: allow
+  # `git remote add/remove/rename/set-url` belongs to the `git` agent: deny the family, re-allow the read-only forms
   - action: shell
     resource: "git remote*"
+    effect: deny
+  - action: shell
+    resource: "git remote"
+    effect: allow
+  - action: shell
+    resource: "git remote -v*"
+    effect: allow
+  - action: shell
+    resource: "git remote get-url*"
     effect: allow
   - action: shell
     resource: "ls*"
@@ -154,6 +186,21 @@ permissions:
     resource: "git merge*"
     effect: deny
   - action: shell
+    resource: "git add*"
+    effect: deny
+  - action: shell
+    resource: "git checkout*"
+    effect: deny
+  - action: shell
+    resource: "git switch*"
+    effect: deny
+  - action: shell
+    resource: "git revert*"
+    effect: deny
+  - action: shell
+    resource: "gh pr*"
+    effect: deny
+  - action: shell
     resource: "* > *"
     effect: deny
   - action: shell
@@ -244,7 +291,7 @@ If the task is ambiguous or the AC conflict with the codebase, stop and report `
 
 ## Guardrail (hard)
 
-- NO commits, pushes, or any git mutations (`git commit`/`push`/`reset`/`merge`/`clean` are denied) — the orchestrator delegates VCS work to `git`.
+- NO commits, pushes, or any git mutations (`git commit`/`push`/`reset`/`merge`/`clean`/`add`/`checkout`/`switch`/`revert` and branch/PR management are denied) — the orchestrator delegates VCS work to `git`.
 - Do not touch `.env*`, secrets, credentials, or key material — if the task seems to require it, stop and report `blocked`.
 - Edits only within the task scope (task description Goal/AC/Constraints). Incidental fixes you notice → list them in your completion comment, do not apply them silently.
 
