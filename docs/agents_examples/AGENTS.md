@@ -6,7 +6,7 @@
 
 - Code lives in the repo; design specs and notes live under `docs/` in the repo. The tracker holds state, files hold content.
 - Interaction channel = the ziptask tracker, always (exception: the git subagent, see Git operations). The orchestrator creates tasks with a FULL description (goal, acceptance criteria, constraints, deliverable — English) and spawns subagents with a minimal prompt: `Task #N. Do not commit. English only.` plus special instructions only when they deviate from the agent file. Follow-up context and outcomes travel as tracker comments. No task.md contracts, no result files.
-- Parallelism: repo mutators (developer, tester, docwriter, devops, git) — up to 4 concurrent per project on disjoint files; readers (architect, analyst) — unlimited between themselves.
+- Parallelism: repo mutators (developer, tester, docwriter, devops, git) — up to 4 concurrent per project on disjoint files; readers (architect, analyst, reviewer) — unlimited between themselves.
 
 ## Tracker — orchestrator duties
 
