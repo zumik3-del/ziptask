@@ -1,12 +1,14 @@
 import { openDatabase, closeDatabase } from '../src/db/db'
 import { parseDeps } from '../src/core/deps'
+import { TERMINAL_STATUSES_SQL } from '../src/db/sql'
+import { DEFAULT_DB_PATH } from '../src/defaults'
 
 function parseArg(name: string): string | undefined {
   const idx = process.argv.indexOf(name)
   return idx !== -1 ? process.argv[idx + 1] : undefined
 }
 
-const dbPath = parseArg('--db') ?? process.env.ZIPTASK_DB ?? './data/ziptask.db'
+const dbPath = parseArg('--db') ?? process.env.ZIPTASK_DB ?? DEFAULT_DB_PATH
 const daysRaw = parseArg('--days') ?? process.env.PRUNE_OLDER_THAN_DAYS ?? '30'
 const days = Number(daysRaw)
 const apply = process.argv.includes('--apply')
@@ -25,12 +27,12 @@ try {
   // children: prune only terminal tasks older than the cutoff that no live task references and
   // that have no children of their own. comments/audit_log cascade on task delete (schema v4).
   const liveDeps = new Set<number>()
-  for (const row of db.query("SELECT depends_on FROM tasks WHERE status NOT IN ('done','failed','canceled')").all() as Array<{ depends_on: string }>) {
+  for (const row of db.query(`SELECT depends_on FROM tasks WHERE status NOT IN ${TERMINAL_STATUSES_SQL}`).all() as Array<{ depends_on: string }>) {
     for (const id of parseDeps(row.depends_on)) liveDeps.add(id)
   }
   const candidates = db.query(
     `SELECT id, title, status, completed_at FROM tasks
-     WHERE status IN ('done','failed','canceled') AND completed_at IS NOT NULL AND completed_at < ?
+     WHERE status IN ${TERMINAL_STATUSES_SQL} AND completed_at IS NOT NULL AND completed_at < ?
        AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.epic_id = tasks.id)
      ORDER BY id`
   ).all(cutoff) as Array<{ id: number; title: string; status: string; completed_at: string }>
