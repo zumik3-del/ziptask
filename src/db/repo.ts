@@ -110,7 +110,11 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
 
   queuedCandidates(limit: number, projectId: number, offset?: number): Task[] {
     const n = clampLimit(limit, 0)
-    const o = clampLimit(offset ?? 0, 0)
+    // The offset is an internal scan cursor, not a result limit: clampLimit's default ceiling
+    // (MAX_RESULT_LIMIT) would pin it at 1000, so every page past that point would re-read the
+    // same rows and the scan would never reach the tail of the queue. Only the caller's own
+    // ceiling bounds the cursor.
+    const o = clampLimit(offset ?? 0, 0, Number.MAX_SAFE_INTEGER)
     const rows = this.db.query(
       `SELECT t.*, p.slug AS project FROM tasks t INDEXED BY idx_tasks_queued_candidates LEFT JOIN projects p ON p.id = t.project_id WHERE t.status = 'queued' AND t.is_epic = 0 AND t.project_id = ?
        ORDER BY ${PRIORITY_ORDER_SQL}, t.created_at ASC, t.id ASC
