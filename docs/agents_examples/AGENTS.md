@@ -23,11 +23,11 @@ Subagents drive their own task claims per the ziptask MCP `instructions` (the se
 
 ## Instruction files
 
-- `AGENTS.md` files (project root or global `~/.config/opencode/AGENTS.md`) are orchestrator-owned: subagents never edit them — propose changes via a tracker comment.
+- `AGENTS.md` files (project root or global `~/.config/opencode/AGENTS.md`) are orchestrator-owned: subagents never edit them — every agent denies editing them (`AGENTS.md` and `**/AGENTS.md`; the read-only agents deny `edit` outright); propose changes via a tracker comment.
 
 ## Permissions
 
-- Every agent ships a native V2 `permissions` list — an ordered set of `action`/`resource`/`effect` rules, last match wins. The shell commands live under `action: shell`: the first shell rule is `resource: "*"` with `effect: ask` (nothing runs silently), then an explicit allow-list of read-only inspection commands (`git status*`, `ls*`, `cat*`, `rg*`, …), then `effect: deny` for dangerous operations (`rm*`, `mv*`, `cp*`, shell redirects, `sed*`). Git mutations are the one exception: only the `git` agent's allow-list carries them (`git commit*`, `git push*`, `git merge*`); every other agent denies `git commit*`, `git push*`, `git reset*`, `git clean*` and `git merge*`.
+- Every agent ships a native V2 `permissions` list — an ordered set of `action`/`resource`/`effect` rules, last match wins. The shell commands live under `action: shell`: the first shell rule is `resource: "*"` with `effect: ask` (nothing runs silently), then an explicit allow-list of read-only inspection commands (`git status*`, `ls*`, `cat*`, `rg*`, …), then `effect: deny` for dangerous operations (`rm*`, `mv*`, `cp*`, shell redirects, `sed*`). Git mutations are the one exception: only the `git` agent's allow-list carries them (`git commit*`, `git push*`, `git merge*`); every other agent denies `git commit*`, `git push*`, `git reset*`, `git clean*`, `git merge*`, `git add*`, `git checkout*`, `git switch*`, `git revert*` and `gh pr*`, and denies `git branch*` and `git remote*` while re-allowing only their read-only forms — a forbidden verb is refused, not merely left unlisted.
 - The agents that run builds/tests (`developer`, `devops`, `tester`) carry an `# ADD YOUR STACK'S COMMANDS HERE` block in their `permissions` list. Add the build/test/lint commands of YOUR toolchain there, as `action: shell` entries taken from your project's `AGENTS.md` verification commands. Build/test/lint commands are intentionally not listed in the examples; anything left unlisted keeps the `ask` effect, so nothing runs silently and extension is safe and incremental.
 
 ## Epics — orchestrator-owned
@@ -47,7 +47,7 @@ Epics (is_epic) are created and managed only by the orchestrator. Subagents may 
 
 ## Git operations
 
-- Never run `git commit`, `git push`, `git revert`, or manage branches/PRs yourself.
+- Never run `git commit`, `git push`, `git revert`, or manage branches/PRs yourself — every agent but `git` denies those verbs (see *Permissions*), so the command is refused instead of running.
 - Delegate all commit/push/PR/revert work to the `git` subagent.
 - You may still run read-only git commands (`git status`, `git diff`, `git log`) to inspect state before delegating.
 - **The git subagent is NOT a tracker client**: it does not use ziptask and receives no tracker tasks. The orchestrator issues direct commands (commit/push/PR/tag/release) and gets reports in chat.
@@ -72,7 +72,7 @@ Epics (is_epic) are created and managed only by the orchestrator. Subagents may 
 
 - Delegate test writing, test runs, and test audits to the `tester` subagent.
 - When a task requires writing new tests, running the test suite, or reviewing test coverage, use the `tester` subagent.
-- The `tester` agent owns the smoke/heavy integration suites: run once per batch (after all tasks in the batch reach `review`/`done`), not per-commit; developers never run them.
+- The `tester` agent owns the smoke/heavy integration suites: run once per batch (after all tasks in the batch reach `review`/`done`), not per-commit; developers never run them — `developer`, `reviewer` and `architect` deny the suite outright (`*smoke*`).
 - The `tester` agent never commits or pushes — delegate those separately to `git`.
 
 ## Review

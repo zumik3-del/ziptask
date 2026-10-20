@@ -35,14 +35,46 @@ permissions:
   - action: shell
     resource: "git diff*"
     effect: allow
+  # branch management belongs to the `git` agent: deny the family, re-allow the read-only forms
   - action: shell
     resource: "git branch*"
+    effect: deny
+  - action: shell
+    resource: "git branch"
+    effect: allow
+  - action: shell
+    resource: "git branch -a*"
+    effect: allow
+  - action: shell
+    resource: "git branch -r*"
+    effect: allow
+  - action: shell
+    resource: "git branch -v*"
+    effect: allow
+  - action: shell
+    resource: "git branch --list *"
+    effect: allow
+  - action: shell
+    resource: "git branch --merged *"
+    effect: allow
+  - action: shell
+    resource: "git branch --show-current"
     effect: allow
   - action: shell
     resource: "git show*"
     effect: allow
+  # `git remote add/remove/rename/set-url` belongs to the `git` agent: deny the family, re-allow the read-only forms
   - action: shell
     resource: "git remote*"
+    effect: deny
+  - action: shell
+    resource: "git remote"
+    effect: allow
+  - action: shell
+    resource: "git remote -v*"
+    effect: allow
+  - action: shell
+    resource: "git remote get-url*"
     effect: allow
   - action: shell
     resource: "ls*"
@@ -144,6 +176,24 @@ permissions:
     resource: "git merge*"
     effect: deny
   - action: shell
+    resource: "git add*"
+    effect: deny
+  - action: shell
+    resource: "git checkout*"
+    effect: deny
+  - action: shell
+    resource: "git switch*"
+    effect: deny
+  - action: shell
+    resource: "git revert*"
+    effect: deny
+  - action: shell
+    resource: "gh pr*"
+    effect: deny
+  - action: shell
+    resource: "*smoke*"
+    effect: deny
+  - action: shell
     resource: "* > *"
     effect: deny
   - action: shell
@@ -158,6 +208,12 @@ permissions:
   - action: edit
     resource: "docs/**"
     effect: allow
+  - action: edit
+    resource: "AGENTS.md"
+    effect: deny
+  - action: edit
+    resource: "**/AGENTS.md"
+    effect: deny
   - action: todowrite
     resource: "*"
     effect: deny
@@ -218,7 +274,7 @@ If the request is ambiguous, pick the most likely mode and state which one you a
 
 ## Guardrail (hard)
 
-- Repo code is READ-ONLY — `edit` is denied outside `docs/`. `shell` only for observability (`git log/status/diff/show/remote/branch`, `ls`, `cat`, `tree`, `find`, `grep`, and read-only verification commands from the project's `AGENTS.md`). Never write, truncate, move, delete repo files from the shell (no `>`, `>>`, `sed -i`, `rm`, `git commit`, `git push`, `mv`, `cp`). No git mutations, no smoke suite, no state-mutating commands.
+- Repo code is READ-ONLY — `edit` is denied outside `docs/`, and the `AGENTS.md` files are denied even under `docs/`. `shell` only for observability (`git log/status/diff/show`, the read-only `git remote`/`git branch` forms, `ls`, `cat`, `tree`, `find`, `grep`, and read-only verification commands from the project's `AGENTS.md`). Never write, truncate, move, delete repo files from the shell (no `>`, `>>`, `sed -i`, `rm`, `git commit`, `git push`, `mv`, `cp`). No git mutations, no smoke suite, no state-mutating commands — the git mutations and the smoke suite are denied, so they cannot slip through as a prompt.
 - Writes: ONLY your own docs under `docs/`.
 - If a task inherently requires changing repo files, state that clearly in your completion comment (`blocked`) — the orchestrator will delegate it to an editing role.
 

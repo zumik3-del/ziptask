@@ -38,11 +38,43 @@ permissions:
   - action: shell
     resource: "git show*"
     effect: allow
+  # branch management belongs to the `git` agent: deny the family, re-allow the read-only forms
   - action: shell
     resource: "git branch*"
+    effect: deny
+  - action: shell
+    resource: "git branch"
     effect: allow
   - action: shell
+    resource: "git branch -a*"
+    effect: allow
+  - action: shell
+    resource: "git branch -r*"
+    effect: allow
+  - action: shell
+    resource: "git branch -v*"
+    effect: allow
+  - action: shell
+    resource: "git branch --list *"
+    effect: allow
+  - action: shell
+    resource: "git branch --merged *"
+    effect: allow
+  - action: shell
+    resource: "git branch --show-current"
+    effect: allow
+  # `git remote add/remove/rename/set-url` belongs to the `git` agent: deny the family, re-allow the read-only forms
+  - action: shell
     resource: "git remote*"
+    effect: deny
+  - action: shell
+    resource: "git remote"
+    effect: allow
+  - action: shell
+    resource: "git remote -v*"
+    effect: allow
+  - action: shell
+    resource: "git remote get-url*"
     effect: allow
   - action: shell
     resource: "ls*"
@@ -87,6 +119,9 @@ permissions:
     resource: "true*"
     effect: allow
   - action: shell
+    resource: "*smoke*"
+    effect: deny
+  - action: shell
     resource: "timeout* rm *"
     effect: deny
   - action: shell
@@ -118,6 +153,21 @@ permissions:
     effect: deny
   - action: shell
     resource: "git merge*"
+    effect: deny
+  - action: shell
+    resource: "git add*"
+    effect: deny
+  - action: shell
+    resource: "git checkout*"
+    effect: deny
+  - action: shell
+    resource: "git switch*"
+    effect: deny
+  - action: shell
+    resource: "git revert*"
+    effect: deny
+  - action: shell
+    resource: "gh pr*"
     effect: deny
   - action: shell
     resource: "* > *"
@@ -192,8 +242,8 @@ You are a senior staff-engineer code reviewer. You ASSESS a change before merge 
 
 ## Guardrail (hard)
 
-- Repo files are READ-ONLY — `edit` is denied; no commits, no git mutations. You review and report; others apply fixes.
-- Never run the smoke suite or any state-mutating command; verification is read-only (typecheck, lint, focused tests, git inspection).
+- Repo files are READ-ONLY — `edit` is denied; no commits, no git mutations (`git commit`/`push`/`reset`/`clean`/`merge`/`add`/`checkout`/`switch`/`revert` and branch/PR management are denied). You review and report; others apply fixes.
+- Never run the smoke suite (it is denied — `*smoke*`, tester-owned) or any state-mutating command; verification is read-only (typecheck, lint, focused tests, git inspection).
 - Findings go in the completion comment. No file writes.
 
 ## Style

@@ -49,13 +49,13 @@ Keep the workflow, swap the carrier.
 
 ## Configure your stack
 
-Every agent ships a `shell` policy in its `permissions` list: `resource: "*"` → `effect: ask` first, then an explicit allow-list of read-only commands (`git status*`, `ls*`, `cat*`, `rg*`, …), then `effect: deny` for dangerous operations (`rm*`, `mv*`, `cp*`, shell redirections). Git mutations are the one exception: only the `git` agent's allow-list carries them (`git commit*`, `git push*`, `git merge*`); every other agent denies `git commit*`, `git push*`, `git reset*`, `git clean*` and `git merge*`. Build/test/lint commands are intentionally **not** listed — add the ones your toolchain uses as `shell` entries in `developer.md`, `tester.md`, and `devops.md` (the examples' `AGENTS.md` calls this the `# ADD YOUR STACK'S COMMANDS HERE` block), and keep them in sync with your project's `AGENTS.md` verification commands. Anything left unlisted keeps the `ask` effect, so nothing runs silently and extension is incremental.
+Every agent ships a `shell` policy in its `permissions` list: `resource: "*"` → `effect: ask` first, then an explicit allow-list of read-only commands (`git status*`, `ls*`, `cat*`, `rg*`, …), then `effect: deny` for dangerous operations (`rm*`, `mv*`, `cp*`, shell redirections, `sed*`). Git mutations are the one exception: only the `git` agent's allow-list carries them (`git commit*`, `git push*`, `git merge*`); every other agent denies `git commit*`, `git push*`, `git reset*`, `git clean*`, `git merge*`, `git add*`, `git checkout*`, `git switch*`, `git revert*` and `gh pr*`, and denies `git branch*` and `git remote*` while re-allowing only their read-only forms — a forbidden verb is refused, not merely left unlisted. Build/test/lint commands are intentionally **not** listed — add the ones your toolchain uses as `shell` entries in `developer.md`, `tester.md`, and `devops.md` (the examples' `AGENTS.md` calls this the `# ADD YOUR STACK'S COMMANDS HERE` block), and keep them in sync with your project's `AGENTS.md` verification commands. Anything left unlisted keeps the `ask` effect, so nothing runs silently and extension is incremental.
 
 ## Customize
 
 - **Roles & delegation map** — edit the sections in `AGENTS.md` (which agent owns what, who may create tasks, who may commit).
 - **Model per agent** — uncomment `# model: provider/model-id` in any agent file; omit it to inherit the invoking session's model.
-- **Permissions** — the model is explained in `AGENTS.md` → *Permissions*. Tighten `edit` globs where a role is meant to be narrow (for example, restrict `docwriter` to `docs/**`).
+- **Permissions** — the model is explained in `AGENTS.md` → *Permissions*. Tighten `edit` globs where a role is meant to be narrow: `analyst` and `architect` are already limited to `docs/**` (and their `AGENTS.md` files stay denied), so narrow `docwriter` the same way if its role warrants it.
 - Prune roles you don't need; the workflow degrades gracefully.
 
 ## Notes
