@@ -177,10 +177,24 @@ export const MAX_DESCRIPTION_LENGTH = 20000
 export const MAX_DEPENDS_ON = 100
 export const MAX_RESULT_LIMIT = 1000
 export const MAX_SAFE_TIMESTAMP_MS = 8_640_000_000_000_000
+// The ceiling of an internal pagination cursor (an OFFSET). A cursor must not be capped at the
+// result ceiling: a scan that re-reads the same page never reaches the tail of the queue.
+export const MAX_CURSOR_OFFSET = Number.MAX_SAFE_INTEGER
 
-export function clampLimit(value: number | undefined, fallback: number, max = MAX_RESULT_LIMIT): number {
+function clampValue(value: number | undefined, fallback: number, max: number): number {
   if (value === undefined) return fallback
   const n = Math.floor(value)
   if (!Number.isFinite(n) || n <= 0) return fallback
   return Math.min(n, max)
+}
+
+// A user-facing result limit: the ceiling is the result ceiling, so no call site can widen it by
+// accident and no cursor can be routed through it.
+export function clampLimit(value: number | undefined, fallback: number): number {
+  return clampValue(value, fallback, MAX_RESULT_LIMIT)
+}
+
+// An internal pagination cursor: the ceiling is the cursor ceiling, never the result ceiling.
+export function clampCursor(value: number | undefined, fallback: number): number {
+  return clampValue(value, fallback, MAX_CURSOR_OFFSET)
 }
