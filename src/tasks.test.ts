@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { isValidTransition, STATUS_CODES, TASK_STATUSES, TERMINAL_STATUSES, nowIso } from './core/tasks'
+import { isValidTransition, STATUS_CODES, TASK_STATUSES, TERMINAL_STATUSES, nowIso, codePointLength } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { TERMINAL_STATUSES_SQL } from './db/sql'
@@ -902,5 +902,37 @@ describe('TaskRepo port conformance (#812)', () => {
     } finally {
       closeTestDb(db3)
     }
+  })
+})
+
+// #1874: `codePointLength` is the ONE measurement every create_task string bound uses, and zod v4
+// measures `maxLength` in the same unit. If the helper counted UTF-16 units instead of code
+// points, the advertised schema and the service guard would drift apart at the boundary - which
+// is exactly what happened before the fix.
+describe('codePointLength (#1874)', () => {
+  // U+1F600: one code point, two UTF-16 units.
+  const EMOJI = '\u{1F600}'
+
+  test('an ASCII string counts one code point per unit', () => {
+    expect(codePointLength('')).toBe(0)
+    expect(codePointLength('abc')).toBe(3)
+  })
+
+  test('an emoji counts as one code point, not two UTF-16 units', () => {
+    expect(EMOJI.length).toBe(2)
+    expect(codePointLength(EMOJI)).toBe(1)
+    expect(codePointLength(EMOJI.repeat(200))).toBe(200)
+  })
+
+  test('a mixed string counts both kinds of character', () => {
+    expect(codePointLength('a' + EMOJI)).toBe(2)
+    expect(codePointLength('a'.repeat(100) + EMOJI.repeat(100))).toBe(200)
+  })
+
+  test('an unpaired surrogate counts as one code point, the way the schema layer counts it', () => {
+    // A lone surrogate is one unit in a JS string and one element when the string is spread, so
+    // the schema and the guard measure it the same way.
+    expect(codePointLength('\uD800')).toBe(1)
+    expect(codePointLength('\uD800\uD800')).toBe(2)
   })
 })
