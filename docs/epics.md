@@ -1,6 +1,6 @@
 # Epic → sub-task workflow
 
-Epics are structural containers, not work. They cannot be claimed, hold no lease, and start in the `open` status (code 8) — a non-terminal status whose only outgoing transitions are to terminal outcomes (`done`, `failed`, `canceled`).
+Epics are structural containers, not work. They cannot be claimed, hold no lease, and start in the `open` status (code 8) — a status that is still open for work, whose only outgoing transitions are to closed outcomes (`done`, `failed`, `canceled`). The normative transition table ships inside the server itself, as the `Statuses` section of the MCP `instructions` (`src/mcp/instructions.md`) that every client receives on initialize; this page describes the epic-specific shape of it.
 
 ## Declaring an epic
 
@@ -19,7 +19,7 @@ Promotion is confined to a **`queued`** target: rewriting the status drops the l
 INVALID: cannot promote #42 from in_progress: only a queued task can become an epic
 ```
 
-Attaching a *further* child to an epic that already exists promotes nothing: the target's status does not matter for the promotion. A terminal epic is still refused up front (`INVALID: cannot attach to a terminal task`) — it is the terminal status, not the promotion, that refuses the attach.
+Attaching a *further* child to an epic that already exists promotes nothing: the target's status does not matter for the promotion. A closed epic is still refused up front (`INVALID: cannot attach to a terminal task`) — it is the closed status, not the promotion, that refuses the attach.
 
 The target is re-checked **inside the write transaction**, because a rival can claim it between the guard read and the write. A target that left the state the guard accepted is refused with
 
@@ -45,15 +45,16 @@ Nested membership is rejected (epic cannot be a sub-task; sub-task cannot be an 
 ## Status and transitions
 
 - An epic's status is `open` while work is in flight; it is never `queued`, `in_progress`, `review` or `blocked`.
-- `open → done`, `open → failed`, `open → canceled` are the only outgoing transitions. `canceled` withdraws the epic.
-- Epics are never leased: `claim_task` and any non-terminal `in_progress` acquisition are refused with `INVALID: #N is an epic, not claimable`. There is no lease-free on-ramp through intermediate statuses anymore.
+- `open → done`, `open → failed`, `open → canceled` are the only outgoing transitions from `open`. `canceled` withdraws the epic.
+- A failed epic is closed for work but not stuck: `failed → canceled` is the administrative withdrawal, the same edge a failed task has — the failure stands, the epic is only closed out, and it is never reopened. It carries the same precondition as any other epic close (every child closed for work), so cancel the still-open sub-tasks first.
+- Epics are never leased: `claim_task` and any non-renewal `in_progress` acquisition are refused with `INVALID: #N is an epic, not claimable`. There is no lease-free on-ramp through intermediate statuses anymore.
 
 ## Roll-up and closure
 
-- `get_task fields:["subtasks"]` on the epic returns `{total, open, done, failed, canceled}` (open = non-terminal children; `canceled` counts withdrawn children, which are terminal).
+- `get_task fields:["subtasks"]` on the epic returns `{total, open, done, failed, canceled}` (open = children that are not closed for work; `canceled` counts withdrawn children, which are closed for work).
 - `list_tasks epic_id:<epic-id>` returns only children (it is an enumerating call, so it also needs `project`).
-- The epic timeline (`get_timeline`) mirrors terminal sub-task events: `subtask_add`, `subtask_done`, `subtask_failed` (canceled children emit no mirror row).
-- `update_status(epic→done|failed|canceled)` is guarded: rejected with `CHILDREN: N sub-tasks not terminal` while any child is non-terminal (canceled children are terminal and do not block closure).
+- The epic timeline (`get_timeline`) mirrors closed sub-task events: `subtask_add`, `subtask_done`, `subtask_failed` (canceled children emit no mirror row).
+- `update_status(epic→done|failed|canceled)` is guarded: rejected with `CHILDREN: N sub-tasks not terminal` while any child is not closed for work (canceled children are closed for work and do not block closure). The same guard covers the withdrawal edge `failed → canceled`.
 
 ## Constraints
 
@@ -71,7 +72,7 @@ Nested membership is rejected (epic cannot be a sub-task; sub-task cannot be an 
 | `epic_id` target that left its state between the guard and the write | `CONFLICT: epic #N changed state during promotion` |
 | Explicit `claim_task` on an epic | `INVALID: #N is an epic, not claimable` |
 | `queued`/`in_progress`/`review`/`blocked` on an epic | `INVALID: <status> → <status>` (epics only accept `done`/`failed`/`canceled`) |
-| Terminal close with non-terminal children | `CHILDREN: N sub-tasks not terminal` |
+| Close with children that are not closed for work | `CHILDREN: N sub-tasks not terminal` |
 
 ## Re-parent or detach (escape hatch)
 
@@ -89,5 +90,5 @@ The target epic's roll-up is derived on read, so no counter recalculation is nee
 ## Notes
 
 - `epic_id` is immutable after creation (no re-parent/detach tool) — use the SQL recipe above.
-- `failed`/`canceled` on an epic are terminal; `done` closes it. There is no `blocked` state for epics.
+- `done`, `failed` and `canceled` close an epic; `done` is the success outcome, `canceled` the withdrawal. A failed epic can still be withdrawn to `canceled`. There is no `blocked` state for epics.
 - A migration (007) rewrote pre-existing non-terminal epics (`queued`/`in_progress`/`review`/`blocked`) to `open` and cleared their lease metadata.
