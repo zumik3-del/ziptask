@@ -3,10 +3,7 @@ import type { ProjectRow, ProjectStore, SvcError, SvcResult } from './types'
 import { fail, ok } from './result'
 import { requiredError } from './validation'
 import { nowIso } from './tasks'
-
-export const PROJECT_SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]{0,31}$/
-export const PROJECT_SLUG_MAX = 32
-export const RESERVED_PROJECT_SLUG = 'legacy'
+import { PROJECT_SLUG_PATTERN, PROJECT_SLUG_MAX, RESERVED_PROJECT_SLUG } from './project-slug'
 
 // Lowercase, `[^a-z0-9._-] -> '-'`, leading non-alphanumerics stripped, truncated to 32.
 export function normalizeSlug(input: string): string {

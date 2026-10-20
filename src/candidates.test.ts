@@ -33,7 +33,7 @@ function seedQueued(title: string, opts: { dependsOn?: number[]; createdAt?: str
     depends_on: JSON.stringify(opts.dependsOn ?? []),
     now: opts.createdAt ?? CREATED_AT,
     projectId
-  })
+  }).id
 }
 
 // The ids of the listed queue rows, in listing order.

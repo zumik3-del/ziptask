@@ -1,4 +1,4 @@
-import type { Task, TaskStatus, TaskPriority, CommentType } from './tasks'
+import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, CommentType } from './tasks'
 
 // Lease reaping needs only the sweep, its CAS transition and (via AuditStore) the audit row.
 export interface LeaseStore {
@@ -11,7 +11,7 @@ export interface TaskStore {
   getTaskRow(id: number): Task | null
   insertTask(task: { title: string; description: string | null; priority: TaskPriority;
     assignee: string | null; reporter: string; depends_on: string; now: string; maxAttempts?: number
-    epicId?: number; isEpic?: boolean; projectId?: number | null }): number
+    epicId?: number; isEpic?: boolean; projectId?: number | null }): { id: number; status: CreatedTaskStatus }
   deleteTask(id: number): void
   listTasks(filters: { assignee?: string; status?: TaskStatus; updatedSinceIso?: string; epicId?: number; isEpic?: boolean; limit: number; projectId?: number })
     : { rows: Task[]; total: number }
@@ -55,6 +55,24 @@ export interface AuditStore {
 
 // Aggregate store implemented by TaskRepo; use this when a component needs every slice.
 export interface Store extends TaskStore, ProjectStore, CommentStore, AuditStore, LeaseStore {}
+
+// The store slices the services depend on: a service names the methods it uses, so it cannot
+// reach the whole aggregate. The same Pick pattern the guards apply locally (src/core/guards.ts).
+export type LifecycleStore = Pick<TaskStore,
+  'getTaskRow' | 'insertTask' | 'deleteTask' | 'depsOf' | 'statusesOf' | 'batchTasks'
+  | 'markClaimed' | 'transitionStatus' | 'transaction' | 'nonTerminalChildCount'
+  | 'promoteEpicWithMirror' | 'appendEpicAuditMirror' | 'queuedCandidates'
+> & Pick<CommentStore, 'insertComment'> & Pick<AuditStore, 'auditAppend'> & LeaseStore
+
+export type QueryStore = Pick<TaskStore,
+  'getTaskRow' | 'statusesOf' | 'batchTasks' | 'listTasks' | 'queuedCandidates' | 'childStatusCounts'
+> & Pick<CommentStore, 'insertComment' | 'commentsOf'> & AuditStore & LeaseStore
+
+// The candidate scan reads the queue page and the dependency statuses, nothing else.
+export type CandidateStore = Pick<TaskStore, 'queuedCandidates' | 'statusesOf'>
+
+// The composition root wires the slices into the services below it, so it depends on their union.
+export type TaskServiceStore = LifecycleStore & QueryStore & ProjectStore
 
 // The internal id never crosses the tool boundary; `slug` is the identity every call speaks.
 export type ProjectRow = {

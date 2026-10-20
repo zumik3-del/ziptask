@@ -110,6 +110,7 @@
                       "Task",
                       "TaskStatus",
                       "TaskPriority",
+                      "CreatedTaskStatus",
                       "CommentType",
                       "clampLimit",
                       "Clock",

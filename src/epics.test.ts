@@ -973,7 +973,7 @@ describe('an epic takes no assignee (review #1740 P2)', () => {
     const id = repo.insertTask({
       title: 'Epic', description: null, priority: 'p2', assignee: 'boss', reporter: 'dev',
       depends_on: '[]', now: nowIso(), isEpic: true, projectId: testProjectId(repo)
-    })
+    }).id
     const task = getTaskRow(db, id)
     expect(task.status).toBe('open')
     expect(task.is_epic).toBe(true)

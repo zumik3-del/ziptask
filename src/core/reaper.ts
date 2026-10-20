@@ -11,7 +11,7 @@ export class LeaseReaper {
   private readonly clock: Clock | null
 
   constructor(
-    private readonly store: LeaseStore & AuditStore,
+    private readonly store: LeaseStore & Pick<AuditStore, 'auditAppend'>,
     private readonly reapCooldownSec: number,
     private readonly auditLog: boolean,
     clock?: unknown

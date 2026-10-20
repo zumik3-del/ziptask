@@ -3,7 +3,7 @@ import { isValidTransition, TERMINAL_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGT
 import type { TaskStore, SvcError } from './types'
 import { parseDeps, depsSatisfied } from './deps'
 import { requiredError, tooLongError, epicError } from './validation'
-import { RESERVED_PROJECT_SLUG } from './projects'
+import { RESERVED_PROJECT_SLUG } from './project-slug'
 
 // Only the reads a guard performs: a guard never writes, so it cannot reach the mutating half.
 type GuardStore = Pick<TaskStore, 'batchTasks' | 'getTaskRow' | 'statusesOf' | 'nonTerminalChildCount'>

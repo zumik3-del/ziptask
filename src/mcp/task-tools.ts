@@ -2,8 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
 import type { TaskStatus, TaskPriority } from '../core/tasks'
-import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON } from '../core/tasks'
-import { TASK_PRIORITIES } from '../defaults'
+import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON } from '../core/tasks'
 import { foldResult } from '../core/result'
 import {
   type ToolResult, jsonResult, textResult, errorResult, errorTool, toToolResult, pickFields, rejectUnknownArgs,

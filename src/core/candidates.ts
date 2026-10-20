@@ -1,5 +1,5 @@
 import type { Task } from './tasks'
-import type { TaskStore } from './types'
+import type { CandidateStore } from './types'
 import { parseDeps, depsSatisfied } from './deps'
 import { CANDIDATES_PAGE_SIZE } from '../defaults'
 
@@ -8,7 +8,7 @@ import { CANDIDATES_PAGE_SIZE } from '../defaults'
 // queue at page granularity: the loop stops once the offset has reached the ceiling, so at most
 // `ceiling + CANDIDATES_PAGE_SIZE - 1` rows are read before it gives up on the rest. Each task is
 // yielded at most once, so an overlapping page can never duplicate a row.
-export function readyCandidates(store: TaskStore, limit: number, ceiling: number, projectId: number): Task[] {
+export function readyCandidates(store: CandidateStore, limit: number, ceiling: number, projectId: number): Task[] {
   const ready: Task[] = []
   if (limit <= 0) return ready
   const depCache = new Map<number, number[]>()
