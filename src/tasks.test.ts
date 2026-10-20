@@ -6,7 +6,7 @@ import { TaskService } from './core/service'
 import { TERMINAL_STATUSES_SQL } from './db/sql'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus, handleListTasks
-} from './mcp/tools'
+} from './mcp/task-tools'
 import {
   createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, testProjectId, driveToDone,
   type CreateTaskRowOpts

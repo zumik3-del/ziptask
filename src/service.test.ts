@@ -6,8 +6,10 @@ import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
   handleCreateTask, handleClaimTask, handleUpdateStatus,
-  handleAddComment, handleListQueue, handleGetTimeline, handleListTasks, registerAllTools
-} from './mcp/tools'
+  handleListQueue, handleListTasks
+} from './mcp/task-tools'
+import { handleAddComment, handleGetTimeline } from './mcp/comment-tools'
+import { registerAllTools } from './mcp/tools'
 import {
   createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, taskStoreStubs, testProjectId,
   type CreateTaskRowOpts

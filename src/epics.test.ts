@@ -9,7 +9,7 @@ import { MIGRATIONS } from './db/migrations'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus,
   handleListQueue, handleListTasks
-} from './mcp/tools'
+} from './mcp/task-tools'
 import {
   createTestDb, closeTestDb, getTaskRow, json, text, driveToDone, makeTempDbPath, removeTempDb, testProjectId, seedProject
 } from './test-context'
@@ -624,7 +624,7 @@ describe('atomic epic promotion (#108)', () => {
 
   test('direct promoteEpicWithMirror call is atomic (both or neither)', () => {
     const epicId = json(handleCreateTask(svc, { title: 'DirectEpic', reporter: 'dev' })).id
-    ;(svc as any).store.promoteEpicWithMirror(
+    ;repo.promoteEpicWithMirror(
       epicId, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true
     )
     const epic = getTaskRow(db, epicId)
@@ -729,7 +729,7 @@ describe('promoteEpicWithMirror is a no-op off the queued path (#1745)', () => {
       expect(before.assignee).toBe('worker')
       if (status === 'in_progress') expect(before.lease_expires_at).not.toBeNull()
 
-      ;(svc as any).store.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
+      ;repo.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
 
       const after = getTaskRow(db, target)!
       expect(after.is_epic).toBe(false)
@@ -748,7 +748,7 @@ describe('promoteEpicWithMirror is a no-op off the queued path (#1745)', () => {
     expect(before.assignee).toBeNull()
     expect(before.lease_expires_at).toBeNull()
 
-    ;(svc as any).store.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
+    ;repo.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
 
     const after = getTaskRow(db, target)!
     expect(after.is_epic).toBe(true)

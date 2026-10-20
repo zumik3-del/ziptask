@@ -5,8 +5,9 @@ import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { formatError } from './core/result'
 import {
-  handleCreateTask, handleGetTask, handleUpdateStatus, handleGetTimeline, handleListTasks
-} from './mcp/tools'
+  handleCreateTask, handleGetTask, handleUpdateStatus, handleListTasks
+} from './mcp/task-tools'
+import { handleGetTimeline } from './mcp/comment-tools'
 import { createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, driveToDone } from './test-context'
 
 // F2 (#1065) lease heartbeat + F3 (#1066) attempts recovery, against the production symbols

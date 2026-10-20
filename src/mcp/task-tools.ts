@@ -113,7 +113,10 @@ export function handleListTasks(svc: TaskService, args: {
     const withAssignee = args.fields?.includes('assignee') ?? false
     return foldResult(svc.getTasksByIds(args.ids), ({ items }) => {
       const lines = items.map(({ id, task }) => {
-        if (!task) return withAssignee ? pipeJoin(id, 0, '-') : pipeJoin(id, 0)
+        if (!task) {
+          const code = statusToCode('not_found')
+          return withAssignee ? pipeJoin(id, code, '-') : pipeJoin(id, code)
+        }
         const code = statusToCode(task.status)
         return withAssignee ? pipeJoin(id, code, task.assignee ?? '-') : pipeJoin(id, code)
       })
@@ -175,8 +178,8 @@ export function handleListQueue(svc: TaskService, args: { limit?: number; projec
   const unknown = rejectUnknownArgs('list_queue', LIST_QUEUE_SHAPE, args)
   if (unknown) return unknown
   return foldResult(svc.listQueue(args), (ready) => {
-    const lines = (ready ?? []).map(t => pipeJoin(t.id, t.priority, sanitizePipe(t.title)))
-    return textResult(lines.join('\n') ?? '')
+    const lines = ready.map(t => pipeJoin(t.id, t.priority, sanitizePipe(t.title)))
+    return textResult(lines.join('\n'))
   }, errorTool)
 }
 

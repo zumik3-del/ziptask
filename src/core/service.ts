@@ -38,7 +38,9 @@ export type TaskServiceOptions = {
   clock?: unknown
 }
 
-type ResolvedOptions = Required<Omit<TaskServiceOptions, 'scope' | 'clock'>> & Pick<TaskServiceOptions, 'scope'>
+// The single resolution point: the options and the clock are normalised once, and the facade
+// hands the result to both child services.
+type ResolvedOptions = Required<Omit<TaskServiceOptions, 'scope' | 'clock'>> & Pick<TaskServiceOptions, 'scope'> & { clock: Clock | null }
 
 function resolveOptions(opts: TaskServiceOptions): ResolvedOptions {
   return {
@@ -52,7 +54,8 @@ function resolveOptions(opts: TaskServiceOptions): ResolvedOptions {
     listLimit: opts.listLimit ?? DEFAULT_LIST_LIMIT,
     timelineLimit: opts.timelineLimit ?? DEFAULT_TIMELINE_LIMIT,
     queueLimit: opts.queueLimit ?? DEFAULT_QUEUE_LIMIT,
-    scope: opts.scope
+    scope: opts.scope,
+    clock: asClock(opts.clock)
   }
 }
 
@@ -94,9 +97,9 @@ export class TaskLifecycleService {
   private readonly reaper: LeaseReaper
   readonly projects: ProjectService
 
-  constructor(private store: Store, opts: TaskServiceOptions = {}, reaper?: LeaseReaper, projects?: ProjectService) {
-    this.opts = resolveOptions(opts)
-    this.clock = asClock(opts.clock)
+  constructor(private store: Store, opts: ResolvedOptions, reaper?: LeaseReaper, projects?: ProjectService) {
+    this.opts = opts
+    this.clock = opts.clock
     this.reaper = reaper ?? new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
     this.projects = projects ?? new ProjectService(store, this.opts.scope)
   }
@@ -290,9 +293,9 @@ export class TaskQueryService {
   private readonly reaper: LeaseReaper
   readonly projects: ProjectService
 
-  constructor(private store: Store, opts: TaskServiceOptions = {}, reaper?: LeaseReaper, projects?: ProjectService) {
-    this.opts = resolveOptions(opts)
-    this.clock = asClock(opts.clock)
+  constructor(private store: Store, opts: ResolvedOptions, reaper?: LeaseReaper, projects?: ProjectService) {
+    this.opts = opts
+    this.clock = opts.clock
     this.reaper = reaper ?? new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
     this.projects = projects ?? new ProjectService(store, this.opts.scope)
   }
@@ -349,7 +352,7 @@ export class TaskQueryService {
     if (!project.ok) return fail(project.error)
     this.reaper.reapIfStale()
     const limit = clampLimit(args.limit, this.opts.queueLimit)
-    return ok(readyCandidates(this.store, limit, this.opts.autoClaimCeiling, project.data.id) ?? [])
+    return ok(readyCandidates(this.store, limit, this.opts.autoClaimCeiling, project.data.id))
   }
 
   addComment(args: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
@@ -382,22 +385,16 @@ export class TaskQueryService {
 }
 
 export class TaskService {
-  protected readonly store: Store
-  private readonly opts: ResolvedOptions
-  private readonly clock: Clock | null
-  private readonly reaper: LeaseReaper
   readonly projects: ProjectService
   readonly lifecycle: TaskLifecycleService
   readonly query: TaskQueryService
 
   constructor(store: Store, opts: TaskServiceOptions = {}) {
-    this.store = store
-    this.opts = resolveOptions(opts)
-    this.clock = asClock(opts.clock)
-    this.reaper = new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
-    this.projects = new ProjectService(store, this.opts.scope)
-    this.lifecycle = new TaskLifecycleService(store, opts, this.reaper, this.projects)
-    this.query = new TaskQueryService(store, opts, this.reaper, this.projects)
+    const resolved = resolveOptions(opts)
+    const reaper = new LeaseReaper(store, resolved.reapCooldownSec, resolved.auditLog, resolved.clock)
+    this.projects = new ProjectService(store, resolved.scope)
+    this.lifecycle = new TaskLifecycleService(store, resolved, reaper, this.projects)
+    this.query = new TaskQueryService(store, resolved, reaper, this.projects)
   }
 
   createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' | 'open' }> {
@@ -445,7 +442,3 @@ export class TaskService {
   }
 }
 
-export { TaskLifecycleService as TaskLifecycle }
-export { TaskLifecycleService as LifecycleService }
-export { TaskQueryService as TaskQuery }
-export { TaskQueryService as QueryService }
