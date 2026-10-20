@@ -26,6 +26,10 @@ permissions:
   - action: shell
     resource: "*"
     effect: ask
+  # git mutations belong to the `git` agent: every git verb outside the read-only list below is refused
+  - action: shell
+    resource: "git *"
+    effect: deny
   - action: shell
     resource: "git status*"
     effect: allow
@@ -35,6 +39,9 @@ permissions:
   - action: shell
     resource: "git diff*"
     effect: allow
+  - action: shell
+    resource: "git show*"
+    effect: allow
   # branch management belongs to the `git` agent: deny the family, re-allow the read-only forms
   - action: shell
     resource: "git branch*"
@@ -43,13 +50,16 @@ permissions:
     resource: "git branch"
     effect: allow
   - action: shell
-    resource: "git branch -a*"
+    resource: "git branch -a"
     effect: allow
   - action: shell
-    resource: "git branch -r*"
+    resource: "git branch -r"
     effect: allow
   - action: shell
-    resource: "git branch -v*"
+    resource: "git branch -v"
+    effect: allow
+  - action: shell
+    resource: "git branch -vv"
     effect: allow
   - action: shell
     resource: "git branch --list *"
@@ -59,9 +69,6 @@ permissions:
     effect: allow
   - action: shell
     resource: "git branch --show-current"
-    effect: allow
-  - action: shell
-    resource: "git show*"
     effect: allow
   # `git remote add/remove/rename/set-url` belongs to the `git` agent: deny the family, re-allow the read-only forms
   - action: shell
@@ -191,6 +198,9 @@ permissions:
     resource: "gh pr*"
     effect: deny
   - action: shell
+    resource: "gh issue*"
+    effect: deny
+  - action: shell
     resource: "*smoke*"
     effect: deny
   - action: shell
@@ -274,7 +284,7 @@ If the request is ambiguous, pick the most likely mode and state which one you a
 
 ## Guardrail (hard)
 
-- Repo code is READ-ONLY — `edit` is denied outside `docs/`, and the `AGENTS.md` files are denied even under `docs/`. `shell` only for observability (`git log/status/diff/show`, the read-only `git remote`/`git branch` forms, `ls`, `cat`, `tree`, `find`, `grep`, and read-only verification commands from the project's `AGENTS.md`). Never write, truncate, move, delete repo files from the shell (no `>`, `>>`, `sed -i`, `rm`, `git commit`, `git push`, `mv`, `cp`). No git mutations, no smoke suite, no state-mutating commands — the git mutations and the smoke suite are denied, so they cannot slip through as a prompt.
+- Repo code is READ-ONLY — `edit` is denied outside `docs/`, and the `AGENTS.md` files are denied even under `docs/`. `shell` only for observability (`git log/status/diff/show`, the read-only `git remote`/`git branch` forms, `ls`, `cat`, `tree`, `find`, `grep`, and read-only verification commands from the project's `AGENTS.md`). Never write, truncate, move, delete repo files from the shell (no `>`, `>>`, `sed -i`, `rm`, `git commit`, `git push`, `mv`, `cp`). No git mutations, no smoke suite, no state-mutating commands — every git verb outside the read-only list is denied, so it cannot slip through as a prompt, and the smoke suite is denied too.
 - Writes: ONLY your own docs under `docs/`.
 - If a task inherently requires changing repo files, state that clearly in your completion comment (`blocked`) — the orchestrator will delegate it to an editing role.
 

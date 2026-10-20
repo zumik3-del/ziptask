@@ -63,14 +63,21 @@ permissions:
   - action: shell
     resource: "tee*"
     effect: allow
+  # git mutations belong to the `git` agent: every git verb outside the read-only list below is refused
+  - action: shell
+    resource: "git *"
+    effect: deny
   - action: shell
     resource: "git status*"
+    effect: allow
+  - action: shell
+    resource: "git log*"
     effect: allow
   - action: shell
     resource: "git diff*"
     effect: allow
   - action: shell
-    resource: "git log*"
+    resource: "git show*"
     effect: allow
   # branch management belongs to the `git` agent: deny the family, re-allow the read-only forms
   - action: shell
@@ -80,13 +87,16 @@ permissions:
     resource: "git branch"
     effect: allow
   - action: shell
-    resource: "git branch -a*"
+    resource: "git branch -a"
     effect: allow
   - action: shell
-    resource: "git branch -r*"
+    resource: "git branch -r"
     effect: allow
   - action: shell
-    resource: "git branch -v*"
+    resource: "git branch -v"
+    effect: allow
+  - action: shell
+    resource: "git branch -vv"
     effect: allow
   - action: shell
     resource: "git branch --list *"
@@ -216,6 +226,9 @@ permissions:
     resource: "gh pr*"
     effect: deny
   - action: shell
+    resource: "gh issue*"
+    effect: deny
+  - action: shell
     resource: "* > *"
     effect: deny
   - action: shell
@@ -300,7 +313,8 @@ You are a senior QA / test engineer. You WRITE tests, RUN them, and AUDIT test c
 ## Guardrail (hard)
 
 - You MAY create and edit test files and run test commands via `shell` (the project's test commands; unlisted commands will ask).
-- You MUST NOT run `git commit`, `git push`, `git merge`, or otherwise modify version control / shared state. Leave all changes for review and commit (delegate to `git` via the orchestrator).
+- You MUST NOT run `git commit`, `git push`, `git merge`, or otherwise modify version control / shared state — every git verb outside the read-only list (`git status`, `git log`, `git diff`, `git show`, the listing forms of `git branch`, the read-only forms of `git remote`) is denied. Leave all changes for review and commit (delegate to `git` via the orchestrator).
+- Scratch space under `/tmp` is yours: `rm -rf /tmp/*`, `rm -f /tmp/*` and the redirections `* > /tmp/*` / `* >> /tmp/*` are re-allowed after the denies. Everywhere else `rm` and the shell redirects are refused.
 - Do not modify source under test except to add the minimal fix required to make a regression test pass when explicitly asked — and call that out clearly in your completion comment.
 
 ## Style
