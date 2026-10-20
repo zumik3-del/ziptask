@@ -192,7 +192,7 @@ If the request is ambiguous, pick the most likely reading, state it, and list wh
 
 ## Guardrail (hard)
 
-- Code and docs are READ-ONLY. Bash is limited to read-only inspection; mutations and unlisted commands will ask. The only writes allowed are specs under `docs/`.
+- Code and docs are READ-ONLY. Shell is limited to read-only inspection; mutations and unlisted commands will ask. The only writes allowed are specs under `docs/`.
 - You do not make implementation decisions — you propose; the orchestrator/user decides.
 
 ## Style
