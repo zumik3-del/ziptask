@@ -12,10 +12,3 @@ export function registerAllTools(server: McpServer, svc: TaskService) {
   registerTemplateTools(server, svc)
   registerProjectTools(server, svc)
 }
-
-// Backward-compatible re-exports so existing callers/tests keep resolving handlers.
-export * from './common'
-export * from './task-tools'
-export * from './project-tools'
-export * from './comment-tools'
-export * from './template-tools'

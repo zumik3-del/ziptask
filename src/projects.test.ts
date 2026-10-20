@@ -11,9 +11,12 @@ import { DEFAULT_REPORTER } from './defaults'
 import { ENV_MAPPINGS, DEFAULTS, loadSettings } from './config'
 import {
   handleCreateTask, handleGetTask, handleListTasks, handleClaimTask,
-  handleListQueue, handleCreateProject, handleListProjects, handleUpdateProject,
-  handleDeleteProject, handleUpdateStatus, handleAddComment, handleGetTimeline
-} from './mcp/tools'
+  handleListQueue, handleUpdateStatus
+} from './mcp/task-tools'
+import { handleAddComment, handleGetTimeline } from './mcp/comment-tools'
+import {
+  handleCreateProject, handleListProjects, handleUpdateProject, handleDeleteProject
+} from './mcp/project-tools'
 import { createTestDb, closeTestDb, seedProject, json, text, makeTempDbPath, removeTempDb } from './test-context'
 
 let db: Database

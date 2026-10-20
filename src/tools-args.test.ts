@@ -5,8 +5,9 @@ import { monotonicNowMs } from './core/tasks'
 import { TaskService } from './core/service'
 import {
   handleCreateTask, handleGetTask, handleListTasks, handleClaimTask, handleUpdateStatus,
-  handleListQueue, handleAddComment, handleGetTimeline
-} from './mcp/tools'
+  handleListQueue
+} from './mcp/task-tools'
+import { handleAddComment, handleGetTimeline } from './mcp/comment-tools'
 import { createTestDb, closeTestDb, getTaskRow, json, text } from './test-context'
 
 let db: Database

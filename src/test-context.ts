@@ -13,7 +13,7 @@ import { startHttp } from './server'
 import type { StartHttpOptions } from './server'
 import {
   handleClaimTask, handleGetTask, handleUpdateStatus
-} from './mcp/tools'
+} from './mcp/task-tools'
 
 export type CreateTaskRowOpts = {
   title: string
