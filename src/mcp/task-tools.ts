@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
 import type { TaskStatus, TaskPriority } from '../core/tasks'
-import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS } from '../core/tasks'
+import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON } from '../core/tasks'
 import { TASK_PRIORITIES } from '../defaults'
 import { foldResult } from '../core/result'
 import {
@@ -12,10 +12,10 @@ import {
 
 const CREATE_TASK_SHAPE = {
   title: z.string().describe('English, <=200 chars'),
-  description: z.string().optional().describe('English; fill get_template("task") or "epic" first'),
+  description: z.string().max(MAX_DESCRIPTION_LENGTH, 'INVALID: description too long').optional().describe('English; fill get_template("task") or "epic" first; <=20000 chars'),
   priority: z.enum(TASK_PRIORITIES).optional(),
   assignee: z.string().optional(),
-  depends_on: z.array(TaskId).optional(),
+  depends_on: z.array(TaskId).max(MAX_DEPENDS_ON, 'INVALID: depends_on too long').optional(),
   reporter: z.string().optional(),
   epic: z.boolean().optional().describe('Create as an epic (not claimable); description follows get_template("epic") with required Source'),
   epic_id: TaskId.optional().describe('Attach as sub-task to an existing task'),

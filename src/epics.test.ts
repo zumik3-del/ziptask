@@ -724,9 +724,10 @@ describe('promoteEpicWithMirror is a no-op off the queued path (#1745)', () => {
     test(`a direct call on a ${status} non-epic leaves is_epic, status, assignee, lease and version untouched`, () => {
       const target = seedAt(status)
       const before = getTaskRow(db, target)!
-      // non-vacuity: the row really holds the state the defence has to protect
+      // non-vacuity: the row really holds the state the defence has to protect. Only an in_progress
+      // row carries a lease holder — `assignee` is cleared on every other status.
       expect(before.status).toBe(status)
-      expect(before.assignee).toBe('worker')
+      expect(before.assignee).toBe(status === 'in_progress' ? 'worker' : null)
       if (status === 'in_progress') expect(before.lease_expires_at).not.toBeNull()
 
       ;repo.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
