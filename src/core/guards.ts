@@ -110,6 +110,14 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   if (args.epic && args.assignee !== undefined) {
     return { code: 'INVALID', message: 'an epic takes no assignee: it holds no lease' }
   }
+  // A regular task is born `queued`, which is no lease either: the holder is written when the task
+  // is claimed. A creation-time `assignee` would be a holder without a lease, and nothing would
+  // honour it — the queue is shared and the first claim overwrites the column. So the value is
+  // refused rather than silently dropped (the same rule as the epic above), and the repo hard-writes
+  // NULL, so the invariant holds even if this guard is ever bypassed.
+  if (args.assignee !== undefined) {
+    return { code: 'INVALID', message: 'assignee is refused at creation: a task holds a lease only from in_progress' }
+  }
   // G1/G2: `legacy` parks pre-v5 rows and archived projects keep their work readable but take no new
   // task; both are refusals on the resolved project row the service already looked up.
   if (args.project === RESERVED_PROJECT_SLUG) {

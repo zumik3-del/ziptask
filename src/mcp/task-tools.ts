@@ -13,7 +13,7 @@ const CREATE_TASK_SHAPE = {
   title: z.string().describe('English, <=200 chars'),
   description: z.string().max(MAX_DESCRIPTION_LENGTH, 'INVALID: description too long').optional().describe('English; fill get_template("task") or "epic" first; <=20000 chars'),
   priority: z.enum(TASK_PRIORITIES).optional(),
-  assignee: z.string().optional(),
+  assignee: z.string().optional().describe('refused at creation: a task holds a lease only from in_progress; the claim writes the holder'),
   depends_on: z.array(TaskId).max(MAX_DEPENDS_ON, 'INVALID: depends_on too long').optional(),
   reporter: z.string().optional(),
   epic: z.boolean().optional().describe('Create as an epic (not claimable); description follows get_template("epic") with required Source'),
@@ -184,7 +184,7 @@ export function handleListQueue(svc: TaskService, args: { limit?: number; projec
 
 export function registerTaskTools(server: McpServer, svc: TaskService) {
   server.registerTool('create_task', {
-    description: 'Create task. Regular tasks start queued; epics are created open. An epic takes no assignee (it holds no lease), and epic_id promotes its target only when the target is queued. blocked is a manual flag only for regular tasks. `project` is required (no default; refused in `legacy` and in an archived project). Build description from get_template("task"); for epics use get_template("epic")',
+    description: 'Create task. Regular tasks start queued; epics are created open. A task is born without a lease, so `assignee` is refused at creation (INVALID: assignee is refused at creation: a task holds a lease only from in_progress) — the claim writes the holder. An epic takes no assignee (it holds no lease), and epic_id promotes its target only when the target is queued. blocked is a manual flag only for regular tasks. `project` is required (no default; refused in `legacy` and in an archived project). Build description from get_template("task"); for epics use get_template("epic")',
     inputSchema: z.object(CREATE_TASK_SHAPE).catchall(z.unknown())
   }, async (args) => handleCreateTask(svc, args))
 
