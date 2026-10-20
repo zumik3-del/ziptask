@@ -1,9 +1,9 @@
 name: ci
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -28,16 +28,19 @@ jobs:
 
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
-      - run: bunx biome check src/
+      - run: bunx biome check src/ scripts/
       - run: bunx tsc --noEmit
       - run: bun test --coverage --coverage-reporter text --coverage-reporter lcov
+        timeout-minutes: 5
+      - name: Smoke test (MCP over HTTP)
+        run: bun run src/smoke.ts
         timeout-minutes: 5
       - name: Upload coverage to Coveralls
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
