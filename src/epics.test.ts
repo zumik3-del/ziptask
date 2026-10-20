@@ -640,13 +640,16 @@ describe('atomic epic promotion (#108)', () => {
 // attaching a child to a task somebody was already working silently destroyed that work. Promotion
 // is now confined to a `queued` target; every other non-terminal status is refused up front.
 describe('promotion cannot destroy in-flight work (review #1740 P1)', () => {
-  function seedTask(title: string, status: 'queued' | 'in_progress' | 'review' | 'blocked', assignee?: string): number {
-    const id = json(handleCreateTask(svc, { title, reporter: 'dev', ...(assignee ? { assignee } : {}) })).id
+  // The task is born without a holder (#1872): a creation-time `assignee` is refused, the claim
+  // writes the holder and every other status clears it again. The seeded rows are therefore the
+  // same rows the old creation-time assignee produced - only the way the holder gets there changed.
+  function seedTask(title: string, status: 'queued' | 'in_progress' | 'review' | 'blocked', holder?: string): number {
+    const id = json(handleCreateTask(svc, { title, reporter: 'dev' })).id
     if (status === 'in_progress') {
-      handleClaimTask(svc, { agent: assignee ?? 'dev', task_id: id })
+      handleClaimTask(svc, { agent: holder ?? 'dev', task_id: id })
     } else if (status === 'review') {
-      handleUpdateStatus(svc, { id, agent: assignee ?? 'dev', status: 'in_progress', version: versionOf(id) })
-      handleUpdateStatus(svc, { id, agent: assignee ?? 'dev', status: 'review', version: versionOf(id) })
+      handleUpdateStatus(svc, { id, agent: holder ?? 'dev', status: 'in_progress', version: versionOf(id) })
+      handleUpdateStatus(svc, { id, agent: holder ?? 'dev', status: 'review', version: versionOf(id) })
     } else if (status === 'blocked') {
       handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: versionOf(id) })
     }
@@ -708,7 +711,8 @@ describe('promotion cannot destroy in-flight work (review #1740 P1)', () => {
 // These tests call the store directly, the only way to exercise the defence itself.
 describe('promoteEpicWithMirror is a no-op off the queued path (#1745)', () => {
   function seedAt(status: 'in_progress' | 'review' | 'blocked'): number {
-    const id = json(handleCreateTask(svc, { title: `Target ${status}`, reporter: 'dev', assignee: 'worker' })).id
+    // Born without a holder (#1872): the claim writes the holder, every other status clears it.
+    const id = json(handleCreateTask(svc, { title: `Target ${status}`, reporter: 'dev' })).id
     if (status === 'blocked') {
       handleUpdateStatus(svc, { id, agent: 'worker', status: 'blocked', version: versionOf(id) })
     } else {
@@ -958,7 +962,8 @@ describe('epic promotion race (#1853)', () => {
 })
 
 // Review #1740 P2: `assignee` means "lease holder" everywhere else, and an epic holds no lease, so
-// the value is refused rather than silently dropped.
+// the value is refused rather than silently dropped. Task #1872 extends the same rule to a regular
+// task, which is born `queued` and holds no lease either.
 describe('an epic takes no assignee (review #1740 P2)', () => {
   test('create_task(epic, assignee) is refused', () => {
     const res: any = handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true, assignee: 'boss' })
@@ -981,9 +986,23 @@ describe('an epic takes no assignee (review #1740 P2)', () => {
     expect(task.lease_expires_at).toBeNull()
   })
 
-  test('a regular task still keeps its assignee', () => {
-    const task = json(handleCreateTask(svc, { title: 'Task', reporter: 'dev', assignee: 'worker' })).id
-    expect(getTaskRow(db, task)!.assignee).toBe('worker')
+  test('a regular task is refused an assignee at creation too, and is born without a holder', () => {
+    // #1872: the epic rule was only the first half of the contract. A regular task is born `queued`,
+    // which is no lease either, so a creation-time assignee would be a holder without a lease -
+    // the same state task #1857 removed everywhere else. The value is refused, not stored.
+    const res: any = handleCreateTask(svc, { title: 'Task', reporter: 'dev', assignee: 'worker' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+
+    // And the born row carries no holder and no lease: the claim is what binds a task to an agent.
+    const id = json(handleCreateTask(svc, { title: 'Task', reporter: 'dev' })).id
+    const born = getTaskRow(db, id)!
+    expect(born.status).toBe('queued')
+    expect(born.assignee).toBeNull()
+    expect(born.lease_expires_at).toBeNull()
+
+    handleClaimTask(svc, { agent: 'worker', task_id: id })
+    expect(getTaskRow(db, id)!.assignee).toBe('worker')
   })
 })
 

@@ -538,7 +538,8 @@ describe('assignee release on reap and cancel (#431)', () => {
 describe('assignee is the lease holder (#1857)', () => {
   // `assignee` means exactly "lease holder": it is written on in_progress and cleared on every
   // other status. The refund path (blocked → queued) used to keep the previous holder, so a task
-  // that came back into the queue still carried a holder nobody could renew.
+  // that came back into the queue still carried a holder nobody could renew. Task #1872 removed the
+  // last exception: a task is born `queued` without a holder, so creation refuses an assignee.
   const HOLDER = 'agent-a'
 
   function claimed(title: string): number {
@@ -607,6 +608,71 @@ describe('assignee is the lease holder (#1857)', () => {
     expect(row.status).toBe('in_progress')
     expect(row.assignee).toBe(HOLDER)
     expect(row.lease_expires_at).not.toBeNull()
+  })
+
+  test('the holder is non-NULL exactly while the task is in_progress', () => {
+    // The invariant, walked end to end: `assignee` is the lease holder, so it is present in exactly
+    // one status. The birth, a review, a park, a refund and a terminal close all carry no holder -
+    // only in_progress does. The creation-time exception is gone (#1872), so the birth is in here.
+    const id = json(handleCreateTask(svc, { title: 'Invariant', reporter: 'dev' })).id
+    const holders: Array<[string, string | null]> = []
+    const observe = (label: string) => {
+      const row = getTaskRow(db, id)!
+      holders.push([label, row.assignee])
+      expect(`${label}: ${row.status} carries ${row.assignee ?? 'no holder'}`)
+        .toBe(`${label}: ${row.status} carries ${row.status === 'in_progress' ? HOLDER : 'no holder'}`)
+    }
+    const version = () => getTaskRow(db, id).version
+
+    observe('born')
+    handleClaimTask(svc, { agent: HOLDER, task_id: id })
+    observe('claimed')
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'review', version: version() })
+    observe('review')
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'in_progress', version: version() })
+    observe('sent back')
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'blocked', version: version() })
+    observe('blocked')
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'queued', version: version(), reset_attempts: true, comment: 'spent on accidents' })
+    observe('refunded')
+    handleClaimTask(svc, { agent: HOLDER, task_id: id })
+    observe('claimed again')
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'review', version: version() })
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'done', version: version(), comment: 'shipped' })
+    observe('done')
+
+    expect(holders).toEqual([
+      ['born', null],
+      ['claimed', HOLDER],
+      ['review', null],
+      ['sent back', HOLDER],
+      ['blocked', null],
+      ['refunded', null],
+      ['claimed again', HOLDER],
+      ['done', null]
+    ])
+  })
+
+  test('no queued row carries a holder: the creation path cannot produce one', () => {
+    // The invariant, globally: `assignee` is the lease holder, so a queued row - a task nobody works
+    // on - must never carry one. A creation that names a holder is refused (#1872), so the only
+    // way in leaves the column NULL; the old contract wrote it straight through.
+    const refused = handleCreateTask(svc, { title: 'NeverBorn', reporter: 'dev', assignee: HOLDER })
+    expect(refused.isError).toBe(true)
+
+    const queued = db.query('SELECT COUNT(*) AS n FROM tasks WHERE status = ? AND assignee IS NOT NULL').get('queued') as { n: number }
+    expect(queued.n).toBe(0)
+  })
+
+  test('the reap is the other way out of in_progress: the holder goes with the lease', () => {
+    const id = claimed('Reaped')
+    db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour') WHERE id = ?", [id])
+    svc.reapExpiredLeases()
+
+    const row = getTaskRow(db, id)!
+    expect(row.status).toBe('queued')
+    expect(row.assignee).toBeNull()
+    expect(row.lease_expires_at).toBeNull()
   })
 })
 
