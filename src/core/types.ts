@@ -26,7 +26,7 @@ export interface TaskStore {
   transaction<T>(fn: () => T): T
   nonTerminalChildCount(epicId: number): number
   childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number; canceled: number }
-  promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void
+  promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): number
   appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void
 }
 

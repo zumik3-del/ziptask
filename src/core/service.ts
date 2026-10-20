@@ -5,7 +5,7 @@ import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
 import { LeaseReaper } from './reaper'
-import { createTaskGuard, updateStatusGuard, claimEligibilityError, epicNotClaimableError } from './guards'
+import { createTaskGuard, updateStatusGuard, claimEligibilityError, epicNotClaimableError, epicTargetChangedError, epicPromotionRaceError } from './guards'
 import { requiredError, tooLongError } from './validation'
 import { resolveProject, createProject, updateProject, deleteProject } from './projects'
 import {
@@ -157,8 +157,28 @@ export class TaskLifecycleService {
       if (this.opts.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, createdStatus)
 
       if (epicId !== null) {
-        this.store.promoteEpicWithMirror(epicId, reporter, 'subtask_add',
+        // The target is re-read and re-checked inside the write transaction: the up-front guard read
+        // it before the write, and a rival can claim it in between. Promotion must never rewrite a row
+        // somebody works on, and a child must never point at a task that is not an epic.
+        const target = this.store.getTaskRow(epicId)
+        const changed = epicTargetChangedError(target, epicId, project.data.slug)
+        if (changed) {
+          // The child goes again: a refusal leaves no row behind (its create audit row cascades).
+          this.store.deleteTask(id)
+          return fail(changed)
+        }
+        const promoted = this.store.promoteEpicWithMirror(epicId, reporter, 'subtask_add',
           `#${id} ${sanitizePipe(args.title)}`, now, this.opts.auditLog)
+        if (promoted === 0) {
+          // The promotion matched no row: the target left the queued path in the meantime. A target
+          // that is an epic now (promoted elsewhere) still takes the child; anything else would leave
+          // the child pointing at a non-epic, so it goes and the call is refused.
+          const after = this.store.getTaskRow(epicId)
+          if (!after?.is_epic) {
+            this.store.deleteTask(id)
+            return fail(epicPromotionRaceError(epicId))
+          }
+        }
       }
 
       return ok({ id, status: createdStatus })

@@ -81,7 +81,7 @@ export function taskStoreStubs(overrides: Partial<Store> = {}): Store {
     commentsOf: () => [],
     nonTerminalChildCount: () => 0,
     childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
-    promoteEpicWithMirror: () => {},
+    promoteEpicWithMirror: () => 0,
     appendEpicAuditMirror: () => {},
     ...projectStoreStubs(),
     ...overrides
