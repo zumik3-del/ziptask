@@ -658,15 +658,19 @@ describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
     try {
       const idA = repoA.insertTask({ title: 'A', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
       const idB = repoB.insertTask({ title: 'B', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
-      // Inject 5 comments into both repos to establish baseline monotonicity
-      for (let i = 0; i < 5; i++) {
-        repoA.insertComment(idA, 'a', `ca${i}`)
-        repoB.insertComment(idB, 'b', `cb${i}`)
-      }
+      // Inject 5 comments into both repos to establish baseline monotonicity.
+      // One transaction per repo: the burst below is 500 rows, and one WAL commit per row is what
+      // made this fixture the slowest test in the suite (a per-row commit, not a per-row clock tick).
+      repoA.transaction(() => {
+        for (let i = 0; i < 5; i++) repoA.insertComment(idA, 'a', `ca${i}`)
+      })
+      repoB.transaction(() => {
+        for (let i = 0; i < 5; i++) repoB.insertComment(idB, 'b', `cb${i}`)
+      })
       // Advance the shared clock far ahead (≈500ms) with a burst through repoA
-      for (let i = 0; i < 500; i++) {
-        repoA.insertComment(idA, 'a', `ca-adv${i}`)
-      }
+      repoA.transaction(() => {
+        for (let i = 0; i < 500; i++) repoA.insertComment(idA, 'a', `ca-adv${i}`)
+      })
       // Shipped contract (#1608): every stamp comes from one process-wide monotonic clock
       // (monotonicNowMs in src/core/tasks.ts), so the two repos are NOT independent — repoB
       // inherits repoA's advance. This supersedes the per-instance independence that #795
