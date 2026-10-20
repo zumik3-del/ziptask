@@ -2,16 +2,20 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
 import type { TaskStatus, TaskPriority } from '../core/tasks'
-import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON } from '../core/tasks'
+import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON } from '../core/tasks'
 import { foldResult } from '../core/result'
 import {
   type ToolResult, jsonResult, textResult, errorResult, errorTool, toToolResult, pickFields, rejectUnknownArgs,
   PROJECT_ARG, TaskId
 } from './common'
 
+// A string bound is counted in code points in both layers: zod v4 measures `maxLength` in code
+// points, and the create guard measures the same way (`codePointLength`), so the schema and the
+// guard refuse the same strings. `depends_on` counts ids — an array length, which both layers
+// count identically.
 const CREATE_TASK_SHAPE = {
-  title: z.string().describe('English, <=200 chars'),
-  description: z.string().max(MAX_DESCRIPTION_LENGTH, 'INVALID: description too long').optional().describe('English; fill get_template("task") or "epic" first; <=20000 chars'),
+  title: z.string().max(MAX_TITLE_LENGTH, 'INVALID: title too long').describe('English, <=200 code points'),
+  description: z.string().max(MAX_DESCRIPTION_LENGTH, 'INVALID: description too long').optional().describe('English; fill get_template("task") or "epic" first; <=20000 code points'),
   priority: z.enum(TASK_PRIORITIES).optional(),
   assignee: z.string().optional().describe('refused at creation: a task holds a lease only from in_progress; the claim writes the holder'),
   depends_on: z.array(TaskId).max(MAX_DEPENDS_ON, 'INVALID: depends_on too long').optional(),
