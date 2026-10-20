@@ -34,17 +34,30 @@ function attemptsRow(id: number): { attempts: number; max_attempts: number } {
 }
 
 const host = '127.0.0.1'
-const server = startHttp({
+let server: ReturnType<typeof startHttp> | undefined
+let cleanedUp = false
+
+// Both paths reach this: the green one through the `finally` below, the interrupted one through the
+// server's SIGINT/SIGTERM hook. The green path ends in `process.exit(0)`, which preempts a
+// `finally`, so the removal cannot live there alone — it has to run before the exit. The server is
+// stopped first (the ephemeral port is released before the process ends), then the database is
+// closed (the WAL is checkpointed), then the trio of files is removed.
+const cleanup = () => {
+  if (cleanedUp) return
+  cleanedUp = true
+  try { server?.stop(true) } catch {}
+  try { db.close() } catch {}
+  try { rmSync(TMP_DB) } catch {}
+  try { rmSync(TMP_DB + '-wal') } catch {}
+  try { rmSync(TMP_DB + '-shm') } catch {}
+}
+
+server = startHttp({
   svc,
   port: 0,
   host,
   maxSessions: 10,
-  onShutdown: () => {
-    try { rmSync(TMP_DB) } catch {}
-    try { rmSync(TMP_DB + '-wal') } catch {}
-    try { rmSync(TMP_DB + '-shm') } catch {}
-    db.close()
-  }
+  onShutdown: cleanup,
 })
 
 const port = server.port
@@ -452,10 +465,7 @@ try {
 
   await client.close()
   console.log('[smoke] ALL CHECKS PASSED')
-  process.exit(0)
 } finally {
-  try { rmSync(TMP_DB) } catch {}
-  try { rmSync(TMP_DB + '-wal') } catch {}
-  try { rmSync(TMP_DB + '-shm') } catch {}
-  db.close()
+  cleanup()
 }
+process.exit(0)
