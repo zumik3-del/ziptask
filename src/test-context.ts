@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite'
-import { mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { nowIso } from './core/tasks'
 import type { TaskPriority } from './core/tasks'
@@ -101,10 +101,31 @@ export function removeTempDb(path: string): void {
   }
 }
 
+// The template every per-test database is written from: the schema, migrated once per process,
+// plus the seeded `test` project. Building a fresh database per test cost ~22 ms (32 DDL
+// statements, two fsyncing commits and a WAL checkpoint on close); writing the finished
+// template's bytes costs ~0.4 ms. The bytes are a whole database file, so each test still owns
+// an isolated database - nothing is shared between tests.
+let templateBytes: Buffer | null = null
+
+function templateDbBytes(): Buffer {
+  if (templateBytes === null) {
+    const path = makeTempDbPath('template')
+    const db = openDatabase(path)
+    seedProject(db)
+    // Fold the WAL into the main file: the bytes below are the .db file alone.
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    db.close()
+    templateBytes = readFileSync(path)
+    removeTempDb(path)
+  }
+  return templateBytes
+}
+
 export function createTestDb(): Database {
   const path = makeTempDbPath('test')
+  writeFileSync(path, templateDbBytes())
   const db = openDatabase(path)
-  seedProject(db)
   ;(db as any).__path = path
   return db
 }
@@ -179,8 +200,8 @@ export type TestServer = {
 // logger, a session TTL, a session cap); everything else is the shared default.
 export function startTestServer(opts: TestServerOpts = {}): TestServer {
   const dbPath = makeTempDbPath(opts.tag ?? 'server-test')
+  writeFileSync(dbPath, templateDbBytes())
   const db = openDatabase(dbPath)
-  seedProject(db)
   const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: TEST_PROJECT_SLUG })
   const logger = opts.logger ?? createLogger('test', 'off')
   const httpOpts: StartHttpOptions = { svc, port: 0, host: opts.host ?? '127.0.0.1', dbPath, logger }

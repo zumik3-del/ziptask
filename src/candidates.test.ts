@@ -56,7 +56,7 @@ describe('candidate pagination past the clamped offset (#1847)', () => {
     })
 
     expect(queueIds()).toEqual([blocker])
-  }, 30000)
+  })
 
   test('claim_task auto-pick claims a ready row behind 1100 queued rows', () => {
     const blocker = seedQueued('blocker', { createdAt: CREATED_AT_LATER })
@@ -67,7 +67,7 @@ describe('candidate pagination past the clamped offset (#1847)', () => {
     const claim = handleClaimTask(svc, { agent: 'agent-1' })
     expect(claim.isError).toBeFalsy()
     expect(json(claim).id).toBe(blocker)
-  }, 30000)
+  })
 
   test('list_queue lists a ready row inside the 1000-1099 window exactly once', () => {
     // The ready row has no deps and sorts last. The blocker depends on it, so the blocker is not
@@ -83,7 +83,7 @@ describe('candidate pagination past the clamped offset (#1847)', () => {
     // The distinct ids are the assertion: a re-read page must not list the same task twice.
     expect([...new Set(ids)]).toEqual([ready])
     expect(ids).toEqual([ready])
-  }, 30000)
+  })
 
   test('queuedCandidates reads past the 1000-row result ceiling', () => {
     const ids: number[] = []
@@ -95,5 +95,5 @@ describe('candidate pagination past the clamped offset (#1847)', () => {
     // MAX_RESULT_LIMIT (1000), or the tail of a long queue is unreachable.
     const tail = repo.queuedCandidates(100, projectId, 1100)
     expect(tail.map((task) => task.id)).toEqual([ids[1100]])
-  }, 30000)
+  })
 })
