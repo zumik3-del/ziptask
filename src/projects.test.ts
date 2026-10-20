@@ -36,7 +36,7 @@ const insertRow = (opts: { title: string; reporter: string; projectId: number | 
     depends_on: '[]',
     now: '2026-01-01T00:00:00.000Z',
     projectId: opts.projectId
-  })
+  }).id
 
 const createIn = (title: string, project: string, extra: { depends_on?: number[]; epic_id?: number; epic?: boolean } = {}): number =>
   json(handleCreateTask(svc, { title, reporter: 'dev', project, ...extra })).id as number

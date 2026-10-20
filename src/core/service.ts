@@ -1,6 +1,6 @@
-import type { Task, TaskStatus, TaskPriority, Clock } from './tasks'
+import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, Clock } from './tasks'
 import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, asClock } from './tasks'
-import type { CommentRow, ProjectListItem, ProjectRow, ProjectStore, Store, TimelineRow, SvcResult, SvcError, UpdateStatusData } from './types'
+import type { CommentRow, LifecycleStore, ProjectListItem, ProjectRow, ProjectStore, QueryStore, TaskServiceStore, TimelineRow, SvcResult, SvcError, UpdateStatusData } from './types'
 import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
@@ -97,11 +97,11 @@ export class TaskLifecycleService {
   private readonly reaper: LeaseReaper
   readonly projects: ProjectService
 
-  constructor(private store: Store, opts: ResolvedOptions, reaper?: LeaseReaper, projects?: ProjectService) {
+  constructor(private store: LifecycleStore, opts: ResolvedOptions, projects: ProjectService, reaper?: LeaseReaper) {
     this.opts = opts
     this.clock = opts.clock
     this.reaper = reaper ?? new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
-    this.projects = projects ?? new ProjectService(store, this.opts.scope)
+    this.projects = projects
   }
 
   private _nowMs(): number {
@@ -129,7 +129,7 @@ export class TaskLifecycleService {
     }, this.store)
   }
 
-  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' | 'open' }> {
+  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: CreatedTaskStatus }> {
     const project = this.projects.resolve(args.project)
     if (!project.ok) return fail(project.error)
     const guard = this._createTaskGuard(args, project.data)
@@ -138,9 +138,10 @@ export class TaskLifecycleService {
     const reporter = args.reporter ?? this.opts.defaultReporter
     const now = this._nowIso()
     const epicId = args.epic_id ?? null
-    const createdStatus: 'queued' | 'open' = args.epic ? 'open' : 'queued'
-    return this.store.transaction((): SvcResult<{ id: number; status: 'queued' | 'open' }> => {
-      const id = this.store.insertTask({
+    return this.store.transaction((): SvcResult<{ id: number; status: CreatedTaskStatus }> => {
+      // The repo owns the birth rule: it writes the status a task is born with and reports it,
+      // so the audit row below can never name a status the row does not carry.
+      const created = this.store.insertTask({
         title: args.title,
         description: args.description ?? null,
         priority: args.priority ?? this.opts.defaultPriority,
@@ -153,11 +154,12 @@ export class TaskLifecycleService {
         isEpic: args.epic,
         projectId: project.data.id
       })
+      const id = created.id
       if (createsCycle((depId) => this.store.depsOf(depId), id, deps)) {
         this.store.deleteTask(id)
         return fail('CYCLE', 'dependency graph contains a cycle')
       }
-      if (this.opts.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, createdStatus)
+      if (this.opts.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, created.status)
 
       if (epicId !== null) {
         // The target is re-read and re-checked inside the write transaction: the up-front guard read
@@ -184,7 +186,7 @@ export class TaskLifecycleService {
         }
       }
 
-      return ok({ id, status: createdStatus })
+      return ok({ id, status: created.status })
     })
   }
 
@@ -282,6 +284,8 @@ export class TaskLifecycleService {
     })
   }
 
+  // Test-only seam: it forces a sweep regardless of the cooldown and has no production caller —
+  // production reaps through the read paths and the claim/update write paths.
   reapExpiredLeases(): void {
     this.reaper.reap()
   }
@@ -293,11 +297,11 @@ export class TaskQueryService {
   private readonly reaper: LeaseReaper
   readonly projects: ProjectService
 
-  constructor(private store: Store, opts: ResolvedOptions, reaper?: LeaseReaper, projects?: ProjectService) {
+  constructor(private store: QueryStore, opts: ResolvedOptions, projects: ProjectService, reaper?: LeaseReaper) {
     this.opts = opts
     this.clock = opts.clock
     this.reaper = reaper ?? new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
-    this.projects = projects ?? new ProjectService(store, this.opts.scope)
+    this.projects = projects
   }
 
   getTaskView(id: number): SvcResult<{ task: Readonly<Task>; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number; canceled: number } }> {
@@ -389,15 +393,15 @@ export class TaskService {
   readonly lifecycle: TaskLifecycleService
   readonly query: TaskQueryService
 
-  constructor(store: Store, opts: TaskServiceOptions = {}) {
+  constructor(store: TaskServiceStore, opts: TaskServiceOptions = {}) {
     const resolved = resolveOptions(opts)
     const reaper = new LeaseReaper(store, resolved.reapCooldownSec, resolved.auditLog, resolved.clock)
     this.projects = new ProjectService(store, resolved.scope)
-    this.lifecycle = new TaskLifecycleService(store, resolved, reaper, this.projects)
-    this.query = new TaskQueryService(store, resolved, reaper, this.projects)
+    this.lifecycle = new TaskLifecycleService(store, resolved, this.projects, reaper)
+    this.query = new TaskQueryService(store, resolved, this.projects, reaper)
   }
 
-  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' | 'open' }> {
+  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: CreatedTaskStatus }> {
     return this.lifecycle.createTask(args)
   }
 
@@ -437,6 +441,8 @@ export class TaskService {
     return this.query.listComments(id)
   }
 
+  // Test-only seam: it forces a sweep regardless of the cooldown and has no production caller —
+  // production reaps through the read paths and the claim/update write paths.
   reapExpiredLeases(): void {
     this.lifecycle.reapExpiredLeases()
   }

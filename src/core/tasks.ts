@@ -12,7 +12,16 @@ export const TASK_STATUS_VALUES = Object.freeze([
 ] as const)
 
 export type TaskStatus = (typeof TASK_STATUS_VALUES)[number]
-export type TaskPriority = 'p0' | 'p1' | 'p2' | 'p3'
+
+// The one priority list, next to the type it defines: the union type and the zod enum are both
+// derived from it, so the accepted values and the type can never drift.
+export const TASK_PRIORITIES = Object.freeze(['p0', 'p1', 'p2', 'p3'] as const)
+
+export type TaskPriority = (typeof TASK_PRIORITIES)[number]
+
+// The status a task is born with: a regular task starts queued, an epic starts open. The repo
+// owns that rule and reports the status it wrote (src/db/repo.ts).
+export type CreatedTaskStatus = 'queued' | 'open'
 
 export interface Task {
   id: number

@@ -430,7 +430,7 @@ describe('maxAttempts flow', () => {
     const svc = new TaskService(taskStoreStubs({
       insertTask: (t) => {
         expect(t.maxAttempts).toBe(5)
-        return 1
+        return { id: 1, status: 'queued' }
       }
     }), { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
 
@@ -444,7 +444,7 @@ describe('maxAttempts flow', () => {
     const svc = new TaskService(taskStoreStubs({
       insertTask: (t) => {
         expect(t.maxAttempts).toBe(3)
-        return 1
+        return { id: 1, status: 'queued' }
       }
     }), { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
 

@@ -1,5 +1,5 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
-import type { Task, TaskStatus, TaskPriority, CommentType, Clock } from '../core/tasks'
+import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, CommentType, Clock } from '../core/tasks'
 import { asClock, clampLimit, nowIso, TERMINAL_STATUSES } from '../core/tasks'
 import type { AuditStore, CommentRow, CommentStore, LeaseStore, ProjectListItem, ProjectRow, ProjectStore, TaskStore } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
@@ -52,7 +52,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     assignee: string | null; reporter: string; depends_on: string; now: string
     maxAttempts?: number
     epicId?: number; isEpic?: boolean; projectId?: number | null
-  }): number {
+  }): { id: number; status: CreatedTaskStatus } {
     const maxAttempts = task.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const epicId = task.epicId ?? null
     const isEpic = task.isEpic === true
@@ -66,7 +66,9 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
       [task.title, task.description, status, task.priority, assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, epicFlag, projectId]
     )
-    return Number(result.lastInsertRowid)
+    // The birth rule lives here, so the created status is reported from the row that was
+    // written: the caller never recomputes it and the audit trail cannot name another one.
+    return { id: Number(result.lastInsertRowid), status }
   }
 
   deleteTask(id: number): void {

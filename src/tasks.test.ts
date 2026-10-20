@@ -377,7 +377,7 @@ describe('listTasks deterministic ordering (#1445)', () => {
   const TIE_NOW = '2026-01-01T00:00:00.000Z'
   const insertAt = (title: string, now: string) => repo.insertTask({
     title, description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now, projectId: testProjectId(repo)
-  })
+  }).id
 
   test('same-millisecond created_at ties break by id DESC, not by scan order', () => {
     const ids = [insertAt('tie-1', TIE_NOW), insertAt('tie-2', TIE_NOW), insertAt('tie-3', TIE_NOW)]
@@ -732,8 +732,8 @@ describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
     const dbB = createTestDb()
     const repoB = new TaskRepo(dbB)
     try {
-      const idA = repoA.insertTask({ title: 'A', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
-      const idB = repoB.insertTask({ title: 'B', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
+      const idA = repoA.insertTask({ title: 'A', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' }).id
+      const idB = repoB.insertTask({ title: 'B', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' }).id
       // Inject 5 comments into both repos to establish baseline monotonicity
       for (let i = 0; i < 5; i++) {
         repoA.insertComment(idA, 'a', `ca${i}`)
@@ -808,7 +808,7 @@ describe('TaskRepo port conformance (#812)', () => {
       const id = repo3.insertTask({
         title: 'PortTest', description: null, priority: 'p2',
         assignee: null, reporter: 'dev', depends_on: '[]', now: nowIso()
-      })
+      }).id
       expect(repo3.getTaskRow(id)!.title).toBe('PortTest')
       expect(repo3.depsOf(id)).toBe('[]')
       expect(repo3.statusesOf([id]).get(id)).toBe('queued')

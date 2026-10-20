@@ -60,10 +60,11 @@ export function projectStoreStubs(): ProjectStore {
 
 // A TaskStore whose every method is inert, so a test can hand a service a store without a DB
 // and override only the calls it is about. Callers describe behaviour, not twenty default stubs.
+// The stubs cover every store slice, so the narrowed service dependencies are satisfied by one.
 export function taskStoreStubs(overrides: Partial<Store> = {}): Store {
   return {
     getTaskRow: () => null,
-    insertTask: () => 1,
+    insertTask: () => ({ id: 1, status: 'queued' }),
     deleteTask: () => {},
     listTasks: () => ({ rows: [], total: 0 }),
     queuedCandidates: () => [],
@@ -117,7 +118,7 @@ export function closeTestDb(db: Database) {
 export function insertTaskRow(repo: TaskRepo, opts: CreateTaskRowOpts): number {
   const deps = opts.depends_on ?? []
   const now = nowIso()
-  const id = repo.insertTask({
+  const created = repo.insertTask({
     title: opts.title,
     description: null,
     priority: opts.priority ?? 'p2',
@@ -127,7 +128,7 @@ export function insertTaskRow(repo: TaskRepo, opts: CreateTaskRowOpts): number {
     now,
     projectId: testProjectId(repo)
   })
-  return id
+  return created.id
 }
 
 export function getTaskRow(db: Database, id: number) {

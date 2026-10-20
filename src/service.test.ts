@@ -215,7 +215,7 @@ describe('auto-claim ceiling (#105)', () => {
       depends_on: '[]',
       now: nowIso(),
       projectId: testProjectId(repo2)
-    })
+    }).id
 
     const res = handleClaimTask(svc2, { agent: 'agent-1' })
     expect(text(res)).toContain('EMPTY')
@@ -249,7 +249,7 @@ describe('auto-claim ceiling (#105)', () => {
       depends_on: '[]',
       now: nowIso(),
       projectId: testProjectId(repo2)
-    })
+    }).id
 
     const res = handleClaimTask(svc2, { agent: 'agent-1' })
     expect(json(res).id).toBe(_freeId)
