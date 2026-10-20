@@ -386,23 +386,30 @@ describe('migration 007: a legacy epic row becomes open', () => {
   // the version stamped one short so openDatabase applies exactly the two migration-007 statements.
   const seedPre007Db = (path: string, prefixLength: number) => {
     const raw = new SqliteDb(path)
-    for (const stmt of MIGRATIONS.slice(0, prefixLength)) raw.exec(stmt)
-    raw.run(
-      "INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES ('legacy-epics', '', ?, ?)",
-      [SEED_TIME, SEED_TIME]
-    )
-    const projectId = (raw.query('SELECT id FROM projects WHERE slug = ?').get('legacy-epics') as { id: number }).id
-    const seedEpic = (title: string, status: string, assignee: string | null, lease: string | null) =>
+    // One transaction: the replay is 30 DDL statements plus 6 writes, and one commit per
+    // statement is what made this fixture slow. DDL inside a transaction is what production
+    // does too (src/db/db.ts applyMigrations). No PRAGMA is involved here, so nothing has to
+    // stay outside the transaction.
+    const build = raw.transaction(() => {
+      for (const stmt of MIGRATIONS.slice(0, prefixLength)) raw.exec(stmt)
       raw.run(
-        `INSERT INTO tasks (title, reporter, status, assignee, lease_expires_at, is_epic, project_id, created_at, updated_at)
-         VALUES (?, 'dev', ?, ?, ?, 1, ?, ?, ?)`,
-        [title, status, assignee, lease, projectId, SEED_TIME, SEED_TIME]
+        "INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES ('legacy-epics', '', ?, ?)",
+        [SEED_TIME, SEED_TIME]
       )
-    seedEpic('QueuedEpic', 'queued', null, null)
-    seedEpic('LeasedEpic', 'in_progress', 'developer', FUTURE_LEASE)
-    seedEpic('DoneEpic', 'done', 'developer', FUTURE_LEASE)
-    raw.run('DELETE FROM schema_version')
-    raw.run('INSERT INTO schema_version (version) VALUES (?)', [prefixLength])
+      const projectId = (raw.query('SELECT id FROM projects WHERE slug = ?').get('legacy-epics') as { id: number }).id
+      const seedEpic = (title: string, status: string, assignee: string | null, lease: string | null) =>
+        raw.run(
+          `INSERT INTO tasks (title, reporter, status, assignee, lease_expires_at, is_epic, project_id, created_at, updated_at)
+           VALUES (?, 'dev', ?, ?, ?, 1, ?, ?, ?)`,
+          [title, status, assignee, lease, projectId, SEED_TIME, SEED_TIME]
+        )
+      seedEpic('QueuedEpic', 'queued', null, null)
+      seedEpic('LeasedEpic', 'in_progress', 'developer', FUTURE_LEASE)
+      seedEpic('DoneEpic', 'done', 'developer', FUTURE_LEASE)
+      raw.run('DELETE FROM schema_version')
+      raw.run('INSERT INTO schema_version (version) VALUES (?)', [prefixLength])
+    })
+    build()
     raw.close()
   }
 

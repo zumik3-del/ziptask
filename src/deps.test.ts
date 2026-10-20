@@ -96,13 +96,18 @@ describe('deps', () => {
 
   test('auto-claim pages through >100 dep-blocked tasks to find free one', () => {
     // 101 dep-blocked tasks force the batch loop past the first page
-    for (let i = 0; i < 101; i++) {
-      createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
-    }
-    const freeId = createTaskRow({ title: 'FreeBeyondBatch', reporter: 'dev' })
+    // One transaction: the seeding is 102 inserts, and one WAL commit per row is what made this
+    // the slowest fixture in the suite. The claim itself stays outside the transaction.
+    let freeId = 0
+    repo.transaction(() => {
+      for (let i = 0; i < 101; i++) {
+        createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
+      }
+      freeId = createTaskRow({ title: 'FreeBeyondBatch', reporter: 'dev' })
+    })
     const res = handleClaimTask(svc, { agent: 'agent-2' })
     expect(json(res).id).toBe(freeId)
-  }, 20000)
+  })
 
   test('list_queue pipe hides dep-pending task even though queued (v2)', () => {
     const a = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id
