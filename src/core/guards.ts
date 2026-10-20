@@ -1,5 +1,5 @@
 import type { Task, TaskStatus } from './tasks'
-import { isValidTransition, TERMINAL_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH } from './tasks'
+import { isValidTransition, TERMINAL_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON } from './tasks'
 import type { TaskStore, SvcError } from './types'
 import { parseDeps, depsSatisfied } from './deps'
 import { requiredError, tooLongError, epicError } from './validation'
@@ -40,8 +40,9 @@ export function claimEligibilityError(task: Task, store: DepsStore): SvcError | 
 
 // -- create_task guard -------------------------------------------------------
 
-// Pure precondition set for create_task: title/actor lengths, the epic↔(epic_id|deps) conflicts,
-// the dep-on-epic rule, and the epic_id target shape. Returns the first failure or null.
+// Pure precondition set for create_task: title/actor/description lengths, the depends_on size
+// bound, the epic↔(epic_id|deps) conflicts, the dep-on-epic rule, and the epic_id target shape.
+// Returns the first failure or null.
 export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcError | null {
   const titleErr = requiredError(args.title, 'title') ?? tooLongError(args.title, MAX_TITLE_LENGTH, 'title')
   if (titleErr) return titleErr
@@ -51,7 +52,12 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
     const assigneeErr = tooLongError(args.assignee, MAX_AGENT_LENGTH, 'assignee')
     if (assigneeErr) return assigneeErr
   }
+  if (args.description !== undefined) {
+    const descriptionErr = tooLongError(args.description, MAX_DESCRIPTION_LENGTH, 'description')
+    if (descriptionErr) return descriptionErr
+  }
   const deps = args.depends_on ?? []
+  if (deps.length > MAX_DEPENDS_ON) return { code: 'INVALID', message: 'depends_on too long' }
   // D5: epic cannot coexist with epic_id or depends_on
   if (args.epic && args.epic_id !== undefined) return { code: 'INVALID', message: 'epic cannot have a parent epic' }
   if (args.epic && deps.length > 0) return { code: 'INVALID', message: 'epic cannot have depends_on' }

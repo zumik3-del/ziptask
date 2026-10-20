@@ -171,9 +171,9 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
       assignments.push('lease_expires_at = ?', 'assignee = ?')
       params.push(leaseUntilIso, holder)
     } else {
-      assignments.push('lease_expires_at = NULL')
-      // Terminal transitions drop ownership metadata so no stale assignee survives.
-      if (TERMINAL_STATUSES.includes(status)) assignments.push('assignee = NULL')
+      // Every target but in_progress drops ownership metadata, so `assignee` always means "lease
+      // holder" — the same rule reapTransition applies when it requeues an expired lease.
+      assignments.push('lease_expires_at = NULL', 'assignee = NULL')
     }
     if (resetAttempts === 1) assignments.push('attempts = 0')
     params.push(id, expectedVersion)

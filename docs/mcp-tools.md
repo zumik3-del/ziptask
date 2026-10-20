@@ -4,7 +4,7 @@ ziptask exposes 13 tools:
 
 | Tool | What it does |
 |---|---|
-| `create_task` | Enqueue a task; regular tasks start `queued`, epics start `open` — `blocked` is a manual flag only for regular tasks. Fields: `epic?` (declare as epic, not claimable, no `assignee`), `epic_id?` (attach as sub-task to an existing epic; promotes the target only when it is `queued` — the promotion is re-checked inside the write, so a target a rival claimed in between is refused with `CONFLICT: epic #N changed state during promotion` and nothing is written: no child, no `subtask_add` mirror row; a promotion is a row write and bumps the target's `version`), `project` (required — see [Projects and scope](#projects-and-scope)) |
+| `create_task` | Enqueue a task; regular tasks start `queued`, epics start `open` — `blocked` is a manual flag only for regular tasks. Fields: `epic?` (declare as epic, not claimable, no `assignee`), `epic_id?` (attach as sub-task to an existing epic; promotes the target only when it is `queued` — the promotion is re-checked inside the write, so a target a rival claimed in between is refused with `CONFLICT: epic #N changed state during promotion` and nothing is written: no child, no `subtask_add` mirror row; a promotion is a row write and bumps the target's `version`), `project` (required — see [Projects and scope](#projects-and-scope)). `description` is bounded at 20000 chars and `depends_on` at 100 ids — see [Input bounds](#input-bounds) |
 | `get_task` | Read a task; `description` only via explicit `fields`, and the project slug via `fields:["project"]`. Epics: `subtasks` roll-up (`{total,open,done,failed,canceled}`) via `fields:["subtasks"]`; `epic_id` via `fields` when reading a sub-task |
 | `list_tasks` | JSON mode: filter by `assignee`/`status`/`updated_since`/`epic_id`; `project` required unless `ids` is non-empty (see [Projects and scope](#projects-and-scope)); `description` only via explicit `fields`. Pipe mode (batch): pass `ids` (array of ints) — implicit pipe `id|code`, no `format` param; `fields:["assignee"]` → `id|code|assignee`, null assignee → `-`; request order is preserved, unknown id → `id|0` (and `id|0|-` with `fields:["assignee"]`). All other filters ignored when `ids` is set. Merges the former `batch_statuses` tool — rationale: the separate "ask about tasks" was an ambiguous duplicate of `list_tasks`-by-ids; unified under one tool with two output shapes. |
 | `claim_task` | Claim a task; auto-pick selects among `queued` **of one project** (the required `project` — see [Projects and scope](#projects-and-scope)), explicit `task_id` also accepts a manually `blocked` task. `id` is an accepted alias of `task_id` (`id` alone claims that task; both present and equal is fine; both present and different is rejected with `INVALID: claim_task id/task_id conflict (id=… task_id=…); task_id is canonical` and nothing is claimed). Returns `{id, lease_ttl_min, version}`. Epics are excluded from auto-pick and explicit claim returns `INVALID: #N is an epic, not claimable`. A non-renewal `update_status` into `in_progress` is held to the same eligibility — see [Lease recovery paths](#lease-recovery-paths) |
@@ -86,6 +86,8 @@ The normative one-screen version of this rule ships inside the server itself, as
 
 No refusal writes a row of its own — no task row, no audit row — so a refusal is safe to retry once the cause is fixed. The sweep that runs ahead of the read is the one exception: it may already have requeued an expired lease and charged its `attempts` step, which is why every retry starts from a fresh `version`.
 
+**`assignee` is the lease holder.** It is written when a task enters `in_progress` and cleared on every other status — the same rule the reaper applies when it requeues an expired lease. A task that leaves `in_progress` therefore carries no holder: sent to `review`, parked in `blocked`, refunded back to `queued`, or closed. The refund path is the case that used to leak — a manually blocked task returned to `queued` kept its previous holder, so `assignee` no longer meant "lease holder" there.
+
 **Refunding a spent attempts budget.** Fix the cause first; a refund on top of an unfixed cause just re-arms the loop. Then one call from `blocked`: `update_status({id, agent, "queued", version, reset_attempts: true, comment: "<why>"})`. A task still `queued` has no self-edge, so park it `blocked` first (two calls). `max_attempts` is untouched, `attempts_reset: N->0` lands in the timeline, and the `attempts` field in the response is the in-band confirmation that the flag reached the server.
 
 ### Legacy epic rows
@@ -101,6 +103,17 @@ The acquisition guard adds refusals only: two error strings, no new argument, re
 ## Argument contract
 
 Every tool rejects unknown argument keys with `INVALID: unknown argument(s) <names> on <tool> (accepted: ...)` before any state change — the accepted-key list is part of the error, so a wrong key is a self-correcting one-round-trip failure instead of a silently ignored argument. Shape/type errors (wrong type, out-of-range, bad enum) stay SDK-side. `claim_task` is the only tool with an alias: `id` ≡ `task_id`. The contract covers argument *keys* only: unknown field *names* inside `include`/`fields` are still dropped silently.
+
+### Input bounds
+
+Two inputs are bounded, because both are stored verbatim: `create_task` writes the `description` into the task row (and `GET /api/task/:id` echoes it), and the `depends_on` id list into the `depends_on` JSON blob — one call could otherwise push an unbounded string or id array into the store and into the batch read that resolves the dependencies. The bound is the same constant in both layers: the advertised schema refuses it on the wire, and the create guard refuses it in the service, so a call that skips the schema is still bounded.
+
+| Input | Bound | Refusal |
+|---|---|---|
+| `create_task` `description` | 20000 chars | `INVALID: description too long` |
+| `create_task` `depends_on` | 100 ids | `INVALID: depends_on too long` |
+
+Both refusals write nothing: no task row, no audit row, no comment. The wire sees the schema refusal (`MCP error -32602: Input validation error: Invalid arguments for tool create_task: INVALID: description too long`), the service sees the guard refusal as a plain `INVALID:` result — the same two strings, whichever layer answers.
 
 ## Statuses
 

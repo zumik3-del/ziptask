@@ -131,7 +131,8 @@ describe('claim_task', () => {
     expect(json(res).status).toBe('review')
     const after = getTaskRow(db, id)
     expect(after.status).toBe('review')
-    expect(after.assignee).toBe('agent-1')
+    // `assignee` is the lease holder: the row left in_progress, so the holder is cleared.
+    expect(after.assignee).toBeNull()
   })
 
   test('blocked→review without claim is valid transition (no assignee guard)', () => {

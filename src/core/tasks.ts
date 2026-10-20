@@ -162,6 +162,10 @@ export const defaultClock: Clock = {
 export const MAX_TITLE_LENGTH = 200
 export const MAX_AGENT_LENGTH = 200
 export const MAX_CONTENT_LENGTH = 10000
+// A task description is the contract (goal, AC, constraints, deliverable), so it gets more room
+// than a comment; `depends_on` is a list of ids and stays inside one batch read.
+export const MAX_DESCRIPTION_LENGTH = 20000
+export const MAX_DEPENDS_ON = 100
 export const MAX_RESULT_LIMIT = 1000
 export const MAX_SAFE_TIMESTAMP_MS = 8_640_000_000_000_000
 
