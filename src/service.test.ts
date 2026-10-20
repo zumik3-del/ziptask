@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import {
   nowIso, clampLimit, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH,
-  MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON
+  MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON, MAX_TITLE_LENGTH
 } from './core/tasks'
 import type { Store } from './core/types'
 import { TaskRepo } from './db/repo'
@@ -708,6 +708,185 @@ describe('create_task input bounds (#1857)', () => {
   test('createTask accepts a depends_on array exactly at the limit and stores every id', () => {
     const id = json(handleCreateTask(svc, { title: 'MaxDeps', reporter: 'dev', depends_on: MAX_DEPS })).id
     expect(JSON.parse(getTaskRow(db, id).depends_on)).toEqual(MAX_DEPS)
+  })
+})
+
+// #1874: every create_task string bound means ONE thing in both layers - Unicode code points.
+// zod v4 measures `maxLength` in code points and the guard measures the same way
+// (`codePointLength`), so the advertised schema and the service guard refuse the same strings.
+// Before the fix the guard counted UTF-16 units, so a multi-byte description was ACCEPTED by the
+// schema and REFUSED by the guard: the two layers disagreed exactly at the boundary.
+describe('the create_task string bounds count code points (#1874)', () => {
+  // U+1F600: one code point, two UTF-16 units. A bound measured in the wrong unit misses it.
+  const EMOJI = '\u{1F600}'
+  const multiByte = (n: number): string => EMOJI.repeat(n)
+  // A string of exactly n code points, half ASCII and half multi-byte: a counter that measures
+  // only one kind of character would miss the other.
+  const mixed = (n: number): string => 'a'.repeat(Math.floor(n / 2)) + EMOJI.repeat(n - Math.floor(n / 2))
+  // The code-point count of a string, measured independently of the production helper.
+  const codePoints = (value: string): number => [...value].length
+
+  // The advertised shape, exactly as the MCP layer registers it: the layer the wire validates
+  // against, so a schema/guard disagreement shows up here and not only over the wire.
+  function createTaskShape(): any {
+    let shape: any
+    registerAllTools({ registerTool: (name: string, cfg: any) => { if (name === 'create_task') shape = cfg.inputSchema } } as any, svc)
+    return shape
+  }
+
+  describe('the schema and the guard agree at the boundary', () => {
+    test('a description of exactly MAX_DESCRIPTION_LENGTH code points is accepted by both layers', () => {
+      const description = multiByte(MAX_DESCRIPTION_LENGTH)
+      expect(codePoints(description)).toBe(MAX_DESCRIPTION_LENGTH)
+      expect(createTaskShape().safeParse({ title: 'Boundary', description }).success).toBe(true)
+      const res = handleCreateTask(svc, { title: 'Boundary', reporter: 'dev', description })
+      expect(res.isError).toBeUndefined()
+      const id = json(res).id
+      expect(codePoints(getTaskRow(db, id).description)).toBe(MAX_DESCRIPTION_LENGTH)
+    })
+
+    test('a description of MAX_DESCRIPTION_LENGTH + 1 code points is refused by both layers', () => {
+      const description = multiByte(MAX_DESCRIPTION_LENGTH + 1)
+      expect(codePoints(description)).toBe(MAX_DESCRIPTION_LENGTH + 1)
+      expect(createTaskShape().safeParse({ title: 'Over', description }).success).toBe(false)
+      const res = handleCreateTask(svc, { title: 'Over', reporter: 'dev', description })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: description too long')
+    })
+
+    test('a title of exactly MAX_TITLE_LENGTH code points is accepted by both layers', () => {
+      const title = multiByte(MAX_TITLE_LENGTH)
+      expect(codePoints(title)).toBe(MAX_TITLE_LENGTH)
+      expect(createTaskShape().safeParse({ title }).success).toBe(true)
+      const res = handleCreateTask(svc, { title, reporter: 'dev' })
+      expect(res.isError).toBeUndefined()
+      expect(codePoints(getTaskRow(db, json(res).id).title)).toBe(MAX_TITLE_LENGTH)
+    })
+
+    test('a title of MAX_TITLE_LENGTH + 1 code points is refused by both layers', () => {
+      const title = multiByte(MAX_TITLE_LENGTH + 1)
+      expect(codePoints(title)).toBe(MAX_TITLE_LENGTH + 1)
+      expect(createTaskShape().safeParse({ title }).success).toBe(false)
+      const res = handleCreateTask(svc, { title, reporter: 'dev' })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: title too long')
+    })
+  })
+
+  describe('a mixed string is measured the same way', () => {
+    test('a mixed description of exactly MAX_DESCRIPTION_LENGTH code points is accepted by both layers', () => {
+      // Half ASCII, half multi-byte: 20000 code points in 30000 UTF-16 units. A guard that counts
+      // units refuses it; a guard that counts code points accepts it.
+      const description = mixed(MAX_DESCRIPTION_LENGTH)
+      expect(codePoints(description)).toBe(MAX_DESCRIPTION_LENGTH)
+      expect(description.length).toBeGreaterThan(MAX_DESCRIPTION_LENGTH)
+      expect(createTaskShape().safeParse({ title: 'Mixed', description }).success).toBe(true)
+      const res = handleCreateTask(svc, { title: 'Mixed', reporter: 'dev', description })
+      expect(res.isError).toBeUndefined()
+      expect(codePoints(getTaskRow(db, json(res).id).description)).toBe(MAX_DESCRIPTION_LENGTH)
+    })
+
+    test('a mixed description of MAX_DESCRIPTION_LENGTH + 1 code points is refused by both layers', () => {
+      const description = mixed(MAX_DESCRIPTION_LENGTH + 1)
+      expect(codePoints(description)).toBe(MAX_DESCRIPTION_LENGTH + 1)
+      expect(createTaskShape().safeParse({ title: 'MixedOver', description }).success).toBe(false)
+      const res = handleCreateTask(svc, { title: 'MixedOver', reporter: 'dev', description })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: description too long')
+    })
+
+    test('a mixed title of exactly MAX_TITLE_LENGTH code points is accepted by both layers', () => {
+      const title = mixed(MAX_TITLE_LENGTH)
+      expect(codePoints(title)).toBe(MAX_TITLE_LENGTH)
+      expect(title.length).toBeGreaterThan(MAX_TITLE_LENGTH)
+      expect(createTaskShape().safeParse({ title }).success).toBe(true)
+      const res = handleCreateTask(svc, { title, reporter: 'dev' })
+      expect(res.isError).toBeUndefined()
+      expect(codePoints(getTaskRow(db, json(res).id).title)).toBe(MAX_TITLE_LENGTH)
+    })
+
+    test('a mixed title of MAX_TITLE_LENGTH + 1 code points is refused by both layers', () => {
+      const title = mixed(MAX_TITLE_LENGTH + 1)
+      expect(codePoints(title)).toBe(MAX_TITLE_LENGTH + 1)
+      expect(createTaskShape().safeParse({ title }).success).toBe(false)
+      const res = handleCreateTask(svc, { title, reporter: 'dev' })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: title too long')
+    })
+  })
+
+  describe('the refusal strings are exact and write nothing', () => {
+    test('the schema refuses a description with the exact documented string', () => {
+      const parsed = createTaskShape().safeParse({ title: 'Schema', description: multiByte(MAX_DESCRIPTION_LENGTH + 1) })
+      expect(parsed.success).toBe(false)
+      const issues = (parsed as any).error.issues
+      expect(issues[0].message).toBe('INVALID: description too long')
+      expect(issues[0].path).toEqual(['description'])
+    })
+
+    test('the schema refuses a title with the exact documented string', () => {
+      const parsed = createTaskShape().safeParse({ title: multiByte(MAX_TITLE_LENGTH + 1) })
+      expect(parsed.success).toBe(false)
+      const issues = (parsed as any).error.issues
+      expect(issues[0].message).toBe('INVALID: title too long')
+      expect(issues[0].path).toEqual(['title'])
+    })
+
+    test('the guard refuses a description with the exact documented string and writes nothing', () => {
+      const before = storeCounts()
+      const res = handleCreateTask(svc, { title: 'LongDescription', reporter: 'dev', description: multiByte(MAX_DESCRIPTION_LENGTH + 1) })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: description too long')
+      expect(storeCounts()).toEqual(before)
+    })
+
+    test('the guard refuses a title with the exact documented string and writes nothing', () => {
+      const before = storeCounts()
+      const res = handleCreateTask(svc, { title: multiByte(MAX_TITLE_LENGTH + 1), reporter: 'dev' })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: title too long')
+      expect(storeCounts()).toEqual(before)
+    })
+
+    test('the guard refuses a depends_on array with the exact documented string and writes nothing', () => {
+      const deps = Array.from({ length: MAX_DEPENDS_ON + 1 }, (_, i) => 9000 + i)
+      const before = storeCounts()
+      const res = handleCreateTask(svc, { title: 'TooManyDeps', reporter: 'dev', depends_on: deps })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: depends_on too long')
+      expect(storeCounts()).toEqual(before)
+    })
+  })
+
+  describe('the unchanged paths stay pinned', () => {
+    test('an epic still answers the epic refusal, not the creation refusal', () => {
+      const res = handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true, assignee: 'boss' })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: an epic takes no assignee: it holds no lease')
+    })
+
+    test('the length guard runs before the creation refusal: an over-long assignee is refused as too long', () => {
+      const res = handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: multiByte(MAX_AGENT_LENGTH + 1) })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: assignee too long')
+    })
+
+    test('depends_on is counted as ids in both layers', () => {
+      const maxDeps = Array.from({ length: MAX_DEPENDS_ON }, (_, i) => 9000 + i)
+      const tooManyDeps = Array.from({ length: MAX_DEPENDS_ON + 1 }, (_, i) => 9000 + i)
+      const shape = createTaskShape()
+      expect(shape.safeParse({ title: 'MaxDeps', depends_on: maxDeps }).success).toBe(true)
+      const ok = handleCreateTask(svc, { title: 'MaxDeps', reporter: 'dev', depends_on: maxDeps })
+      expect(ok.isError).toBeUndefined()
+      expect(JSON.parse(getTaskRow(db, json(ok).id).depends_on)).toEqual(maxDeps)
+
+      const parsed = shape.safeParse({ title: 'TooManyDeps', depends_on: tooManyDeps })
+      expect(parsed.success).toBe(false)
+      expect((parsed as any).error.issues[0].message).toBe('INVALID: depends_on too long')
+      const res = handleCreateTask(svc, { title: 'TooManyDeps', reporter: 'dev', depends_on: tooManyDeps })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: depends_on too long')
+    })
   })
 })
 
