@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
+import { z } from 'zod/v4'
 import {
   nowIso, clampLimit, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH,
   MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON, MAX_TITLE_LENGTH
@@ -886,6 +887,91 @@ describe('the create_task string bounds count code points (#1874)', () => {
       const res = handleCreateTask(svc, { title: 'TooManyDeps', reporter: 'dev', depends_on: tooManyDeps })
       expect(res.isError).toBe(true)
       expect(text(res)).toBe('INVALID: depends_on too long')
+    })
+  })
+
+  // #1880: `reporter` and `assignee` are the last two string fields the create guard bounds, and
+  // the advertised schema now carries their bound too (the guard always did). The SCHEMA is
+  // asserted, not only the behaviour: a bound that lives in the guard alone is a schema that
+  // understates what the service refuses, and the two layers drift apart at the boundary.
+  describe('the actor names carry the advertised bound (#1880)', () => {
+    // The registered create_task inputSchema, as JSON Schema: the shape the MCP layer validates
+    // against and advertises, so a bound missing from it shows up here and not only over the wire.
+    function advertisedSchema(): any {
+      return z.toJSONSchema(createTaskShape())
+    }
+
+    test('the registered schema bounds every string field the guard bounds', () => {
+      const schema = advertisedSchema()
+      expect(schema.properties.title.maxLength).toBe(MAX_TITLE_LENGTH)
+      expect(schema.properties.description.maxLength).toBe(MAX_DESCRIPTION_LENGTH)
+      expect(schema.properties.reporter.maxLength).toBe(MAX_AGENT_LENGTH)
+      expect(schema.properties.assignee.maxLength).toBe(MAX_AGENT_LENGTH)
+      // The two layers must refuse the same strings, so the bounded set is the guard's set in BOTH
+      // directions: a field the guard bounds but the schema does not advertise fails here, and so
+      // does a field the schema bounds but the guard does not.
+      const bounded = Object.entries(schema.properties)
+        .filter(([, prop]: any) => prop.maxLength !== undefined)
+        .map(([name]) => name)
+        .sort()
+      expect(bounded).toEqual(['assignee', 'description', 'reporter', 'title'])
+      // The id count is an array bound, so it travels as maxItems - it stays where it was.
+      expect(schema.properties.depends_on.maxItems).toBe(MAX_DEPENDS_ON)
+    })
+
+    test('a reporter of exactly MAX_AGENT_LENGTH code points is accepted by both layers', () => {
+      const reporter = multiByte(MAX_AGENT_LENGTH)
+      expect(codePoints(reporter)).toBe(MAX_AGENT_LENGTH)
+      expect(createTaskShape().safeParse({ title: 'ReporterAtLimit', reporter }).success).toBe(true)
+      const res = handleCreateTask(svc, { title: 'ReporterAtLimit', reporter })
+      expect(res.isError).toBeUndefined()
+      expect(codePoints(getTaskRow(db, json(res).id).reporter)).toBe(MAX_AGENT_LENGTH)
+    })
+
+    test('a reporter of MAX_AGENT_LENGTH + 1 code points is refused by both layers', () => {
+      const reporter = multiByte(MAX_AGENT_LENGTH + 1)
+      expect(codePoints(reporter)).toBe(MAX_AGENT_LENGTH + 1)
+      const parsed = createTaskShape().safeParse({ title: 'ReporterOver', reporter })
+      expect(parsed.success).toBe(false)
+      expect((parsed as any).error.issues[0].message).toBe('INVALID: reporter too long')
+      expect((parsed as any).error.issues[0].path).toEqual(['reporter'])
+      const res = handleCreateTask(svc, { title: 'ReporterOver', reporter })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: reporter too long')
+    })
+
+    test('the reporter refusal writes no task row, no audit row and no comment', () => {
+      const before = storeCounts()
+      handleCreateTask(svc, { title: 'ReporterOver', reporter: multiByte(MAX_AGENT_LENGTH + 1) })
+      expect(storeCounts()).toEqual(before)
+    })
+
+    test('the guard order is pinned: the length refusal comes before the creation refusal', () => {
+      // An over-long assignee is too long FIRST; an in-bounds one reaches the creation refusal.
+      // Both strings are unchanged - the order is what the test pins.
+      const over = handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: multiByte(MAX_AGENT_LENGTH + 1) })
+      expect(over.isError).toBe(true)
+      expect(text(over)).toBe('INVALID: assignee too long')
+      const inBounds = handleCreateTask(svc, { title: 'Assignee', reporter: 'dev', assignee: 'boss' })
+      expect(inBounds.isError).toBe(true)
+      expect(text(inBounds)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+    })
+
+    test('the assignee length refusal writes no task row, no audit row and no comment', () => {
+      const before = storeCounts()
+      handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: multiByte(MAX_AGENT_LENGTH + 1) })
+      expect(storeCounts()).toEqual(before)
+    })
+
+    test('an assignee of exactly MAX_AGENT_LENGTH code points is not too long: it reaches the creation refusal', () => {
+      // The boundary is exactly 200 code points: the schema accepts it, so the guard answers with
+      // the creation refusal instead of the length one.
+      const assignee = multiByte(MAX_AGENT_LENGTH)
+      expect(codePoints(assignee)).toBe(MAX_AGENT_LENGTH)
+      expect(createTaskShape().safeParse({ title: 'AssigneeAtLimit', assignee }).success).toBe(true)
+      const res = handleCreateTask(svc, { title: 'AssigneeAtLimit', reporter: 'dev', assignee })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
     })
   })
 })

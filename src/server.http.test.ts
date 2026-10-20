@@ -8,7 +8,7 @@ import { startTestServer, textOf, TEST_PROJECT_SLUG } from './test-context'
 import type { TestServer } from './test-context'
 import { readBodyWithLimit } from './server'
 import { DEFAULT_HTTP_MAX_BODY_BYTES } from './defaults'
-import { MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON, MAX_TITLE_LENGTH } from './core/tasks'
+import { MAX_AGENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON, MAX_TITLE_LENGTH } from './core/tasks'
 
 // The HTTP/MCP surface: the task-view endpoint, the schema guards in front of the tools, and the
 // argument contract as it reaches the wire. Session lifecycle and the event store live in the
@@ -460,6 +460,89 @@ describe('MCP schema guards (#431)', () => {
       const id = JSON.parse(textOf(res)).id
       const row = srv.db.query('SELECT title FROM tasks WHERE id = ?').get(id) as any
       expect(codePoints(row.title)).toBe(MAX_TITLE_LENGTH)
+    })
+
+    // #1880: `reporter` and `assignee` are the last two string fields the guard bounds, and the
+    // advertised schema now carries their bound too. Over the wire that changes the ANSWER: the
+    // schema refuses first, so the refusal arrives SDK-wrapped, while a direct service call still
+    // sees the bare INVALID string.
+    describe('the actor names carry the advertised bound over the wire (#1880)', () => {
+      // The three counts a refusal must not move: no task row, no audit row, no comment.
+      const storeCounts = (): { tasks: number; audit: number; comments: number } => {
+        const count = (table: string) => (srv.db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+        return { tasks: count('tasks'), audit: count('audit_log'), comments: count('comments') }
+      }
+
+      test('the advertised schema carries the reporter and assignee bounds', async () => {
+        const listed = await client.listTools()
+        const create = (listed.tools as any[]).find(t => t.name === 'create_task')!
+        const props = create.inputSchema.properties
+        expect(props.reporter.maxLength).toBe(MAX_AGENT_LENGTH)
+        expect(props.assignee.maxLength).toBe(MAX_AGENT_LENGTH)
+      })
+
+      test('a multi-byte reporter over the limit is refused with the SDK-wrapped text', async () => {
+        const reporter = multiByte(MAX_AGENT_LENGTH + 1)
+        const before = storeCounts()
+        const res: any = await client.callTool({
+          name: 'create_task',
+          arguments: { title: 'Long reporter', reporter, project: 'test' }
+        })
+        expect(res.isError).toBe(true)
+        expect(textOf(res)).toBe('MCP error -32602: Input validation error: Invalid arguments for tool create_task: INVALID: reporter too long at reporter')
+        expect(storeCounts()).toEqual(before)
+        // The service sees the bare refusal: the SDK wrapper is the wire's, not the domain's.
+        expect(srv.svc.createTask({ title: 'Long reporter', reporter }))
+          .toEqual({ ok: false, error: { code: 'INVALID', message: 'reporter too long' } })
+      })
+
+      test('a multi-byte reporter exactly at the limit is accepted on the wire', async () => {
+        const reporter = multiByte(MAX_AGENT_LENGTH)
+        const res: any = await client.callTool({
+          name: 'create_task',
+          arguments: { title: 'Reporter at limit', reporter, project: 'test' }
+        })
+        expect(res.isError).toBeUndefined()
+        const id = JSON.parse(textOf(res)).id
+        const row = srv.db.query('SELECT reporter FROM tasks WHERE id = ?').get(id) as any
+        expect(codePoints(row.reporter)).toBe(MAX_AGENT_LENGTH)
+      })
+
+      test('a multi-byte assignee over the limit is refused with the SDK-wrapped text', async () => {
+        const assignee = multiByte(MAX_AGENT_LENGTH + 1)
+        const before = storeCounts()
+        const res: any = await client.callTool({
+          name: 'create_task',
+          arguments: { title: 'Long assignee', reporter: 'dev', assignee, project: 'test' }
+        })
+        expect(res.isError).toBe(true)
+        expect(textOf(res)).toBe('MCP error -32602: Input validation error: Invalid arguments for tool create_task: INVALID: assignee too long at assignee')
+        expect(storeCounts()).toEqual(before)
+        expect(srv.svc.createTask({ title: 'Long assignee', reporter: 'dev', assignee }))
+          .toEqual({ ok: false, error: { code: 'INVALID', message: 'assignee too long' } })
+      })
+
+      test('an in-bounds assignee is refused by the guard, not by the schema', async () => {
+        const before = storeCounts()
+        const res: any = await client.callTool({
+          name: 'create_task',
+          arguments: { title: 'Assignee', reporter: 'dev', assignee: 'boss', project: 'test' }
+        })
+        expect(res.isError).toBe(true)
+        expect(textOf(res)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+        expect(storeCounts()).toEqual(before)
+      })
+
+      test('an assignee of exactly MAX_AGENT_LENGTH code points reaches the guard refusal', async () => {
+        // The boundary is exactly 200 code points: the schema accepts it, so the guard answers.
+        const assignee = multiByte(MAX_AGENT_LENGTH)
+        const res: any = await client.callTool({
+          name: 'create_task',
+          arguments: { title: 'Assignee at limit', reporter: 'dev', assignee, project: 'test' }
+        })
+        expect(res.isError).toBe(true)
+        expect(textOf(res)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+      })
     })
   })
 })
