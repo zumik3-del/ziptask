@@ -535,6 +535,81 @@ describe('assignee release on reap and cancel (#431)', () => {
   })
 })
 
+describe('assignee is the lease holder (#1857)', () => {
+  // `assignee` means exactly "lease holder": it is written on in_progress and cleared on every
+  // other status. The refund path (blocked → queued) used to keep the previous holder, so a task
+  // that came back into the queue still carried a holder nobody could renew.
+  const HOLDER = 'agent-a'
+
+  function claimed(title: string): number {
+    const id = json(handleCreateTask(svc, { title, reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: HOLDER, task_id: id })
+    return id
+  }
+
+  // A blocked row that still carries a holder is what the pre-fix code wrote (only the terminal
+  // statuses cleared it), so the refund starts from the state the leak lived in.
+  function parkBlockedWithHolder(id: number): void {
+    db.run("UPDATE tasks SET status = 'blocked', lease_expires_at = NULL WHERE id = ?", [id])
+  }
+
+  test('a claimed task records the holder as assignee', () => {
+    const id = claimed('Holder')
+    const row = getTaskRow(db, id)
+    expect(row.assignee).toBe(HOLDER)
+    expect(row.lease_expires_at).not.toBeNull()
+  })
+
+  test('the blocked → queued refund path leaves the row without a holder', () => {
+    const id = claimed('Refund')
+    parkBlockedWithHolder(id)
+    const before = getTaskRow(db, id)
+    expect(before.assignee).toBe(HOLDER)
+
+    const res = handleUpdateStatus(svc, {
+      id, agent: 'dev', status: 'queued', version: before.version,
+      reset_attempts: true, comment: 'spent on accidental claims'
+    })
+    expect(res.isError).toBeUndefined()
+    expect(json(res).attempts).toBe(0)
+
+    const after = getTaskRow(db, id)
+    expect(after.status).toBe('queued')
+    expect(after.assignee).toBeNull()
+  })
+
+  test('the refund path and the reap path agree: both leave the row without a holder', () => {
+    const refunded = claimed('RefundParity')
+    parkBlockedWithHolder(refunded)
+    handleUpdateStatus(svc, {
+      id: refunded, agent: 'dev', status: 'queued', version: getTaskRow(db, refunded).version,
+      reset_attempts: true, comment: 'spent on accidental claims'
+    })
+
+    const reaped = claimed('ReapParity')
+    db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour') WHERE id = ?", [reaped])
+    svc.reapExpiredLeases()
+
+    expect(getTaskRow(db, refunded).assignee).toBeNull()
+    expect(getTaskRow(db, reaped).status).toBe('queued')
+    expect(getTaskRow(db, reaped).assignee).toBeNull()
+  })
+
+  test('in_progress still records the holder: the fix must not clear a live lease', () => {
+    const id = claimed('Reopened')
+    const v1 = getTaskRow(db, id).version
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'review', version: v1 })
+    const v2 = getTaskRow(db, id).version
+    const res = handleUpdateStatus(svc, { id, agent: HOLDER, status: 'in_progress', version: v2 })
+    expect(res.isError).toBeUndefined()
+
+    const row = getTaskRow(db, id)
+    expect(row.status).toBe('in_progress')
+    expect(row.assignee).toBe(HOLDER)
+    expect(row.lease_expires_at).not.toBeNull()
+  })
+})
+
 describe('title validation (#431)', () => {
   test('empty title rejected', () => {
     const res = handleCreateTask(svc, { title: '', reporter: 'dev' })
