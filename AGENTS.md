@@ -12,7 +12,7 @@ Sources of truth: the wire protocol in `src/mcp/instructions.md`, the domain rul
 - Config: optional `settings.json` (`--settings <path>` or `ZIPTASK_SETTINGS`; see `settings.example.json`), then env overrides — `ZIPTASK_DB`, `ZIPTASK_PORT` (0 = random), `ZIPTASK_HOST`, `ZIPTASK_LEASE_TTL_MIN`, `ZIPTASK_MAX_ATTEMPTS`, `ZIPTASK_LOG_LEVEL` (`info`), `ZIPTASK_AUDIT_LOG`. Full table: `docs/configuration.md`.
 
 ## 3. Verification
-- `bun test` · `bunx biome check src/` · `bunx tsc --noEmit` · smoke `bun run src/smoke.ts` (MCP over HTTP, ephemeral port + temp DB).
+- `bun test` · `bunx biome check src/ scripts/` · `bunx tsc --noEmit` · smoke `bun run src/smoke.ts` (MCP over HTTP, ephemeral port + temp DB).
 - Smoke is the tester's job, once per batch — never run it in a dev task.
 
 ## 4. Code conventions
