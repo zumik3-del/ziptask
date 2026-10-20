@@ -8,6 +8,7 @@ import { startTestServer, textOf, TEST_PROJECT_SLUG } from './test-context'
 import type { TestServer } from './test-context'
 import { readBodyWithLimit } from './server'
 import { DEFAULT_HTTP_MAX_BODY_BYTES } from './defaults'
+import { MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON } from './core/tasks'
 
 // The HTTP/MCP surface: the task-view endpoint, the schema guards in front of the tools, and the
 // argument contract as it reaches the wire. Session lifecycle and the event store live in the
@@ -269,6 +270,9 @@ describe('MCP schema guards (#431)', () => {
     srv.stop()
   })
 
+  const taskCount = (): number =>
+    (srv.db.query('SELECT COUNT(*) AS n FROM tasks').get() as { n: number }).n
+
   test('updated_since out of zod range is rejected by MCP layer', async () => {
     const tooHigh = await client.callTool({
       name: 'list_tasks',
@@ -321,6 +325,58 @@ describe('MCP schema guards (#431)', () => {
       arguments: { title: 'Valid dep', reporter: 'dev', depends_on: [999], project: 'test' }
     })
     expect(good.isError).toBeUndefined()
+  })
+
+  test('create_task refuses a description over the limit on the wire (#1857)', async () => {
+    const before = taskCount()
+    const res: any = await client.callTool({
+      name: 'create_task',
+      arguments: { title: 'Long description', reporter: 'dev', description: 'd'.repeat(MAX_DESCRIPTION_LENGTH + 1), project: 'test' }
+    })
+    expect(res.isError).toBe(true)
+    // The documented string reaches the wire verbatim; zod v4 appends the argument path
+    // (" at description"), so the assertion pins the documented part, not the SDK suffix.
+    expect(textOf(res)).toContain('Invalid arguments for tool create_task: INVALID: description too long')
+    expect(taskCount()).toBe(before)
+  })
+
+  test('create_task accepts a description exactly at the limit on the wire (#1857)', async () => {
+    const res: any = await client.callTool({
+      name: 'create_task',
+      arguments: { title: 'At limit', reporter: 'dev', description: 'd'.repeat(MAX_DESCRIPTION_LENGTH), project: 'test' }
+    })
+    expect(res.isError).toBeUndefined()
+    const id = JSON.parse(textOf(res)).id
+    const row = srv.db.query('SELECT description FROM tasks WHERE id = ?').get(id) as any
+    expect(row.description.length).toBe(MAX_DESCRIPTION_LENGTH)
+  })
+
+  test('create_task refuses a depends_on array over the limit on the wire (#1857)', async () => {
+    const before = taskCount()
+    const res: any = await client.callTool({
+      name: 'create_task',
+      arguments: {
+        title: 'Too many deps',
+        reporter: 'dev',
+        depends_on: Array.from({ length: MAX_DEPENDS_ON + 1 }, (_, i) => 9000 + i),
+        project: 'test'
+      }
+    })
+    expect(res.isError).toBe(true)
+    expect(textOf(res)).toContain('Invalid arguments for tool create_task: INVALID: depends_on too long')
+    expect(taskCount()).toBe(before)
+  })
+
+  test('create_task accepts a depends_on array exactly at the limit on the wire (#1857)', async () => {
+    const deps = Array.from({ length: MAX_DEPENDS_ON }, (_, i) => 9000 + i)
+    const res: any = await client.callTool({
+      name: 'create_task',
+      arguments: { title: 'Max deps', reporter: 'dev', depends_on: deps, project: 'test' }
+    })
+    expect(res.isError).toBeUndefined()
+    const id = JSON.parse(textOf(res)).id
+    const row = srv.db.query('SELECT depends_on FROM tasks WHERE id = ?').get(id) as any
+    expect(JSON.parse(row.depends_on)).toEqual(deps)
   })
 })
 

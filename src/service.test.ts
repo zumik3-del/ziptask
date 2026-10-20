@@ -1,6 +1,9 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { nowIso, clampLimit, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './core/tasks'
+import {
+  nowIso, clampLimit, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH,
+  MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON
+} from './core/tasks'
 import type { Store } from './core/types'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
@@ -591,6 +594,54 @@ describe('reporter/assignee length guards in createTask (#811)', () => {
     const id = json(handleCreateTask(svc, { title: 'OkAssignee', reporter: 'dev', assignee: OK_AGENT })).id
     const row = getTaskRow(db, id)
     expect(row.assignee).toBe(OK_AGENT)
+  })
+})
+
+describe('create_task input bounds (#1857)', () => {
+  // Both inputs are stored verbatim, so both are bounded: the schema refuses them on the wire and
+  // the create guard refuses them in the service, with the same two documented strings.
+  const LONG_DESCRIPTION = 'd'.repeat(MAX_DESCRIPTION_LENGTH + 1)
+  const OK_DESCRIPTION = 'd'.repeat(MAX_DESCRIPTION_LENGTH)
+  const TOO_MANY_DEPS = Array.from({ length: MAX_DEPENDS_ON + 1 }, (_, i) => 9000 + i)
+  const MAX_DEPS = Array.from({ length: MAX_DEPENDS_ON }, (_, i) => 9000 + i)
+
+  function storeCounts(): { tasks: number; audit: number; comments: number } {
+    const count = (table: string) => (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+    return { tasks: count('tasks'), audit: count('audit_log'), comments: count('comments') }
+  }
+
+  test('createTask refuses a description over the limit with the documented INVALID string', () => {
+    const res = handleCreateTask(svc, { title: 'LongDescription', reporter: 'dev', description: LONG_DESCRIPTION })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: description too long')
+  })
+
+  test('the description refusal writes no task row, no audit row and no comment', () => {
+    const before = storeCounts()
+    handleCreateTask(svc, { title: 'LongDescription', reporter: 'dev', description: LONG_DESCRIPTION })
+    expect(storeCounts()).toEqual(before)
+  })
+
+  test('createTask accepts a description exactly at the limit and stores it verbatim', () => {
+    const id = json(handleCreateTask(svc, { title: 'OkDescription', reporter: 'dev', description: OK_DESCRIPTION })).id
+    expect(getTaskRow(db, id).description).toBe(OK_DESCRIPTION)
+  })
+
+  test('createTask refuses a depends_on array over the limit with the documented INVALID string', () => {
+    const res = handleCreateTask(svc, { title: 'TooManyDeps', reporter: 'dev', depends_on: TOO_MANY_DEPS })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: depends_on too long')
+  })
+
+  test('the depends_on refusal writes no task row, no audit row and no comment', () => {
+    const before = storeCounts()
+    handleCreateTask(svc, { title: 'TooManyDeps', reporter: 'dev', depends_on: TOO_MANY_DEPS })
+    expect(storeCounts()).toEqual(before)
+  })
+
+  test('createTask accepts a depends_on array exactly at the limit and stores every id', () => {
+    const id = json(handleCreateTask(svc, { title: 'MaxDeps', reporter: 'dev', depends_on: MAX_DEPS })).id
+    expect(JSON.parse(getTaskRow(db, id).depends_on)).toEqual(MAX_DEPS)
   })
 })
 
