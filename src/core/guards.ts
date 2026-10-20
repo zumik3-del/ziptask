@@ -38,6 +38,53 @@ export function claimEligibilityError(task: Task, store: DepsStore): SvcError | 
   return null
 }
 
+// -- epic_id target preconditions --------------------------------------------
+
+// The epic_id target preconditions, in ONE predicate. `null` means the target is attachable; a
+// refusal names the precondition that failed. Both call sites read this list — the up-front guard
+// maps a refusal to the caller's mistake, the in-transaction re-check maps the same refusal to the
+// promotion race — so the two copies cannot drift apart.
+//
+// The order is the up-front guard's order: a target that breaks several preconditions at once keeps
+// the message it has today.
+//
+// The project check is reachable from the guard (the target may live in another project) and
+// unreachable from the re-check: a task's project membership is immutable — nothing moves a task
+// between projects — so a re-check only ever sees a target of the same project. It lives in the
+// shared predicate because the guard needs it; the re-check inherits it and maps it to the race.
+export type EpicTargetRefusal =
+  | { kind: 'missing' }
+  | { kind: 'terminal' }
+  | { kind: 'nested' }
+  | { kind: 'project'; project: string }
+  | { kind: 'not-promotable'; status: TaskStatus }
+
+export function epicTargetRefusal(target: Task | null, project: string): EpicTargetRefusal | null {
+  if (!target) return { kind: 'missing' }
+  if (TERMINAL_STATUSES.includes(target.status)) return { kind: 'terminal' }
+  if (target.epic_id !== null) return { kind: 'nested' }
+  if (target.project !== project) return { kind: 'project', project: target.project ?? '' }
+  // Promotion rewrites the target's status to `open` and clears its lease, so it is only safe on a
+  // task nobody has started. Promoting an in_progress/review/blocked row would silently destroy
+  // live work: the holder loses its lease and the status change leaves no audit row of its own.
+  // Attaching to an epic that already exists promotes nothing, so the existing statuses stay legal.
+  if (!target.is_epic && target.status !== 'queued') return { kind: 'not-promotable', status: target.status }
+  return null
+}
+
+// The up-front mapping: a refusal here is the caller's mistake, so it names what the caller must fix.
+export function epicTargetGuardError(refusal: EpicTargetRefusal, epicId: number): SvcError {
+  switch (refusal.kind) {
+    case 'missing': return { code: 'NOT_FOUND', message: '' }
+    case 'terminal': return { code: 'INVALID', message: 'cannot attach to a terminal task' }
+    case 'nested': return { code: 'INVALID', message: 'cannot attach to a sub-task (no nesting)' }
+    case 'project': return { code: 'INVALID', message: `epic #${epicId} belongs to project '${refusal.project}'` }
+    case 'not-promotable': {
+      return { code: 'INVALID', message: `cannot promote #${epicId} from ${refusal.status}: only a queued task can become an epic` }
+    }
+  }
+}
+
 // -- create_task guard -------------------------------------------------------
 
 // Pure precondition set for create_task: title/actor/description lengths, the depends_on size
@@ -86,20 +133,8 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   // D5: epic_id target must exist, be non-terminal, and have epic_id IS NULL
   // G4: it must also live in the same project (G5: an epic's children inherit, never guess)
   if (args.epic_id !== undefined) {
-    const target = store.getTaskRow(args.epic_id)
-    if (!target) return { code: 'NOT_FOUND', message: '' }
-    if (TERMINAL_STATUSES.includes(target.status)) return { code: 'INVALID', message: 'cannot attach to a terminal task' }
-    if (target.epic_id !== null) return { code: 'INVALID', message: 'cannot attach to a sub-task (no nesting)' }
-    if (target.project !== args.project) {
-      return { code: 'INVALID', message: `epic #${args.epic_id} belongs to project '${target.project ?? ''}'` }
-    }
-    // Promotion rewrites the target's status to `open` and clears its lease, so it is only safe on a
-    // task nobody has started. Promoting an in_progress/review/blocked row would silently destroy
-    // live work: the holder loses its lease and the status change leaves no audit row of its own.
-    // Attaching to an epic that already exists promotes nothing, so the existing statuses stay legal.
-    if (!target.is_epic && target.status !== 'queued') {
-      return { code: 'INVALID', message: `cannot promote #${args.epic_id} from ${target.status}: only a queued task can become an epic` }
-    }
+    const refusal = epicTargetRefusal(store.getTaskRow(args.epic_id), args.project)
+    if (refusal) return epicTargetGuardError(refusal, args.epic_id)
   }
   return null
 }
@@ -114,17 +149,14 @@ export function epicPromotionRaceError(epicId: number): SvcError {
 
 // The epic_id target preconditions, re-checked next to the write. createTaskGuard reads the target
 // before the write, and a rival can claim it in between (a claim takes the row out of `queued`), so
-// the same preconditions are verified again inside the write transaction. A target that already is
-// an epic only has to stay attachable (non-terminal, no parent); a non-epic is promoted here, and
-// only from `queued` — the one state with no holder and no work to destroy. Every mismatch means
-// the target changed after the guard accepted it, so it is reported as the race, not as a
-// precondition the caller got wrong.
+// the same preconditions are verified again inside the write transaction — through the one shared
+// predicate, so the two call sites cannot drift apart. A target that already is an epic only has to
+// stay attachable (non-terminal, no parent); a non-epic is promoted here, and only from `queued` —
+// the one state with no holder and no work to destroy. Every mismatch means the target changed
+// after the guard accepted it, so it is reported as the race, not as a precondition the caller got
+// wrong.
 export function epicTargetChangedError(target: Task | null, epicId: number, project: string): SvcError | null {
-  if (!target) return epicPromotionRaceError(epicId)
-  if (target.epic_id !== null) return epicPromotionRaceError(epicId)
-  if (target.project !== project) return epicPromotionRaceError(epicId)
-  if (target.is_epic) return TERMINAL_STATUSES.includes(target.status) ? epicPromotionRaceError(epicId) : null
-  return target.status === 'queued' ? null : epicPromotionRaceError(epicId)
+  return epicTargetRefusal(target, project) ? epicPromotionRaceError(epicId) : null
 }
 
 // -- update_status guard -----------------------------------------------------
