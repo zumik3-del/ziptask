@@ -367,7 +367,12 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     expect(countAudit(id, 'attempts_reset')).toBe(0)
   })
 
-  test('terminal tasks are unreachable by a refund (no new guard, no reopened terminal)', () => {
+  test('terminal tasks are unreachable by a refund (an explicit guard, no reopened terminal)', () => {
+    // The reopen tried here is refused by the transition table (`done`/`canceled`/`failed` have no
+    // edge to `queued`). A refund on a task closed for work is refused by an explicit guard
+    // (`INVALID: cannot reset attempts on terminal task #N`): the one edge the table still allows
+    // out of a closed task, `failed -> canceled`, must not smuggle a refund in with it — that side
+    // is pinned in src/closed-for-work.test.ts.
     const cases: Array<{ title: string; drive: (id: number) => void }> = [
       { title: 'Done', drive: (id) => { claimOrThrow(id, HOLDER); handleUpdateStatus(svc, { id, agent: HOLDER, status: 'review', version: versionOf(id) }); handleUpdateStatus(svc, { id, agent: HOLDER, status: 'done', version: versionOf(id) }) } },
       { title: 'Canceled', drive: (id) => { handleUpdateStatus(svc, { id, agent: HOLDER, status: 'canceled', version: versionOf(id) }) } },
@@ -673,7 +678,9 @@ describe('reap invariants untouched by F2/F3 (D-F3-5: zero diff in _doReap)', ()
 // in_progress the guard demands claim-grade eligibility (not an epic; deps satisfied from
 // queued/blocked), reusing claimTask's two error strings verbatim. review → in_progress is a
 // deliberate superset: work sent back is exactly the sanctioned case, and its deps are provably
-// still satisfied (depends_on is immutable after create, terminals have no outgoing edge).
+// still satisfied (depends_on is immutable after create, and a dependency closed for work stays
+// closed for work — the administrative edge out of `failed` (`failed -> canceled`) closes a task
+// out and never reopens one).
 describe('acquiring a lease: update_status → in_progress needs claim-grade eligibility', () => {
   const HOUR = 3600_000
 
@@ -992,9 +999,11 @@ describe('review → in_progress: work sent back takes the lease', () => {
   })
 
   test('the review edge asks no deps question, even on a row whose dep is open', () => {
-    // Provably unnecessary rather than unchecked: depends_on is immutable after create and terminal
-    // statuses have no outgoing edge, so a satisfied dep stays satisfied. The seeded row is the only
-    // way to observe it, and it shows the edge makes no query — the entry succeeds with an open dep.
+    // Provably unnecessary rather than unchecked: depends_on is immutable after create, and a
+    // dependency closed for work stays closed for work — the administrative edge out of `failed`
+    // (`failed -> canceled`) closes a task out and never reopens one — so a satisfied dep stays
+    // satisfied. The seeded row is the only way to observe it, and it shows the edge makes no
+    // query — the entry succeeds with an open dep.
     const dep = createTaskRow('Open')
     const id = createDepTask('InReview', [dep])
     seedReview(id)

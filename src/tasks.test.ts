@@ -365,11 +365,12 @@ describe('terminal-status single source (#1445)', () => {
     expect(parsedSql).toEqual([...TERMINAL_STATUSES])
   })
 
-  test('TERMINAL_STATUSES is exactly the set of statuses with no outgoing transition', () => {
-    for (const status of TASK_STATUSES) {
-      const isTerminalByTransitions = TASK_STATUSES.every(to => !isValidTransition(status, to))
-      expect(`${status}:${TERMINAL_STATUSES.includes(status)}`).toBe(`${status}:${isTerminalByTransitions}`)
-    }
+  test('TERMINAL_STATUSES is the explicit closed-for-work set, not the no-outgoing-edge set', () => {
+    expect([...TERMINAL_STATUSES]).toEqual(['done', 'failed', 'canceled'])
+    // `failed` is the only closed status with an outgoing edge: the administrative withdrawal.
+    const withEdge = TERMINAL_STATUSES.filter(status => TASK_STATUSES.some(to => isValidTransition(status, to)))
+    expect(withEdge).toEqual(['failed'])
+    expect(TASK_STATUSES.filter(to => isValidTransition('failed', to))).toEqual(['canceled'])
   })
 })
 
@@ -449,15 +450,18 @@ describe('canceled transitions (#112)', () => {
     expect(text(res)).toContain('INVALID: done → canceled')
   })
 
-  test('failed → canceled rejected with INVALID', () => {
+  test('failed → canceled accepted: the administrative withdrawal of a closed task', () => {
     const id = json(handleCreateTask(svc, { title: 'F', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const v1 = getTaskRow(db, id).version
     handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'failed', version: v1 })
     const v2 = getTaskRow(db, id).version
     const res = cancel(id, v2)
-    expect(res.isError).toBe(true)
-    expect(text(res)).toContain('INVALID: failed → canceled')
+    expect(json(res).status).toBe('canceled')
+    const row = getTaskRow(db, id)
+    expect(row.status).toBe('canceled')
+    expect(row.assignee).toBeNull()
+    expect(row.completed_at).not.toBeNull()
   })
 })
 
