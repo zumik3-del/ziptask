@@ -5,5 +5,4 @@ coverage/
 data/
 *.db
 .test-data/
-/AGENTS.md
 settings.json
