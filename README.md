@@ -23,7 +23,7 @@ One-liner — installs the published binary via the `deploy/` framework (see
 curl -fsSL https://raw.githubusercontent.com/zumik3-del/ziptask/main/deploy/install.sh | bash
 
 # from a checkout, or pinned to a version
-sudo bash deploy/install.sh --version v0.3.1
+sudo bash deploy/install.sh --version v0.4.0
 ```
 
 Canonical layout: binary in `/opt/ziptask`, database **and** `settings.json` in
@@ -92,7 +92,7 @@ Requires [Bun](https://bun.sh) ≥ 1.4.
 
 ```bash
 bun install
-bun run start          # HTTP server on an ephemeral port (MCP endpoint + /health + experimental /api/task/:id)
+bun run start          # HTTP server on an ephemeral port (MCP endpoint + /health + experimental /api/tasks and /api/task/:id)
 bun run start:stdio    # run over stdio
 ```
 
@@ -115,14 +115,14 @@ Layered by carrier, no framework beyond the MCP SDK:
 | Storage | `src/db/` | SQL (bun:sqlite, WAL) + migrations |
 | Entry | `src/index.ts`, `src/server.ts` | Composition root, HTTP transport |
 
-The public task API is MCP, exposed at `POST`/`GET`/`DELETE` `/mcp`, alongside `GET /health` and one experimental REST-style read endpoint, `GET /api/task/:id`, kept as an integration endpoint for the subagentix client. No endpoint authenticates. Enumeration is scoped: the enumerating tools require a project slug, while by-id calls stay unscoped — see [Projects](docs/projects.md). See [HTTP endpoints](docs/http-endpoints.md).
+The public task API is MCP, exposed at `POST`/`GET`/`DELETE` `/mcp`, alongside `GET /health` and two experimental REST-style read endpoints, `GET /api/tasks` and `GET /api/task/:id` (the latter kept as an integration endpoint for the subagentix client). No endpoint authenticates. Enumeration is scoped: the enumerating tools require a project slug, while by-id calls stay unscoped — see [Projects](docs/projects.md). See [HTTP endpoints](docs/http-endpoints.md).
 
 ## Development
 
 ```bash
 bun test               # unit tests (per-test temp DBs)
 bunx tsc --noEmit      # type check
-bunx biome check src/  # lint
+bun run lint           # biome check src/ scripts/
 bun run src/smoke.ts   # MCP end-to-end over HTTP (ephemeral port + temp DB)
 bun run changelog      # rebuild CHANGELOG.md from git tags (maintainers; clean tree required; prints next steps to commit/push manually)
 ```
@@ -138,7 +138,7 @@ git push
 ## Documentation
 
 - [Configuration](docs/configuration.md) — `settings.json`, environment variables, the upgrade path, and backups.
-- [HTTP endpoints](docs/http-endpoints.md) — `/mcp`, `/health`, and the experimental `GET /api/task/:id` integration endpoint.
+- [HTTP endpoints](docs/http-endpoints.md) — `/mcp`, `/health`, and the two experimental read endpoints `GET /api/tasks` and `GET /api/task/:id`.
 - [MCP tools](docs/mcp-tools.md) — the 13-tool reference, projects and scope, task statuses, lease-reap semantics, and lease recovery paths.
 - [Projects](docs/projects.md) — what a project is, the slug, the fail-closed scope rule, and the four project tools.
 - [Epic → sub-task workflow](docs/epics.md) — declaring epics, attaching sub-tasks, roll-up, closure, and the cross-project constraints.

@@ -41,7 +41,7 @@ ziptask ships an example multi-agent workflow: one **orchestrator** (the primary
 
 ziptask is harness-agnostic — it speaks MCP, so **any MCP-capable client** can drive the tracker. opencode is used here as the **reference runtime, not a requirement**:
 
-- The agent files embed opencode-specific frontmatter (`mode`, `permission`, `temperature`, `model`, `steps`). Porting to another runtime means rewriting that metadata block — the role prompt below the frontmatter is plain Markdown and carries over unchanged.
+- The agent files embed opencode-specific frontmatter (`description`, `mode`, `steps`, `color`, `permissions`, plus an optional commented-out `model`). `permissions` is an ordered list of `action`/`resource`/`effect` rules. Porting to another runtime means rewriting that metadata block — the role prompt below the frontmatter is plain Markdown and carries over unchanged.
 - The rules in `AGENTS.md` (tracker as the only coordination channel, orchestrator-only task creation and closure, epics, git handoff, the delegation map) are runtime-independent and apply as-is.
 - The `git` agent needs only `git` (and `gh`), so it works anywhere.
 
@@ -49,7 +49,7 @@ Keep the workflow, swap the carrier.
 
 ## Configure your stack
 
-Every agent ships a language-agnostic `bash` policy: `"*": ask`, an explicit read-only allow-list, and denies for dangerous operations. Build/test/lint commands are intentionally **not** listed — add the ones your toolchain uses to the `# ADD YOUR STACK'S COMMANDS HERE` block in `developer.md`, `tester.md`, and `devops.md`, and keep them in sync with your project's `AGENTS.md` verification commands. Anything left unlisted prompts for approval, so nothing runs silently and extension is incremental.
+Every agent ships a `shell` policy in its `permissions` list: `resource: "*"` → `effect: ask` first, then an explicit allow-list of read-only commands (`git status*`, `ls*`, `cat*`, `rg*`, …), then `effect: deny` for dangerous operations (`rm*`, `mv*`, `cp*`, `git commit*`, `git push*`, `git reset*`, `git clean*`, `git merge*`, shell redirections). Build/test/lint commands are intentionally **not** listed — add the ones your toolchain uses as `shell` entries in `developer.md`, `tester.md`, and `devops.md` (the examples' `AGENTS.md` calls this the `# ADD YOUR STACK'S COMMANDS HERE` block), and keep them in sync with your project's `AGENTS.md` verification commands. Anything left unlisted keeps the `ask` effect, so nothing runs silently and extension is incremental.
 
 ## Customize
 

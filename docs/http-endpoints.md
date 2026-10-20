@@ -11,6 +11,8 @@
 
 Every path returns `404` `Not Found` when it does not match. No endpoint authenticates — keep the listener bound to `127.0.0.1` (`ZIPTASK_HOST`/`settings.json`) and put an authenticating reverse proxy in front if it must be reachable from other hosts.
 
+The two `/api/*` read endpoints are browser-facing, so they answer with permissive CORS headers (`Access-Control-Allow-Origin: *`, `Allow-Methods: GET, OPTIONS`) on success and on error alike, and an `OPTIONS` preflight returns `204` with no body. `/mcp` carries no CORS headers: it is an agent-to-server channel, not a page fetch.
+
 `GET /health` is purely additive over `{"ok":true}`: `version` carries the running package version (no leading `v`) so the deploy framework's health gate can compare it against the target release (`HEALTH_VERSION_FIELD`, `expected = ${TAG#v}`).
 
 ## `GET /api/tasks` (experimental)
@@ -22,8 +24,8 @@ Query parameters:
 | Param | Required | Description |
 |---|---|---|
 | `project` | yes | project slug |
-| `status` | no | one of `queued`, `in_progress`, `review`, `done`, `failed`, `blocked`, `canceled` |
-| `limit` | no | max number of tasks (clamped to the server default) |
+| `status` | no | one of `queued`, `in_progress`, `review`, `done`, `failed`, `blocked`, `canceled`, `open` |
+| `limit` | no | max number of tasks; absent → the server default (`defaults.listLimit`, 50), capped at 1000 |
 
 ```jsonc
 {
@@ -37,7 +39,8 @@ Errors:
 | Condition | Status | Body |
 |---|---|---|
 | missing `project` | `400` | `{"error":"INVALID: project required"}` |
-| unknown `project` | `400` | `{"error":"INVALID: unknown project 'x' (known: ...)"}` |
+| unknown `project`, other projects exist | `400` | `{"error":"INVALID: unknown project 'x' (known: ...)"}` |
+| unknown `project`, no project defined at all | `400` | `{"error":"INVALID: unknown project 'x' (no projects defined; create one with create_project)"}` |
 | invalid `status` | `400` | `{"error":"INVALID: invalid status"}` |
 | invalid `limit` | `400` | `{"error":"INVALID: invalid limit"}` |
 

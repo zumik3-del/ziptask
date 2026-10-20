@@ -19,7 +19,15 @@ Promotion is confined to a **`queued`** target: rewriting the status drops the l
 INVALID: cannot promote #42 from in_progress: only a queued task can become an epic
 ```
 
-Attaching a *further* child to an epic that already exists promotes nothing and is always allowed — the target's status is irrelevant there.
+Attaching a *further* child to an epic that already exists promotes nothing: the target's status does not matter for the promotion. A terminal epic is still refused up front (`INVALID: cannot attach to a terminal task`) — it is the terminal status, not the promotion, that refuses the attach.
+
+The target is re-checked **inside the write transaction**, because a rival can claim it between the guard read and the write. A target that left the state the guard accepted is refused with
+
+```
+CONFLICT: epic #42 changed state during promotion
+```
+
+and nothing is written — no child row, no `subtask_add` mirror row. A promotion is a row write like any other, so it bumps the target's `version`: re-read it before the next write on that target.
 
 An epic takes no `assignee`: the field means "lease holder" everywhere else and an epic holds no lease. `create_task(epic: true, assignee: '...')` is refused with `INVALID: an epic takes no assignee: it holds no lease`, and the column is `NULL` on every epic row (migration 007 clears it on pre-existing rows too).
 
@@ -39,7 +47,6 @@ Nested membership is rejected (epic cannot be a sub-task; sub-task cannot be an 
 - An epic's status is `open` while work is in flight; it is never `queued`, `in_progress`, `review` or `blocked`.
 - `open → done`, `open → failed`, `open → canceled` are the only outgoing transitions. `canceled` withdraws the epic.
 - Epics are never leased: `claim_task` and any non-terminal `in_progress` acquisition are refused with `INVALID: #N is an epic, not claimable`. There is no lease-free on-ramp through intermediate statuses anymore.
-- Closing an epic (`done`/`failed`/`canceled`) is guarded: rejected with `CHILDREN: N sub-tasks not terminal` while any child is non-terminal (canceled children are terminal and do not block closure).
 
 ## Roll-up and closure
 
@@ -61,6 +68,7 @@ Nested membership is rejected (epic cannot be a sub-task; sub-task cannot be an 
 | `epic_id` pointing at a terminal task | `INVALID: cannot attach to a terminal task` |
 | `epic_id` pointing at a sub-task (nesting) | `INVALID: cannot attach to a sub-task (no nesting)` |
 | `epic_id` pointing at a non-`queued` task that is not yet an epic | `INVALID: cannot promote #N from <status>: only a queued task can become an epic` |
+| `epic_id` target that left its state between the guard and the write | `CONFLICT: epic #N changed state during promotion` |
 | Explicit `claim_task` on an epic | `INVALID: #N is an epic, not claimable` |
 | `queued`/`in_progress`/`review`/`blocked` on an epic | `INVALID: <status> → <status>` (epics only accept `done`/`failed`/`canceled`) |
 | Terminal close with non-terminal children | `CHILDREN: N sub-tasks not terminal` |
