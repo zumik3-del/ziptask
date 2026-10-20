@@ -106,14 +106,19 @@ Every tool rejects unknown argument keys with `INVALID: unknown argument(s) <nam
 
 ### Input bounds
 
-Two inputs are bounded, because both are stored verbatim: `create_task` writes the `description` into the task row (and `GET /api/task/:id` echoes it), and the `depends_on` id list into the `depends_on` JSON blob — one call could otherwise push an unbounded string or id array into the store and into the batch read that resolves the dependencies. The bound is the same constant in both layers: the advertised schema refuses it on the wire, and the create guard refuses it in the service, so a call that skips the schema is still bounded.
+Two inputs are bounded, because both are stored verbatim: `create_task` writes the `description` into the task row (and `GET /api/task/:id` echoes it), and the `depends_on` id list into the `depends_on` JSON blob — one call could otherwise push an unbounded string or id array into the store and into the batch read that resolves the dependencies. The bound is the same constant in both layers: the advertised schema refuses it on the wire, and the create guard refuses it in the service, so a call that skips the schema is still bounded. The two layers do not count a string the same way, though — see below.
 
-| Input | Bound | Refusal |
-|---|---|---|
-| `create_task` `description` | 20000 chars | `INVALID: description too long` |
-| `create_task` `depends_on` | 100 ids | `INVALID: depends_on too long` |
+| Input | Bound | Refusal on the wire | Refusal in the service |
+|---|---|---|---|
+| `create_task` `description` | 20000 chars | `MCP error -32602: Input validation error: Invalid arguments for tool create_task: INVALID: description too long at description` | `INVALID: description too long` |
+| `create_task` `depends_on` | 100 ids | `MCP error -32602: Input validation error: Invalid arguments for tool create_task: INVALID: depends_on too long at depends_on` | `INVALID: depends_on too long` |
 
-Both refusals write nothing: no task row, no audit row, no comment. The wire sees the schema refusal (`MCP error -32602: Input validation error: Invalid arguments for tool create_task: INVALID: description too long`), the service sees the guard refusal as a plain `INVALID:` result — the same two strings, whichever layer answers.
+Both refusals write nothing: no task row, no audit row, no comment. The two layers answer in different shapes, so a client matching on the text has to know which one it is looking at:
+
+- **The wire shape** is the schema refusal, wrapped by the MCP SDK — the zod message is only the tail of it. The SDK prefixes `MCP error -32602: Input validation error: Invalid arguments for tool create_task:` and appends the argument path (` at description`). It arrives as a tool result with `isError: true`, so the `-32602` is part of the text, not a JSON-RPC error envelope.
+- **The service shape** is the bare `INVALID: …` string — the plain form every other service refusal uses on the wire (`INVALID: unknown project 'x' (known: a, b)`, `INVALID: unknown argument bogus on create_task (accepted: …)`), with no `MCP error` prefix and no path suffix.
+
+Through MCP the schema usually answers first, so the wire text of these two refusals is the wrapped one. `depends_on` is a list of ids and both layers count it the same way, so the schema always takes it. `description` is a string and the two layers count it differently: the schema measures **code points** (zod v4), the create guard measures **UTF-16 code units** (`value.length`). A description of 20001 ASCII chars is over both bounds, so the schema refuses it; a description of 20000 emoji is 20000 code points (the schema takes it) but 40000 UTF-16 units, so the guard refuses it and the caller sees the bare `INVALID: description too long`. A description is therefore accepted only if it is at most 20000 code points *and* at most 20000 UTF-16 units.
 
 ## Statuses
 
