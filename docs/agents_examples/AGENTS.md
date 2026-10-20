@@ -27,8 +27,8 @@ Subagents drive their own task claims per the ziptask MCP `instructions` (the se
 
 ## Permissions
 
-- Every agent ships with a language-agnostic `bash` policy: `"*": ask` (nothing runs silently), an explicit read-only inspection allow-list, and denies for dangerous operations (`rm`/`mv`/`cp`, shell redirects, `sed`). The `git` agent is the only one allowed to perform git mutations; every other agent denies them.
-- The agents that run builds/tests (`developer`, `devops`, `tester`) have an `# ADD YOUR STACK'S COMMANDS HERE` block. Fill it with the build/test/lint commands of YOUR toolchain, taken from your project's `AGENTS.md`. Unlisted commands keep falling through to `ask`, so extension is safe and incremental.
+- Every agent ships a native V2 `permissions` list — an ordered set of `action`/`resource`/`effect` rules, last match wins. The shell commands live under `action: shell`: the first shell rule is `resource: "*"` with `effect: ask` (nothing runs silently), then an explicit allow-list of read-only inspection commands (`git status*`, `ls*`, `cat*`, `rg*`, …), then `effect: deny` for dangerous operations (`rm*`, `mv*`, `cp*`, shell redirects, `sed*`). Git mutations are the one exception: only the `git` agent's allow-list carries them (`git commit*`, `git push*`, `git merge*`); every other agent denies `git commit*`, `git push*`, `git reset*`, `git clean*` and `git merge*`.
+- The agents that run builds/tests (`developer`, `devops`, `tester`) carry an `# ADD YOUR STACK'S COMMANDS HERE` block in their `permissions` list. Add the build/test/lint commands of YOUR toolchain there, as `action: shell` entries taken from your project's `AGENTS.md` verification commands. Build/test/lint commands are intentionally not listed in the examples; anything left unlisted keeps the `ask` effect, so nothing runs silently and extension is safe and incremental.
 
 ## Epics — orchestrator-owned
 

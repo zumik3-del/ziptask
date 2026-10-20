@@ -29,6 +29,10 @@ permissions:
   - action: shell
     resource: "*"
     effect: ask
+  # ADD YOUR STACK'S COMMANDS HERE
+  # Copy the build/test/lint commands of YOUR toolchain from your project's AGENTS.md
+  # into `action: shell` / `resource: "<command>*"` / `effect: allow` entries.
+  # The last matching rule wins, so the `deny` rules further down still block their patterns.
   - action: shell
     resource: "git status*"
     effect: allow
