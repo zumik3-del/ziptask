@@ -49,6 +49,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
 
   insertTask(task: {
     title: string; description: string | null; priority: TaskPriority
+    // `assignee` stays in the seam for its callers, but the creation path never writes a holder.
     assignee: string | null; reporter: string; depends_on: string; now: string
     maxAttempts?: number
     epicId?: number; isEpic?: boolean; projectId?: number | null
@@ -60,7 +61,10 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     const projectId = task.projectId ?? null
     // ADR 0002: an epic is born `open` and holds no lease, so it never carries an assignee.
     const status = isEpic ? 'open' : 'queued'
-    const assignee = isEpic ? null : task.assignee
+    // A task is born without a lease — an epic `open`, a regular task `queued` — and the holder is
+    // written by the claim. So the creation path never writes one: the guard refuses a caller's
+    // `assignee` and the column stays NULL here even when a bypass hands one in (task #1872).
+    const assignee = null
     const result = this.db.run(
       `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic, project_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,

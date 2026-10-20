@@ -145,7 +145,9 @@ export class TaskLifecycleService {
         title: args.title,
         description: args.description ?? null,
         priority: args.priority ?? this.opts.defaultPriority,
-        assignee: args.assignee ?? null,
+        // The creation path never writes a holder: a task is born `queued` without a lease and the
+        // claim writes the holder. The guard refuses a caller's `assignee`; the store ignores it.
+        assignee: null,
         reporter,
         depends_on: JSON.stringify(deps),
         now,
