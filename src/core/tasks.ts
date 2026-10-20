@@ -181,6 +181,26 @@ export const MAX_SAFE_TIMESTAMP_MS = 8_640_000_000_000_000
 // result ceiling: a scan that re-reads the same page never reaches the tail of the queue.
 export const MAX_CURSOR_OFFSET = Number.MAX_SAFE_INTEGER
 
+// The one unit every string bound is measured in: Unicode code points. JSON Schema defines a
+// string's length in code points and zod v4 measures `maxLength` in code points too, so the
+// advertised schema and the service guard count a string the same way. A code point is one UTF-16
+// unit, except a surrogate pair (one code point, two units) — so the count is the unit count minus
+// the surrogate pairs.
+export function codePointLength(value: string): number {
+  let count = value.length
+  for (let i = 0; i < value.length - 1; i++) {
+    const code = value.charCodeAt(i)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(i + 1)
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        count--
+        i++
+      }
+    }
+  }
+  return count
+}
+
 function clampValue(value: number | undefined, fallback: number, max: number): number {
   if (value === undefined) return fallback
   const n = Math.floor(value)
