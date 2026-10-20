@@ -26,6 +26,10 @@ permissions:
   - action: shell
     resource: "*"
     effect: ask
+  # git mutations belong to the `git` agent: every git verb outside the read-only list below is refused
+  - action: shell
+    resource: "git *"
+    effect: deny
   - action: shell
     resource: "git status*"
     effect: allow
@@ -38,11 +42,46 @@ permissions:
   - action: shell
     resource: "git show*"
     effect: allow
+  # branch management belongs to the `git` agent: deny the family, re-allow the read-only forms
   - action: shell
     resource: "git branch*"
+    effect: deny
+  - action: shell
+    resource: "git branch"
     effect: allow
   - action: shell
+    resource: "git branch -a"
+    effect: allow
+  - action: shell
+    resource: "git branch -r"
+    effect: allow
+  - action: shell
+    resource: "git branch -v"
+    effect: allow
+  - action: shell
+    resource: "git branch -vv"
+    effect: allow
+  - action: shell
+    resource: "git branch --list *"
+    effect: allow
+  - action: shell
+    resource: "git branch --merged *"
+    effect: allow
+  - action: shell
+    resource: "git branch --show-current"
+    effect: allow
+  # `git remote add/remove/rename/set-url` belongs to the `git` agent: deny the family, re-allow the read-only forms
+  - action: shell
     resource: "git remote*"
+    effect: deny
+  - action: shell
+    resource: "git remote"
+    effect: allow
+  - action: shell
+    resource: "git remote -v*"
+    effect: allow
+  - action: shell
+    resource: "git remote get-url*"
     effect: allow
   - action: shell
     resource: "ls*"
@@ -123,6 +162,24 @@ permissions:
     resource: "git merge*"
     effect: deny
   - action: shell
+    resource: "git add*"
+    effect: deny
+  - action: shell
+    resource: "git checkout*"
+    effect: deny
+  - action: shell
+    resource: "git switch*"
+    effect: deny
+  - action: shell
+    resource: "git revert*"
+    effect: deny
+  - action: shell
+    resource: "gh pr*"
+    effect: deny
+  - action: shell
+    resource: "gh issue*"
+    effect: deny
+  - action: shell
     resource: "* > *"
     effect: deny
   - action: shell
@@ -137,6 +194,12 @@ permissions:
   - action: edit
     resource: "docs/**"
     effect: allow
+  - action: edit
+    resource: "AGENTS.md"
+    effect: deny
+  - action: edit
+    resource: "**/AGENTS.md"
+    effect: deny
   - action: todowrite
     resource: "*"
     effect: deny
@@ -192,7 +255,7 @@ If the request is ambiguous, pick the most likely reading, state it, and list wh
 
 ## Guardrail (hard)
 
-- Code and docs are READ-ONLY. Bash is limited to read-only inspection; mutations and unlisted commands will ask. The only writes allowed are specs under `docs/`.
+- Repo code is READ-ONLY — `edit` is denied outside `docs/`, and the `AGENTS.md` files are denied even under `docs/`. Shell is limited to read-only inspection: the dangerous mutations (`rm*`, `mv*`, `cp*`, redirects, `sed*`) are denied, and every git verb outside the read-only list (`git status`, `git log`, `git diff`, `git show`, the listing forms of `git branch`, the read-only forms of `git remote`) is refused — `git commit`/`push`/`reset`/`clean`/`merge`/`add`/`checkout`/`switch`/`revert`/`tag`/`stash`/`cherry-pick`/`pull`/`fetch`/`rebase`/`rm`/`restore`/`worktree`/`apply`/`am`/`config`/`submodule`, branch and PR management and `gh issue*` included. Unlisted non-git commands will ask. The only writes allowed are specs under `docs/`.
 - You do not make implementation decisions — you propose; the orchestrator/user decides.
 
 ## Style

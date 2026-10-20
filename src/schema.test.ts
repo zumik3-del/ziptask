@@ -77,17 +77,23 @@ describe('schema guard (v1.6)', () => {
       const db = openDatabase(path)
       db.close()
       const db2 = openDatabase(path)
-      db2.run('DROP INDEX IF EXISTS idx_tasks_epic_id')
-      db2.run('ALTER TABLE tasks DROP COLUMN epic_id')
-      db2.run('DROP INDEX IF EXISTS idx_tasks_queued_candidates')
-      db2.run('ALTER TABLE tasks DROP COLUMN is_epic')
-      db2.run('DROP INDEX IF EXISTS idx_tasks_project_status_priority')
-      db2.run('DROP INDEX IF EXISTS idx_tasks_queued_candidates')
-      db2.run('DROP INDEX IF EXISTS idx_tasks_lease_expires_at')
-      db2.run('DROP INDEX IF EXISTS idx_tasks_created_at_id')
-      db2.run('ALTER TABLE tasks DROP COLUMN project_id')
-      db2.run('DELETE FROM schema_version')
-      db2.run('INSERT INTO schema_version (version) VALUES (?)', [2])
+      // One transaction for the downgrade: the eight DDL/data statements would otherwise be eight
+      // WAL commits, which is what made this fixture slow. PRAGMA is not involved here, so the
+      // transaction is safe (the migration replay below does keep its PRAGMA outside).
+      const downgrade = db2.transaction(() => {
+        db2.run('DROP INDEX IF EXISTS idx_tasks_epic_id')
+        db2.run('ALTER TABLE tasks DROP COLUMN epic_id')
+        db2.run('DROP INDEX IF EXISTS idx_tasks_queued_candidates')
+        db2.run('ALTER TABLE tasks DROP COLUMN is_epic')
+        db2.run('DROP INDEX IF EXISTS idx_tasks_project_status_priority')
+        db2.run('DROP INDEX IF EXISTS idx_tasks_queued_candidates')
+        db2.run('DROP INDEX IF EXISTS idx_tasks_lease_expires_at')
+        db2.run('DROP INDEX IF EXISTS idx_tasks_created_at_id')
+        db2.run('ALTER TABLE tasks DROP COLUMN project_id')
+        db2.run('DELETE FROM schema_version')
+        db2.run('INSERT INTO schema_version (version) VALUES (?)', [2])
+      })
+      downgrade()
       db2.close()
       const db3 = openDatabase(path)
       const row = db3.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | null
@@ -151,15 +157,23 @@ describe('schema guard (v1.6)', () => {
     const path = makeTempDbPath('schema-guard')
     try {
       const raw = new Database(path)
+      // PRAGMA foreign_keys stays OUTSIDE the transaction: it is a no-op while a transaction is open.
       raw.exec('PRAGMA foreign_keys = ON')
-      for (let i = 0; i < V3_STATEMENT_COUNT; i++) raw.exec(MIGRATIONS[i])
-      raw.run('DELETE FROM schema_version')
-      raw.run('INSERT INTO schema_version (version) VALUES (?)', [V3_STATEMENT_COUNT])
-      const id = Number(raw.run(
-        "INSERT INTO tasks (title, reporter, status, created_at, updated_at) VALUES ('t', 'dev', 'queued', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')"
-      ).lastInsertRowid)
-      raw.run("INSERT INTO comments (task_id, agent, content, created_at) VALUES (?, 'dev', 'hi', '2026-01-01T00:00:00.000Z')", [id])
-      raw.run("INSERT INTO audit_log (task_id, agent, action, created_at) VALUES (?, 'dev', 'create', '2026-01-01T00:00:00.000Z')", [id])
+      // One transaction: the replay is 12 DDL statements plus 4 writes, and one commit per
+      // statement is what made this fixture slow. DDL inside a transaction is what production
+      // does too (src/db/db.ts applyMigrations).
+      let id = 0
+      const build = raw.transaction(() => {
+        for (let i = 0; i < V3_STATEMENT_COUNT; i++) raw.exec(MIGRATIONS[i])
+        raw.run('DELETE FROM schema_version')
+        raw.run('INSERT INTO schema_version (version) VALUES (?)', [V3_STATEMENT_COUNT])
+        id = Number(raw.run(
+          "INSERT INTO tasks (title, reporter, status, created_at, updated_at) VALUES ('t', 'dev', 'queued', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')"
+        ).lastInsertRowid)
+        raw.run("INSERT INTO comments (task_id, agent, content, created_at) VALUES (?, 'dev', 'hi', '2026-01-01T00:00:00.000Z')", [id])
+        raw.run("INSERT INTO audit_log (task_id, agent, action, created_at) VALUES (?, 'dev', 'create', '2026-01-01T00:00:00.000Z')", [id])
+      })
+      build()
       raw.close()
 
       const db = openDatabase(path)

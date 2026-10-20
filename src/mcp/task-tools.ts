@@ -2,21 +2,26 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
 import type { TaskStatus, TaskPriority } from '../core/tasks'
-import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS } from '../core/tasks'
-import { TASK_PRIORITIES } from '../defaults'
+import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_AGENT_LENGTH, MAX_DEPENDS_ON } from '../core/tasks'
 import { foldResult } from '../core/result'
 import {
   type ToolResult, jsonResult, textResult, errorResult, errorTool, toToolResult, pickFields, rejectUnknownArgs,
   PROJECT_ARG, TaskId
 } from './common'
 
+// A string bound is counted in code points in both layers: zod v4 measures `maxLength` in code
+// points, and the create guard measures the same way (`codePointLength`), so the schema and the
+// guard refuse the same strings. `depends_on` counts ids — an array length, which both layers
+// count identically. The actor names carry the bound the guard enforces on them
+// (MAX_AGENT_LENGTH): every string field the guard bounds is bounded here too, so the advertised
+// schema never understates what the service refuses.
 const CREATE_TASK_SHAPE = {
-  title: z.string().describe('English, <=200 chars'),
-  description: z.string().optional().describe('English; fill get_template("task") or "epic" first'),
+  title: z.string().max(MAX_TITLE_LENGTH, 'INVALID: title too long').describe('English, <=200 code points'),
+  description: z.string().max(MAX_DESCRIPTION_LENGTH, 'INVALID: description too long').optional().describe('English; fill get_template("task") or "epic" first; <=20000 code points'),
   priority: z.enum(TASK_PRIORITIES).optional(),
-  assignee: z.string().optional(),
-  depends_on: z.array(TaskId).optional(),
-  reporter: z.string().optional(),
+  assignee: z.string().max(MAX_AGENT_LENGTH, 'INVALID: assignee too long').optional().describe('refused at creation: a task holds a lease only from in_progress; the claim writes the holder; <=200 code points'),
+  depends_on: z.array(TaskId).max(MAX_DEPENDS_ON, 'INVALID: depends_on too long').optional(),
+  reporter: z.string().max(MAX_AGENT_LENGTH, 'INVALID: reporter too long').optional().describe('<=200 code points'),
   epic: z.boolean().optional().describe('Create as an epic (not claimable); description follows get_template("epic") with required Source'),
   epic_id: TaskId.optional().describe('Attach as sub-task to an existing task'),
   project: PROJECT_ARG
@@ -34,6 +39,7 @@ const LIST_TASKS_SHAPE = {
   limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional(),
   updated_since: z.number().finite().min(-MAX_SAFE_TIMESTAMP_MS).max(MAX_SAFE_TIMESTAMP_MS).optional(),
   epic_id: TaskId.optional(),
+  is_epic: z.boolean().optional(),
   ids: z.array(z.number().int()).max(MAX_RESULT_LIMIT).optional(),
   project: PROJECT_ARG
 }
@@ -102,6 +108,7 @@ export function handleListTasks(svc: TaskService, args: {
   limit?: number
   updated_since?: number
   epic_id?: number
+  is_epic?: boolean
   ids?: number[]
   project?: string
 }): ToolResult {
@@ -111,7 +118,10 @@ export function handleListTasks(svc: TaskService, args: {
     const withAssignee = args.fields?.includes('assignee') ?? false
     return foldResult(svc.getTasksByIds(args.ids), ({ items }) => {
       const lines = items.map(({ id, task }) => {
-        if (!task) return withAssignee ? pipeJoin(id, 0, '-') : pipeJoin(id, 0)
+        if (!task) {
+          const code = statusToCode('not_found')
+          return withAssignee ? pipeJoin(id, code, '-') : pipeJoin(id, code)
+        }
         const code = statusToCode(task.status)
         return withAssignee ? pipeJoin(id, code, task.assignee ?? '-') : pipeJoin(id, code)
       })
@@ -123,6 +133,7 @@ export function handleListTasks(svc: TaskService, args: {
     status: args.status,
     updated_since: args.updated_since,
     epic_id: args.epic_id,
+    is_epic: args.is_epic,
     limit: args.limit,
     project: args.project
   }
@@ -179,7 +190,7 @@ export function handleListQueue(svc: TaskService, args: { limit?: number; projec
 
 export function registerTaskTools(server: McpServer, svc: TaskService) {
   server.registerTool('create_task', {
-    description: 'Create task. Regular tasks start queued; epics are created open. An epic takes no assignee (it holds no lease), and epic_id promotes its target only when the target is queued. blocked is a manual flag only for regular tasks. `project` is required (no default; refused in `legacy` and in an archived project). Build description from get_template("task"); for epics use get_template("epic")',
+    description: 'Create task. Regular tasks start queued; epics are created open. A task is born without a lease, so `assignee` is refused at creation (INVALID: assignee is refused at creation: a task holds a lease only from in_progress) — the claim writes the holder. `reporter` and `assignee` are bounded at 200 code points each (an over-long one is refused by the schema, as INVALID: reporter too long / INVALID: assignee too long). An epic takes no assignee (it holds no lease), and epic_id promotes its target only when the target is queued. blocked is a manual flag only for regular tasks. `project` is required (no default; refused in `legacy` and in an archived project). Build description from get_template("task"); for epics use get_template("epic")',
     inputSchema: z.object(CREATE_TASK_SHAPE).catchall(z.unknown())
   }, async (args) => handleCreateTask(svc, args))
 
@@ -189,7 +200,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleGetTask(svc, args))
 
   server.registerTool('list_tasks', {
-    description: 'Filters: assignee,status,updated_since(unix ms),epic_id(children of epic). `project` (slug) is required unless ids is non-empty; ids batch-mode returns pipe id|code; assignee via fields:["assignee"]. description only via explicit fields',
+    description: 'Filters: assignee,status,updated_since(unix ms),epic_id(children of epic),is_epic(epic filter). `project` (slug) is required unless ids is non-empty; ids batch-mode returns pipe id|code; assignee via fields:["assignee"]. description only via explicit fields',
     inputSchema: z.object(LIST_TASKS_SHAPE).catchall(z.unknown())
   }, async (args) => handleListTasks(svc, args))
 

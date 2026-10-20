@@ -11,9 +11,12 @@ import { DEFAULT_REPORTER } from './defaults'
 import { ENV_MAPPINGS, DEFAULTS, loadSettings } from './config'
 import {
   handleCreateTask, handleGetTask, handleListTasks, handleClaimTask,
-  handleListQueue, handleCreateProject, handleListProjects, handleUpdateProject,
-  handleDeleteProject, handleUpdateStatus, handleAddComment, handleGetTimeline
-} from './mcp/tools'
+  handleListQueue, handleUpdateStatus
+} from './mcp/task-tools'
+import { handleAddComment, handleGetTimeline } from './mcp/comment-tools'
+import {
+  handleCreateProject, handleListProjects, handleUpdateProject, handleDeleteProject
+} from './mcp/project-tools'
 import { createTestDb, closeTestDb, seedProject, json, text, makeTempDbPath, removeTempDb } from './test-context'
 
 let db: Database
@@ -33,7 +36,7 @@ const insertRow = (opts: { title: string; reporter: string; projectId: number | 
     depends_on: '[]',
     now: '2026-01-01T00:00:00.000Z',
     projectId: opts.projectId
-  })
+  }).id
 
 const createIn = (title: string, project: string, extra: { depends_on?: number[]; epic_id?: number; epic?: boolean } = {}): number =>
   json(handleCreateTask(svc, { title, reporter: 'dev', project, ...extra })).id as number
@@ -93,19 +96,26 @@ function okJson(res: ToolResult): any {
 // replay the frozen v4 prefix, stamp 22, and insert pre-existing rows through raw SQL
 function buildV4Db(path: string): void {
   const raw = new SqliteDb(path)
+  // PRAGMA foreign_keys stays OUTSIDE the transaction: it is a no-op while a transaction is open.
   raw.exec('PRAGMA foreign_keys = ON')
-  for (let i = 0; i < V4_STATEMENT_COUNT; i++) raw.exec(MIGRATIONS[i])
-  raw.run('DELETE FROM schema_version')
-  raw.run('INSERT INTO schema_version (version) VALUES (?)', [V4_STATEMENT_COUNT])
-  raw.run(
-    "INSERT INTO tasks (title, reporter, status, created_at, updated_at) VALUES ('v4 done', 'dev', 'done', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')"
-  )
-  raw.run(
-    "INSERT INTO tasks (title, reporter, status, created_at, updated_at) VALUES ('v4 queued', 'dev', 'queued', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z')"
-  )
-  raw.run(
-    "INSERT INTO tasks (title, reporter, status, created_at, updated_at) VALUES ('v4 failed', 'dev', 'failed', '2026-01-03T00:00:00.000Z', '2026-01-03T00:00:00.000Z')"
-  )
+  // One transaction: the replay is 22 DDL statements plus 5 writes, and one commit per statement
+  // is what made this fixture slow. DDL inside a transaction is what production does too
+  // (src/db/db.ts applyMigrations).
+  const build = raw.transaction(() => {
+    for (let i = 0; i < V4_STATEMENT_COUNT; i++) raw.exec(MIGRATIONS[i])
+    raw.run('DELETE FROM schema_version')
+    raw.run('INSERT INTO schema_version (version) VALUES (?)', [V4_STATEMENT_COUNT])
+    raw.run(
+      "INSERT INTO tasks (title, reporter, status, created_at, updated_at) VALUES ('v4 done', 'dev', 'done', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')"
+    )
+    raw.run(
+      "INSERT INTO tasks (title, reporter, status, created_at, updated_at) VALUES ('v4 queued', 'dev', 'queued', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z')"
+    )
+    raw.run(
+      "INSERT INTO tasks (title, reporter, status, created_at, updated_at) VALUES ('v4 failed', 'dev', 'failed', '2026-01-03T00:00:00.000Z', '2026-01-03T00:00:00.000Z')"
+    )
+  })
+  build()
   raw.close()
 }
 
@@ -227,17 +237,20 @@ describe('projects: CRUD contract (ADR D4)', () => {
   })
 
   test('list_projects pipes slug|folder|open ordered by slug, with sanitized pipes', () => {
-    seedProject(db, 'alpha')
-    seedProject(db, 'beta')
-    repo.insertProject({ slug: 'gamma', folderPath: '/tmp/opencode/a|b', now: '2026-01-01T00:00:00.000Z' })
-    const alphaId = repo.projectBySlug('alpha')!.id
-    const betaId = repo.projectBySlug('beta')!.id
-    for (const [title, projectId] of [['a1', alphaId], ['a2', alphaId], ['b1', betaId]] as const) {
-      repo.insertTask({
-        title, description: null, priority: 'p2', assignee: null, reporter: 'dev',
-        depends_on: '[]', now: '2026-01-01T00:00:00.000Z', projectId
-      })
-    }
+    // One transaction for the whole fixture: one WAL commit instead of one per seeded row.
+    repo.transaction(() => {
+      seedProject(db, 'alpha')
+      seedProject(db, 'beta')
+      repo.insertProject({ slug: 'gamma', folderPath: '/tmp/opencode/a|b', now: '2026-01-01T00:00:00.000Z' })
+      const alphaId = repo.projectBySlug('alpha')!.id
+      const betaId = repo.projectBySlug('beta')!.id
+      for (const [title, projectId] of [['a1', alphaId], ['a2', alphaId], ['b1', betaId]] as const) {
+        repo.insertTask({
+          title, description: null, priority: 'p2', assignee: null, reporter: 'dev',
+          depends_on: '[]', now: '2026-01-01T00:00:00.000Z', projectId
+        })
+      }
+    })
     const lines = text(handleListProjects(svc, {})).split('\n')
     expect(lines.map(l => l.split('|')[0])).toEqual(['alpha', 'beta', 'gamma', 'test'])
     expect(lines[0]).toBe('alpha||2')
@@ -246,22 +259,26 @@ describe('projects: CRUD contract (ADR D4)', () => {
   })
 
   test('the open column counts non-terminal tasks only, through the tool shape the reader sees', () => {
-    seedProject(db, 'alpha')
-    seedProject(db, 'beta')
-    seedProject(db, 'gamma')
-    createIn('a1', 'alpha')                  // queued
-    const a2 = createIn('a2', 'alpha')       // in_progress
-    const a3 = createIn('a3', 'alpha')       // done
-    const a4 = createIn('a4', 'alpha')       // failed
-    const a5 = createIn('a5', 'alpha')       // canceled
-    createIn('b1', 'beta')                   // queued
-    const g1 = createIn('g1', 'gamma')       // done
-    const g2 = createIn('g2', 'gamma')       // failed
-    const g3 = createIn('g3', 'gamma')       // canceled
-    json(handleClaimTask(svc, { agent: 'dev', task_id: a2 }))
-    for (const [id, status] of [[a3, 'done'], [a4, 'failed'], [a5, 'canceled'], [g1, 'done'], [g2, 'failed'], [g3, 'canceled']] as const) {
-      setStatus(id, status)
-    }
+    // One transaction for the whole fixture: one WAL commit instead of one per seeded row.
+    let a2 = 0
+    repo.transaction(() => {
+      seedProject(db, 'alpha')
+      seedProject(db, 'beta')
+      seedProject(db, 'gamma')
+      createIn('a1', 'alpha')                  // queued
+      a2 = createIn('a2', 'alpha')             // in_progress
+      const a3 = createIn('a3', 'alpha')       // done
+      const a4 = createIn('a4', 'alpha')       // failed
+      const a5 = createIn('a5', 'alpha')       // canceled
+      createIn('b1', 'beta')                   // queued
+      const g1 = createIn('g1', 'gamma')       // done
+      const g2 = createIn('g2', 'gamma')       // failed
+      const g3 = createIn('g3', 'gamma')       // canceled
+      json(handleClaimTask(svc, { agent: 'dev', task_id: a2 }))
+      for (const [id, status] of [[a3, 'done'], [a4, 'failed'], [a5, 'canceled'], [g1, 'done'], [g2, 'failed'], [g3, 'canceled']] as const) {
+        setStatus(id, status)
+      }
+    })
     // a2's in_progress comes from the real claim, so an over-broad "open = queued only" fails here
     expect(repo.getTaskRow(a2)!.status).toBe('in_progress')
     // the counted set, as an oracle: a filter that keeps a terminal status counts 3+, one that

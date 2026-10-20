@@ -1,5 +1,5 @@
 import type { TaskStatus, Clock } from './tasks'
-import { nowIso, monotonicNowMs } from './tasks'
+import { asClock, nowIso, monotonicNowMs } from './tasks'
 import type { AuditStore, LeaseStore } from './types'
 import { SECOND_MS } from '../defaults'
 
@@ -11,22 +11,14 @@ export class LeaseReaper {
   private readonly clock: Clock | null
 
   constructor(
-    private readonly store: LeaseStore & AuditStore,
+    private readonly store: LeaseStore & Pick<AuditStore, 'auditAppend'>,
     private readonly reapCooldownSec: number,
     private readonly auditLog: boolean,
     clock?: unknown
   ) {
-    // Accept a Clock or a bare nowMs function, mirroring TaskRepo.
-    if (clock == null) this.clock = null
-    else if (typeof clock === 'function') this.clock = { nowMs: clock as () => number, nowIso: () => new Date((clock as () => number)()).toISOString() }
-    else if (typeof (clock as { nowIso?: unknown }).nowIso === 'function') this.clock = clock as Clock
-    else if (typeof (clock as { nowMs?: unknown }).nowMs === 'function') {
-      const fn = (clock as { nowMs: () => number }).nowMs
-      this.clock = { nowMs: fn, nowIso: () => new Date(fn()).toISOString() }
-    } else if (typeof (clock as { now?: unknown }).now === 'function') {
-      const fn = (clock as { now: () => number }).now
-      this.clock = { nowMs: fn, nowIso: () => new Date(fn()).toISOString() }
-    } else this.clock = null
+    // One normalisation for every clock consumer: the accepted shapes are documented on asClock
+    // (src/core/tasks.ts), so the reaper can never accept less than the service half does.
+    this.clock = asClock(clock)
   }
 
   private _nowMs(): number {

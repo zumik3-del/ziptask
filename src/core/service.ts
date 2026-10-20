@@ -1,11 +1,11 @@
-import type { Task, TaskStatus, TaskPriority, Clock } from './tasks'
+import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, Clock } from './tasks'
 import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, asClock } from './tasks'
-import type { CommentRow, ProjectListItem, ProjectRow, ProjectStore, Store, TimelineRow, SvcResult, SvcError, UpdateStatusData } from './types'
+import type { CommentRow, LifecycleStore, ProjectListItem, ProjectRow, ProjectStore, QueryStore, TaskServiceStore, TimelineRow, SvcResult, SvcError, UpdateStatusData } from './types'
 import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
 import { LeaseReaper } from './reaper'
-import { createTaskGuard, updateStatusGuard, claimEligibilityError, epicNotClaimableError } from './guards'
+import { createTaskGuard, updateStatusGuard, claimEligibilityError, epicNotClaimableError, epicTargetChangedError, epicPromotionRaceError } from './guards'
 import { requiredError, tooLongError } from './validation'
 import { resolveProject, createProject, updateProject, deleteProject } from './projects'
 import {
@@ -20,7 +20,7 @@ type CreateTaskArgs = {
 }
 
 type ListTasksArgs = {
-  assignee?: string; status?: TaskStatus; updated_since?: number; epic_id?: number
+  assignee?: string; status?: TaskStatus; updated_since?: number; epic_id?: number; is_epic?: boolean
   limit?: number; project?: string
 }
 
@@ -38,7 +38,9 @@ export type TaskServiceOptions = {
   clock?: unknown
 }
 
-type ResolvedOptions = Required<Omit<TaskServiceOptions, 'scope' | 'clock'>> & Pick<TaskServiceOptions, 'scope'>
+// The single resolution point: the options and the clock are normalised once, and the facade
+// hands the result to both child services.
+type ResolvedOptions = Required<Omit<TaskServiceOptions, 'scope' | 'clock'>> & Pick<TaskServiceOptions, 'scope'> & { clock: Clock | null }
 
 function resolveOptions(opts: TaskServiceOptions): ResolvedOptions {
   return {
@@ -52,7 +54,8 @@ function resolveOptions(opts: TaskServiceOptions): ResolvedOptions {
     listLimit: opts.listLimit ?? DEFAULT_LIST_LIMIT,
     timelineLimit: opts.timelineLimit ?? DEFAULT_TIMELINE_LIMIT,
     queueLimit: opts.queueLimit ?? DEFAULT_QUEUE_LIMIT,
-    scope: opts.scope
+    scope: opts.scope,
+    clock: asClock(opts.clock)
   }
 }
 
@@ -94,11 +97,11 @@ export class TaskLifecycleService {
   private readonly reaper: LeaseReaper
   readonly projects: ProjectService
 
-  constructor(private store: Store, opts: TaskServiceOptions = {}, reaper?: LeaseReaper, projects?: ProjectService) {
-    this.opts = resolveOptions(opts)
-    this.clock = asClock(opts.clock)
+  constructor(private store: LifecycleStore, opts: ResolvedOptions, projects: ProjectService, reaper?: LeaseReaper) {
+    this.opts = opts
+    this.clock = opts.clock
     this.reaper = reaper ?? new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
-    this.projects = projects ?? new ProjectService(store, this.opts.scope)
+    this.projects = projects
   }
 
   private _nowMs(): number {
@@ -126,7 +129,7 @@ export class TaskLifecycleService {
     }, this.store)
   }
 
-  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' | 'open' }> {
+  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: CreatedTaskStatus }> {
     const project = this.projects.resolve(args.project)
     if (!project.ok) return fail(project.error)
     const guard = this._createTaskGuard(args, project.data)
@@ -135,13 +138,16 @@ export class TaskLifecycleService {
     const reporter = args.reporter ?? this.opts.defaultReporter
     const now = this._nowIso()
     const epicId = args.epic_id ?? null
-    const createdStatus: 'queued' | 'open' = args.epic ? 'open' : 'queued'
-    return this.store.transaction((): SvcResult<{ id: number; status: 'queued' | 'open' }> => {
-      const id = this.store.insertTask({
+    return this.store.transaction((): SvcResult<{ id: number; status: CreatedTaskStatus }> => {
+      // The repo owns the birth rule: it writes the status a task is born with and reports it,
+      // so the audit row below can never name a status the row does not carry.
+      const created = this.store.insertTask({
         title: args.title,
         description: args.description ?? null,
         priority: args.priority ?? this.opts.defaultPriority,
-        assignee: args.assignee ?? null,
+        // The creation path never writes a holder: a task is born `queued` without a lease and the
+        // claim writes the holder. The guard refuses a caller's `assignee`; the store ignores it.
+        assignee: null,
         reporter,
         depends_on: JSON.stringify(deps),
         now,
@@ -150,18 +156,39 @@ export class TaskLifecycleService {
         isEpic: args.epic,
         projectId: project.data.id
       })
+      const id = created.id
       if (createsCycle((depId) => this.store.depsOf(depId), id, deps)) {
         this.store.deleteTask(id)
         return fail('CYCLE', 'dependency graph contains a cycle')
       }
-      if (this.opts.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, createdStatus)
+      if (this.opts.auditLog) this.store.auditAppend(id, reporter, 'create', undefined, created.status)
 
       if (epicId !== null) {
-        this.store.promoteEpicWithMirror(epicId, reporter, 'subtask_add',
+        // The target is re-read and re-checked inside the write transaction: the up-front guard read
+        // it before the write, and a rival can claim it in between. Promotion must never rewrite a row
+        // somebody works on, and a child must never point at a task that is not an epic.
+        const target = this.store.getTaskRow(epicId)
+        const changed = epicTargetChangedError(target, epicId, project.data.slug)
+        if (changed) {
+          // The child goes again: a refusal leaves no row behind (its create audit row cascades).
+          this.store.deleteTask(id)
+          return fail(changed)
+        }
+        const promoted = this.store.promoteEpicWithMirror(epicId, reporter, 'subtask_add',
           `#${id} ${sanitizePipe(args.title)}`, now, this.opts.auditLog)
+        if (promoted === 0) {
+          // The promotion matched no row: the target left the queued path in the meantime. A target
+          // that is an epic now (promoted elsewhere) still takes the child; anything else would leave
+          // the child pointing at a non-epic, so it goes and the call is refused.
+          const after = this.store.getTaskRow(epicId)
+          if (!after?.is_epic) {
+            this.store.deleteTask(id)
+            return fail(epicPromotionRaceError(epicId))
+          }
+        }
       }
 
-      return ok({ id, status: createdStatus })
+      return ok({ id, status: created.status })
     })
   }
 
@@ -259,6 +286,8 @@ export class TaskLifecycleService {
     })
   }
 
+  // Test-only seam: it forces a sweep regardless of the cooldown and has no production caller —
+  // production reaps through the read paths and the claim/update write paths.
   reapExpiredLeases(): void {
     this.reaper.reap()
   }
@@ -270,11 +299,11 @@ export class TaskQueryService {
   private readonly reaper: LeaseReaper
   readonly projects: ProjectService
 
-  constructor(private store: Store, opts: TaskServiceOptions = {}, reaper?: LeaseReaper, projects?: ProjectService) {
-    this.opts = resolveOptions(opts)
-    this.clock = asClock(opts.clock)
+  constructor(private store: QueryStore, opts: ResolvedOptions, projects: ProjectService, reaper?: LeaseReaper) {
+    this.opts = opts
+    this.clock = opts.clock
     this.reaper = reaper ?? new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
-    this.projects = projects ?? new ProjectService(store, this.opts.scope)
+    this.projects = projects
   }
 
   getTaskView(id: number): SvcResult<{ task: Readonly<Task>; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number; canceled: number } }> {
@@ -308,6 +337,7 @@ export class TaskQueryService {
       status: args.status,
       updatedSinceIso,
       epicId: args.epic_id,
+      isEpic: args.is_epic,
       limit: clampLimit(args.limit, this.opts.listLimit),
       projectId: project.data.id
     })
@@ -361,25 +391,19 @@ export class TaskQueryService {
 }
 
 export class TaskService {
-  protected readonly store: Store
-  private readonly opts: ResolvedOptions
-  private readonly clock: Clock | null
-  private readonly reaper: LeaseReaper
   readonly projects: ProjectService
   readonly lifecycle: TaskLifecycleService
   readonly query: TaskQueryService
 
-  constructor(store: Store, opts: TaskServiceOptions = {}) {
-    this.store = store
-    this.opts = resolveOptions(opts)
-    this.clock = asClock(opts.clock)
-    this.reaper = new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
-    this.projects = new ProjectService(store, this.opts.scope)
-    this.lifecycle = new TaskLifecycleService(store, opts, this.reaper, this.projects)
-    this.query = new TaskQueryService(store, opts, this.reaper, this.projects)
+  constructor(store: TaskServiceStore, opts: TaskServiceOptions = {}) {
+    const resolved = resolveOptions(opts)
+    const reaper = new LeaseReaper(store, resolved.reapCooldownSec, resolved.auditLog, resolved.clock)
+    this.projects = new ProjectService(store, resolved.scope)
+    this.lifecycle = new TaskLifecycleService(store, resolved, this.projects, reaper)
+    this.query = new TaskQueryService(store, resolved, this.projects, reaper)
   }
 
-  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: 'queued' | 'open' }> {
+  createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: CreatedTaskStatus }> {
     return this.lifecycle.createTask(args)
   }
 
@@ -419,12 +443,10 @@ export class TaskService {
     return this.query.listComments(id)
   }
 
+  // Test-only seam: it forces a sweep regardless of the cooldown and has no production caller —
+  // production reaps through the read paths and the claim/update write paths.
   reapExpiredLeases(): void {
     this.lifecycle.reapExpiredLeases()
   }
 }
 
-export { TaskLifecycleService as TaskLifecycle }
-export { TaskLifecycleService as LifecycleService }
-export { TaskQueryService as TaskQuery }
-export { TaskQueryService as QueryService }

@@ -5,7 +5,7 @@ import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus, handleListQueue
-} from './mcp/tools'
+} from './mcp/task-tools'
 import {
   createTestDb, closeTestDb, insertTaskRow, json, text, driveToDone, testProjectId,
   type CreateTaskRowOpts
@@ -96,13 +96,18 @@ describe('deps', () => {
 
   test('auto-claim pages through >100 dep-blocked tasks to find free one', () => {
     // 101 dep-blocked tasks force the batch loop past the first page
-    for (let i = 0; i < 101; i++) {
-      createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
-    }
-    const freeId = createTaskRow({ title: 'FreeBeyondBatch', reporter: 'dev' })
+    // One transaction: the seeding is 102 inserts, and one WAL commit per row is what made this
+    // the slowest fixture in the suite. The claim itself stays outside the transaction.
+    let freeId = 0
+    repo.transaction(() => {
+      for (let i = 0; i < 101; i++) {
+        createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
+      }
+      freeId = createTaskRow({ title: 'FreeBeyondBatch', reporter: 'dev' })
+    })
     const res = handleClaimTask(svc, { agent: 'agent-2' })
     expect(json(res).id).toBe(freeId)
-  }, 20000)
+  })
 
   test('list_queue pipe hides dep-pending task even though queued (v2)', () => {
     const a = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id
@@ -207,9 +212,9 @@ describe('queuedCandidates id tie-break (#431)', () => {
   test('same priority + same created_at orders by ascending id', () => {
     // Insert tasks with explicit same created_at to test tie-break
     const baseTime = '2020-01-01T00:00:00.000Z'
-    const idA = repo.insertTask({ title: 'A', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: baseTime, projectId: testProjectId(repo) })
-    const idB = repo.insertTask({ title: 'B', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: baseTime, projectId: testProjectId(repo) })
-    const idC = repo.insertTask({ title: 'C', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: baseTime, projectId: testProjectId(repo) })
+    const idA = repo.insertTask({ title: 'A', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: baseTime, projectId: testProjectId(repo) }).id
+    const idB = repo.insertTask({ title: 'B', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: baseTime, projectId: testProjectId(repo) }).id
+    const idC = repo.insertTask({ title: 'C', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: baseTime, projectId: testProjectId(repo) }).id
     // Set same created_at
     db.run("UPDATE tasks SET created_at = ? WHERE id IN (?, ?, ?)", [baseTime, idA, idB, idC])
 
@@ -219,8 +224,8 @@ describe('queuedCandidates id tie-break (#431)', () => {
   })
 
   test('priority still takes precedence over id tie-break', () => {
-    const p0id = repo.insertTask({ title: 'P0', description: null, priority: 'p0', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z', projectId: testProjectId(repo) })
-    const p2id = repo.insertTask({ title: 'P2', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z', projectId: testProjectId(repo) })
+    const p0id = repo.insertTask({ title: 'P0', description: null, priority: 'p0', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z', projectId: testProjectId(repo) }).id
+    const p2id = repo.insertTask({ title: 'P2', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z', projectId: testProjectId(repo) }).id
     db.run("UPDATE tasks SET created_at = '2020-01-01T00:00:00.000Z' WHERE id IN (?, ?)", [p0id, p2id])
 
     const candidates = repo.queuedCandidates(10, testProjectId(repo))

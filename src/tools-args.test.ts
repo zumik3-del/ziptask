@@ -5,8 +5,9 @@ import { monotonicNowMs } from './core/tasks'
 import { TaskService } from './core/service'
 import {
   handleCreateTask, handleGetTask, handleListTasks, handleClaimTask, handleUpdateStatus,
-  handleListQueue, handleAddComment, handleGetTimeline
-} from './mcp/tools'
+  handleListQueue
+} from './mcp/task-tools'
+import { handleAddComment, handleGetTimeline } from './mcp/comment-tools'
 import { createTestDb, closeTestDb, getTaskRow, json, text } from './test-context'
 
 let db: Database
@@ -212,7 +213,7 @@ describe('unknown-argument rejection on the other handlers (F1 #1040)', () => {
         call: (id: number) => handleGetTask(svc, { id, field: 'x' } as any)
       },
       {
-        expected: 'INVALID: unknown argument sort on list_tasks (accepted: assignee, epic_id, fields, ids, limit, project, status, updated_since)',
+        expected: 'INVALID: unknown argument sort on list_tasks (accepted: assignee, epic_id, fields, ids, is_epic, limit, project, status, updated_since)',
         call: () => handleListTasks(svc, { status: 'queued', limit: 5, sort: 'id' } as any)
       },
       {

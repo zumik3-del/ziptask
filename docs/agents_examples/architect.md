@@ -26,6 +26,10 @@ permissions:
   - action: shell
     resource: "*"
     effect: ask
+  # git mutations belong to the `git` agent: every git verb outside the read-only list below is refused
+  - action: shell
+    resource: "git *"
+    effect: deny
   - action: shell
     resource: "git status*"
     effect: allow
@@ -36,13 +40,48 @@ permissions:
     resource: "git diff*"
     effect: allow
   - action: shell
-    resource: "git branch*"
-    effect: allow
-  - action: shell
     resource: "git show*"
     effect: allow
+  # branch management belongs to the `git` agent: deny the family, re-allow the read-only forms
+  - action: shell
+    resource: "git branch*"
+    effect: deny
+  - action: shell
+    resource: "git branch"
+    effect: allow
+  - action: shell
+    resource: "git branch -a"
+    effect: allow
+  - action: shell
+    resource: "git branch -r"
+    effect: allow
+  - action: shell
+    resource: "git branch -v"
+    effect: allow
+  - action: shell
+    resource: "git branch -vv"
+    effect: allow
+  - action: shell
+    resource: "git branch --list *"
+    effect: allow
+  - action: shell
+    resource: "git branch --merged *"
+    effect: allow
+  - action: shell
+    resource: "git branch --show-current"
+    effect: allow
+  # `git remote add/remove/rename/set-url` belongs to the `git` agent: deny the family, re-allow the read-only forms
   - action: shell
     resource: "git remote*"
+    effect: deny
+  - action: shell
+    resource: "git remote"
+    effect: allow
+  - action: shell
+    resource: "git remote -v*"
+    effect: allow
+  - action: shell
+    resource: "git remote get-url*"
     effect: allow
   - action: shell
     resource: "ls*"
@@ -144,6 +183,27 @@ permissions:
     resource: "git merge*"
     effect: deny
   - action: shell
+    resource: "git add*"
+    effect: deny
+  - action: shell
+    resource: "git checkout*"
+    effect: deny
+  - action: shell
+    resource: "git switch*"
+    effect: deny
+  - action: shell
+    resource: "git revert*"
+    effect: deny
+  - action: shell
+    resource: "gh pr*"
+    effect: deny
+  - action: shell
+    resource: "gh issue*"
+    effect: deny
+  - action: shell
+    resource: "*smoke*"
+    effect: deny
+  - action: shell
     resource: "* > *"
     effect: deny
   - action: shell
@@ -158,6 +218,12 @@ permissions:
   - action: edit
     resource: "docs/**"
     effect: allow
+  - action: edit
+    resource: "AGENTS.md"
+    effect: deny
+  - action: edit
+    resource: "**/AGENTS.md"
+    effect: deny
   - action: todowrite
     resource: "*"
     effect: deny
@@ -201,7 +267,7 @@ If the request is ambiguous, pick the most likely mode and state which one you a
 
 ## Workflow (always)
 
-1. Gather context first: `AGENTS.md`, `README*`, `docs/`, structure via `glob`/`grep`/`list`/`read`. Use `bash` for OBSERVABILITY ONLY (see Guardrail): `git log`, `git status`, `tree`, `ls`, `cat`, `find`, and read-only verification commands from the project's `AGENTS.md` (e.g. typecheck). Never run the smoke suite and never run anything that mutates state (tests that write a DB, installs, builds).
+1. Gather context first: `AGENTS.md`, `README*`, `docs/`, structure via `glob`/`grep`/`list`/`read`. Use `shell` for OBSERVABILITY ONLY (see Guardrail): `git log`, `git status`, `tree`, `ls`, `cat`, `find`, and read-only verification commands from the project's `AGENTS.md` (e.g. typecheck). Never run the smoke suite and never run anything that mutates state (tests that write a DB, installs, builds).
 2. Ground every claim in evidence: cite `path:line` for findings. Do not speculate without a reference.
 3. Conventions and precedents: read them from the project's `AGENTS.md` and existing specs under `docs/`; never guess. Outside any known project, operate as a generic architect using widely accepted principles (SOLID, clean architecture, appropriate coupling/cohesion, the 12-factor app).
 
@@ -218,7 +284,7 @@ If the request is ambiguous, pick the most likely mode and state which one you a
 
 ## Guardrail (hard)
 
-- Repo code and docs are READ-ONLY. `bash` only for observability (`git log/status/diff/show/remote/branch`, `ls`, `cat`, `tree`, `find`, `grep`, and read-only verification commands from the project's `AGENTS.md`). Never write, truncate, move, delete repo files (no `>`, `>>`, `sed -i`, `rm`, `git commit`, `git push`, `mv`, `cp`). No git mutations, no smoke suite, no state-mutating commands.
+- Repo code is READ-ONLY — `edit` is denied outside `docs/`, and the `AGENTS.md` files are denied even under `docs/`. `shell` only for observability (`git log/status/diff/show`, the read-only `git remote`/`git branch` forms, `ls`, `cat`, `tree`, `find`, `grep`, and read-only verification commands from the project's `AGENTS.md`). Never write, truncate, move, delete repo files from the shell (no `>`, `>>`, `sed -i`, `rm`, `git commit`, `git push`, `mv`, `cp`). No git mutations, no smoke suite, no state-mutating commands — every git verb outside the read-only list is denied, so it cannot slip through as a prompt, and the smoke suite is denied too.
 - Writes: ONLY your own docs under `docs/`.
 - If a task inherently requires changing repo files, state that clearly in your completion comment (`blocked`) — the orchestrator will delegate it to an editing role.
 

@@ -1,6 +1,6 @@
 {
   "name": "ziptask",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -11,7 +11,7 @@
     "build": "bun run tsc --noEmit",
     "build:bin": "bun run scripts/build.ts",
     "test": "bun test",
-    "lint": "bunx biome check src/",
+    "lint": "bunx biome check src/ scripts/",
     "changelog": "bun run scripts/changelog.ts"
   },
   "dependencies": {

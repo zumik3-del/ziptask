@@ -1,16 +1,16 @@
 import type { Task, TaskStatus } from './tasks'
-import { isValidTransition, TERMINAL_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH } from './tasks'
+import { isValidTransition, TERMINAL_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON } from './tasks'
 import type { TaskStore, SvcError } from './types'
 import { parseDeps, depsSatisfied } from './deps'
-import { requiredError, tooLongError, epicError } from './validation'
-import { RESERVED_PROJECT_SLUG } from './projects'
+import { requiredError, tooLongError, optionalFieldError, epicError } from './validation'
+import { RESERVED_PROJECT_SLUG } from './project-slug'
 
 // Only the reads a guard performs: a guard never writes, so it cannot reach the mutating half.
 type GuardStore = Pick<TaskStore, 'batchTasks' | 'getTaskRow' | 'statusesOf' | 'nonTerminalChildCount'>
 type DepsStore = Pick<TaskStore, 'statusesOf'>
 
 export type CreateTaskInput = {
-  title: string; description?: string; priority?: string; assignee?: string
+  title: string; description?: string | null; priority?: string; assignee?: string | null
   depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
   defaultReporter: string
   project: string; projectArchived: boolean
@@ -38,20 +38,69 @@ export function claimEligibilityError(task: Task, store: DepsStore): SvcError | 
   return null
 }
 
+// -- epic_id target preconditions --------------------------------------------
+
+// The epic_id target preconditions, in ONE predicate. `null` means the target is attachable; a
+// refusal names the precondition that failed. Both call sites read this list — the up-front guard
+// maps a refusal to the caller's mistake, the in-transaction re-check maps the same refusal to the
+// promotion race — so the two copies cannot drift apart.
+//
+// The order is the up-front guard's order: a target that breaks several preconditions at once keeps
+// the message it has today.
+//
+// The project check is reachable from the guard (the target may live in another project) and
+// unreachable from the re-check: a task's project membership is immutable — nothing moves a task
+// between projects — so a re-check only ever sees a target of the same project. It lives in the
+// shared predicate because the guard needs it; the re-check inherits it and maps it to the race.
+export type EpicTargetRefusal =
+  | { kind: 'missing' }
+  | { kind: 'terminal' }
+  | { kind: 'nested' }
+  | { kind: 'project'; project: string }
+  | { kind: 'not-promotable'; status: TaskStatus }
+
+export function epicTargetRefusal(target: Task | null, project: string): EpicTargetRefusal | null {
+  if (!target) return { kind: 'missing' }
+  if (TERMINAL_STATUSES.includes(target.status)) return { kind: 'terminal' }
+  if (target.epic_id !== null) return { kind: 'nested' }
+  if (target.project !== project) return { kind: 'project', project: target.project ?? '' }
+  // Promotion rewrites the target's status to `open` and clears its lease, so it is only safe on a
+  // task nobody has started. Promoting an in_progress/review/blocked row would silently destroy
+  // live work: the holder loses its lease and the status change leaves no audit row of its own.
+  // Attaching to an epic that already exists promotes nothing, so the existing statuses stay legal.
+  if (!target.is_epic && target.status !== 'queued') return { kind: 'not-promotable', status: target.status }
+  return null
+}
+
+// The up-front mapping: a refusal here is the caller's mistake, so it names what the caller must fix.
+export function epicTargetGuardError(refusal: EpicTargetRefusal, epicId: number): SvcError {
+  switch (refusal.kind) {
+    case 'missing': return { code: 'NOT_FOUND', message: '' }
+    case 'terminal': return { code: 'INVALID', message: 'cannot attach to a terminal task' }
+    case 'nested': return { code: 'INVALID', message: 'cannot attach to a sub-task (no nesting)' }
+    case 'project': return { code: 'INVALID', message: `epic #${epicId} belongs to project '${refusal.project}'` }
+    case 'not-promotable': {
+      return { code: 'INVALID', message: `cannot promote #${epicId} from ${refusal.status}: only a queued task can become an epic` }
+    }
+  }
+}
+
 // -- create_task guard -------------------------------------------------------
 
-// Pure precondition set for create_task: title/actor lengths, the epic↔(epic_id|deps) conflicts,
-// the dep-on-epic rule, and the epic_id target shape. Returns the first failure or null.
+// Pure precondition set for create_task: title/actor/description lengths, the depends_on size
+// bound, the epic↔(epic_id|deps) conflicts, the dep-on-epic rule, and the epic_id target shape.
+// Returns the first failure or null.
 export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcError | null {
   const titleErr = requiredError(args.title, 'title') ?? tooLongError(args.title, MAX_TITLE_LENGTH, 'title')
   if (titleErr) return titleErr
   const reporterErr = tooLongError(args.reporter ?? args.defaultReporter, MAX_AGENT_LENGTH, 'reporter')
   if (reporterErr) return reporterErr
-  if (args.assignee !== undefined) {
-    const assigneeErr = tooLongError(args.assignee, MAX_AGENT_LENGTH, 'assignee')
-    if (assigneeErr) return assigneeErr
-  }
+  const assigneeErr = optionalFieldError(args.assignee, MAX_AGENT_LENGTH, 'assignee')
+  if (assigneeErr) return assigneeErr
+  const descriptionErr = optionalFieldError(args.description, MAX_DESCRIPTION_LENGTH, 'description')
+  if (descriptionErr) return descriptionErr
   const deps = args.depends_on ?? []
+  if (deps.length > MAX_DEPENDS_ON) return { code: 'INVALID', message: 'depends_on too long' }
   // D5: epic cannot coexist with epic_id or depends_on
   if (args.epic && args.epic_id !== undefined) return { code: 'INVALID', message: 'epic cannot have a parent epic' }
   if (args.epic && deps.length > 0) return { code: 'INVALID', message: 'epic cannot have depends_on' }
@@ -60,6 +109,14 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   // NULL for epics, so the invariant holds even if this guard is ever bypassed.
   if (args.epic && args.assignee !== undefined) {
     return { code: 'INVALID', message: 'an epic takes no assignee: it holds no lease' }
+  }
+  // A regular task is born `queued`, which is no lease either: the holder is written when the task
+  // is claimed. A creation-time `assignee` would be a holder without a lease, and nothing would
+  // honour it — the queue is shared and the first claim overwrites the column. So the value is
+  // refused rather than silently dropped (the same rule as the epic above), and the repo hard-writes
+  // NULL, so the invariant holds even if this guard is ever bypassed.
+  if (args.assignee !== undefined) {
+    return { code: 'INVALID', message: 'assignee is refused at creation: a task holds a lease only from in_progress' }
   }
   // G1/G2: `legacy` parks pre-v5 rows and archived projects keep their work readable but take no new
   // task; both are refusals on the resolved project row the service already looked up.
@@ -80,22 +137,30 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   // D5: epic_id target must exist, be non-terminal, and have epic_id IS NULL
   // G4: it must also live in the same project (G5: an epic's children inherit, never guess)
   if (args.epic_id !== undefined) {
-    const target = store.getTaskRow(args.epic_id)
-    if (!target) return { code: 'NOT_FOUND', message: '' }
-    if (TERMINAL_STATUSES.includes(target.status)) return { code: 'INVALID', message: 'cannot attach to a terminal task' }
-    if (target.epic_id !== null) return { code: 'INVALID', message: 'cannot attach to a sub-task (no nesting)' }
-    if (target.project !== args.project) {
-      return { code: 'INVALID', message: `epic #${args.epic_id} belongs to project '${target.project ?? ''}'` }
-    }
-    // Promotion rewrites the target's status to `open` and clears its lease, so it is only safe on a
-    // task nobody has started. Promoting an in_progress/review/blocked row would silently destroy
-    // live work: the holder loses its lease and the status change leaves no audit row of its own.
-    // Attaching to an epic that already exists promotes nothing, so the existing statuses stay legal.
-    if (!target.is_epic && target.status !== 'queued') {
-      return { code: 'INVALID', message: `cannot promote #${args.epic_id} from ${target.status}: only a queued task can become an epic` }
-    }
+    const refusal = epicTargetRefusal(store.getTaskRow(args.epic_id), args.project)
+    if (refusal) return epicTargetGuardError(refusal, args.epic_id)
   }
   return null
+}
+
+// -- epic promotion race -----------------------------------------------------
+
+// The one refusal for the promotion race: the epic_id target left the state the up-front guard
+// accepted, so the attach is refused. It is a conflict, not a malformed request — the target moved.
+export function epicPromotionRaceError(epicId: number): SvcError {
+  return { code: 'CONFLICT', message: `epic #${epicId} changed state during promotion` }
+}
+
+// The epic_id target preconditions, re-checked next to the write. createTaskGuard reads the target
+// before the write, and a rival can claim it in between (a claim takes the row out of `queued`), so
+// the same preconditions are verified again inside the write transaction — through the one shared
+// predicate, so the two call sites cannot drift apart. A target that already is an epic only has to
+// stay attachable (non-terminal, no parent); a non-epic is promoted here, and only from `queued` —
+// the one state with no holder and no work to destroy. Every mismatch means the target changed
+// after the guard accepted it, so it is reported as the race, not as a precondition the caller got
+// wrong.
+export function epicTargetChangedError(target: Task | null, epicId: number, project: string): SvcError | null {
+  return epicTargetRefusal(target, project) ? epicPromotionRaceError(epicId) : null
 }
 
 // -- update_status guard -----------------------------------------------------

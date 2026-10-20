@@ -1,6 +1,6 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
-import type { Task, TaskStatus, TaskPriority, CommentType, Clock } from '../core/tasks'
-import { asClock, clampLimit, nowIso, TERMINAL_STATUSES } from '../core/tasks'
+import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, CommentType, Clock } from '../core/tasks'
+import { asClock, clampCursor, clampLimit, nowIso, TERMINAL_STATUSES } from '../core/tasks'
 import type { AuditStore, CommentRow, CommentStore, LeaseStore, ProjectListItem, ProjectRow, ProjectStore, TaskStore } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
 import { PRIORITY_ORDER_SQL, TASK_SELECT, TERMINAL_STATUSES_SQL } from './sql'
@@ -49,10 +49,11 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
 
   insertTask(task: {
     title: string; description: string | null; priority: TaskPriority
+    // `assignee` stays in the seam for its callers, but the creation path never writes a holder.
     assignee: string | null; reporter: string; depends_on: string; now: string
     maxAttempts?: number
     epicId?: number; isEpic?: boolean; projectId?: number | null
-  }): number {
+  }): { id: number; status: CreatedTaskStatus } {
     const maxAttempts = task.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const epicId = task.epicId ?? null
     const isEpic = task.isEpic === true
@@ -60,13 +61,18 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     const projectId = task.projectId ?? null
     // ADR 0002: an epic is born `open` and holds no lease, so it never carries an assignee.
     const status = isEpic ? 'open' : 'queued'
-    const assignee = isEpic ? null : task.assignee
+    // A task is born without a lease — an epic `open`, a regular task `queued` — and the holder is
+    // written by the claim. So the creation path never writes one: the guard refuses a caller's
+    // `assignee` and the column stays NULL here even when a bypass hands one in (task #1872).
+    const assignee = null
     const result = this.db.run(
       `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic, project_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
       [task.title, task.description, status, task.priority, assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, epicFlag, projectId]
     )
-    return Number(result.lastInsertRowid)
+    // The birth rule lives here, so the created status is reported from the row that was
+    // written: the caller never recomputes it and the audit trail cannot name another one.
+    return { id: Number(result.lastInsertRowid), status }
   }
 
   deleteTask(id: number): void {
@@ -76,7 +82,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   }
 
   listTasks(filters: {
-    assignee?: string; status?: TaskStatus; updatedSinceIso?: string; epicId?: number; limit: number; projectId?: number
+    assignee?: string; status?: TaskStatus; updatedSinceIso?: string; epicId?: number; isEpic?: boolean; limit: number; projectId?: number
   }): { rows: Task[]; total: number } {
     const conditions: string[] = []
     const params: (string | number | null)[] = []
@@ -90,6 +96,10 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     if (filters.epicId !== undefined) {
       conditions.push('t.epic_id = ?')
       params.push(filters.epicId)
+    }
+    if (filters.isEpic !== undefined) {
+      conditions.push('t.is_epic = ?')
+      params.push(filters.isEpic ? 1 : 0)
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
     const limit = clampLimit(filters.limit, 0)
@@ -106,7 +116,9 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
 
   queuedCandidates(limit: number, projectId: number, offset?: number): Task[] {
     const n = clampLimit(limit, 0)
-    const o = clampLimit(offset ?? 0, 0)
+    // The offset is an internal scan cursor, not a result limit: clampCursor keeps it on the
+    // cursor ceiling, so a scan past the result ceiling still reaches the tail of the queue.
+    const o = clampCursor(offset ?? 0, 0)
     const rows = this.db.query(
       `SELECT t.*, p.slug AS project FROM tasks t INDEXED BY idx_tasks_queued_candidates LEFT JOIN projects p ON p.id = t.project_id WHERE t.status = 'queued' AND t.is_epic = 0 AND t.project_id = ?
        ORDER BY ${PRIORITY_ORDER_SQL}, t.created_at ASC, t.id ASC
@@ -163,9 +175,9 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
       assignments.push('lease_expires_at = ?', 'assignee = ?')
       params.push(leaseUntilIso, holder)
     } else {
-      assignments.push('lease_expires_at = NULL')
-      // Terminal transitions drop ownership metadata so no stale assignee survives.
-      if (TERMINAL_STATUSES.includes(status)) assignments.push('assignee = NULL')
+      // Every target but in_progress drops ownership metadata, so `assignee` always means "lease
+      // holder" — the same rule reapTransition applies when it requeues an expired lease.
+      assignments.push('lease_expires_at = NULL', 'assignee = NULL')
     }
     if (resetAttempts === 1) assignments.push('attempts = 0')
     params.push(id, expectedVersion)
@@ -258,18 +270,29 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     return rows ?? { total: 0, open: 0, done: 0, failed: 0, canceled: 0 }
   }
 
-  promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): void {
+  promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): number {
     // The WHERE confines promotion to a `queued` non-epic: that is the one state with no holder and no
     // work to destroy, so the rewrite cannot silently cancel in-flight work. Any other target matches
     // no row, leaving is_epic, status, assignee, lease_expires_at and version untouched. createTaskGuard
     // refuses every other non-terminal status up front; this is the defence behind it.
-    this.db.run(
-      "UPDATE tasks SET is_epic = 1, status = 'open', lease_expires_at = NULL, assignee = NULL, updated_at = ? WHERE id = ? AND is_epic = 0 AND status = 'queued'",
+    // The promotion is a row write like any other, so it bumps `version`: the optimistic lock has to
+    // see the status/is_epic rewrite, or a holder's stale version would still match the promoted row.
+    const result = this.db.run(
+      "UPDATE tasks SET is_epic = 1, status = 'open', lease_expires_at = NULL, assignee = NULL, version = version + 1, updated_at = ? WHERE id = ? AND is_epic = 0 AND status = 'queued'",
       [now, id]
     )
+    const changes = Number(result.changes)
+    // The mirror belongs to the epic: it is written when the target is an epic after this call — the
+    // row promoted here (changes === 1), or an epic that already was one (attaching a child to it
+    // promotes nothing). A target that is not an epic gets no mirror row: the promotion lost a race
+    // and the caller has to refuse the attach.
     if (auditLog) {
-      this.auditAppend(id, agent, action, undefined, newValue)
+      const stillEpic = changes === 1 ||
+        (this.db.query('SELECT is_epic FROM tasks WHERE id = ?').get(id) as { is_epic: number } | null)?.is_epic === 1
+      if (stillEpic) this.auditAppend(id, agent, action, undefined, newValue)
     }
+    // The report: 1 when this call promoted the target, 0 when it matched no row.
+    return changes
   }
 
   appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void {

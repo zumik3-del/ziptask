@@ -12,7 +12,16 @@ export const TASK_STATUS_VALUES = Object.freeze([
 ] as const)
 
 export type TaskStatus = (typeof TASK_STATUS_VALUES)[number]
-export type TaskPriority = 'p0' | 'p1' | 'p2' | 'p3'
+
+// The one priority list, next to the type it defines: the union type and the zod enum are both
+// derived from it, so the accepted values and the type can never drift.
+export const TASK_PRIORITIES = Object.freeze(['p0', 'p1', 'p2', 'p3'] as const)
+
+export type TaskPriority = (typeof TASK_PRIORITIES)[number]
+
+// The status a task is born with: a regular task starts queued, an epic starts open. The repo
+// owns that rule and reports the status it wrote (src/db/repo.ts).
+export type CreatedTaskStatus = 'queued' | 'open'
 
 export interface Task {
   id: number
@@ -107,7 +116,25 @@ export function nowIso(): string {
   return new Date(monotonicNowMs()).toISOString()
 }
 
-// Normalize an unknown value into a Clock or null (shared by TaskRepo/TaskService/etc.).
+// Test-only seam: reset the process-wide counter so a test file starts from a known state (the
+// next stamp is the current wall clock again). Production code must never call it — the ordering
+// guarantee (#1608) holds only for the stamps taken between two resets.
+export function resetMonotonicClock(): void {
+  lastTimestampMs = 0
+}
+
+// Normalize an unknown value into a Clock or null. This is the single place that says which clock
+// shapes exist, and every clock consumer (TaskRepo, TaskService, LeaseReaper) normalizes through
+// it, so they accept exactly this set:
+//   - null / undefined              → no clock; the caller falls back to the process-wide source
+//   - () => number                  → a bare nowMs function
+//   - { nowIso(): string }          → nowIso as given; nowMs from nowMs/now/monotonicNowMs when
+//                                    present, otherwise parsed out of nowIso()
+//   - { nowMs(): number }           → nowIso is derived from nowMs
+//   - { now(): number }             → alias of nowMs
+//   - { monotonicNowMs(): number }  → alias of nowMs
+//   - { clock: <any of the above> } → unwrapped and normalized
+// Anything else → null (the caller falls back to the process-wide source).
 export function asClock(input: unknown): Clock | null {
   if (input == null) return null
   if (typeof input === 'function') {
@@ -144,12 +171,50 @@ export const defaultClock: Clock = {
 export const MAX_TITLE_LENGTH = 200
 export const MAX_AGENT_LENGTH = 200
 export const MAX_CONTENT_LENGTH = 10000
+// A task description is the contract (goal, AC, constraints, deliverable), so it gets more room
+// than a comment; `depends_on` is a list of ids and stays inside one batch read.
+export const MAX_DESCRIPTION_LENGTH = 20000
+export const MAX_DEPENDS_ON = 100
 export const MAX_RESULT_LIMIT = 1000
 export const MAX_SAFE_TIMESTAMP_MS = 8_640_000_000_000_000
+// The ceiling of an internal pagination cursor (an OFFSET). A cursor must not be capped at the
+// result ceiling: a scan that re-reads the same page never reaches the tail of the queue.
+export const MAX_CURSOR_OFFSET = Number.MAX_SAFE_INTEGER
 
-export function clampLimit(value: number | undefined, fallback: number, max = MAX_RESULT_LIMIT): number {
+// The one unit every string bound is measured in: Unicode code points. JSON Schema defines a
+// string's length in code points and zod v4 measures `maxLength` in code points too, so the
+// advertised schema and the service guard count a string the same way. A code point is one UTF-16
+// unit, except a surrogate pair (one code point, two units) — so the count is the unit count minus
+// the surrogate pairs.
+export function codePointLength(value: string): number {
+  let count = value.length
+  for (let i = 0; i < value.length - 1; i++) {
+    const code = value.charCodeAt(i)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(i + 1)
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        count--
+        i++
+      }
+    }
+  }
+  return count
+}
+
+function clampValue(value: number | undefined, fallback: number, max: number): number {
   if (value === undefined) return fallback
   const n = Math.floor(value)
   if (!Number.isFinite(n) || n <= 0) return fallback
   return Math.min(n, max)
+}
+
+// A user-facing result limit: the ceiling is the result ceiling, so no call site can widen it by
+// accident and no cursor can be routed through it.
+export function clampLimit(value: number | undefined, fallback: number): number {
+  return clampValue(value, fallback, MAX_RESULT_LIMIT)
+}
+
+// An internal pagination cursor: the ceiling is the cursor ceiling, never the result ceiling.
+export function clampCursor(value: number | undefined, fallback: number): number {
+  return clampValue(value, fallback, MAX_CURSOR_OFFSET)
 }

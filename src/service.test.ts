@@ -1,13 +1,19 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { nowIso, clampLimit, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from './core/tasks'
+import { z } from 'zod/v4'
+import {
+  nowIso, clampLimit, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH,
+  MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON, MAX_TITLE_LENGTH
+} from './core/tasks'
 import type { Store } from './core/types'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
   handleCreateTask, handleClaimTask, handleUpdateStatus,
-  handleAddComment, handleListQueue, handleGetTimeline, handleListTasks, registerAllTools
-} from './mcp/tools'
+  handleListQueue, handleListTasks
+} from './mcp/task-tools'
+import { handleAddComment, handleGetTimeline } from './mcp/comment-tools'
+import { registerAllTools } from './mcp/tools'
 import {
   createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, taskStoreStubs, testProjectId,
   type CreateTaskRowOpts
@@ -19,6 +25,13 @@ let svc: TaskService
 beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
 afterEach(() => { closeTestDb(db) })
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
+
+// The row counts a refusal must not move: a refused call writes no task row, no audit row and no
+// comment, so the three counts are the evidence that nothing was written.
+function storeCounts(): { tasks: number; audit: number; comments: number } {
+  const count = (table: string) => (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+  return { tasks: count('tasks'), audit: count('audit_log'), comments: count('comments') }
+}
 
 describe('audit_log toggle', () => {
   function makeAuditSvc(auditLog: boolean): { db: Database; repo: TaskRepo; svc: TaskService } {
@@ -189,18 +202,21 @@ describe('auto-claim ceiling (#105)', () => {
     const repo2 = new TaskRepo(db2)
     const svc2 = new TaskService(repo2, { leaseTtlMin: 15, autoClaimCeiling: 100, scope: 'test' })
 
-    for (let i = 0; i < 150; i++) {
-      repo2.insertTask({
-        title: `Blocked ${i}`,
-        description: null,
-        priority: 'p2',
-        assignee: null,
-        reporter: 'dev',
-        depends_on: JSON.stringify([999]),
-        now: nowIso(),
-        projectId: testProjectId(repo2)
-      })
-    }
+    // One transaction for the whole fixture: 150 rows, one WAL commit instead of 150.
+    repo2.transaction(() => {
+      for (let i = 0; i < 150; i++) {
+        repo2.insertTask({
+          title: `Blocked ${i}`,
+          description: null,
+          priority: 'p2',
+          assignee: null,
+          reporter: 'dev',
+          depends_on: JSON.stringify([999]),
+          now: nowIso(),
+          projectId: testProjectId(repo2)
+        })
+      }
+    })
     const _freeId = repo2.insertTask({
       title: 'Free',
       description: null,
@@ -210,7 +226,7 @@ describe('auto-claim ceiling (#105)', () => {
       depends_on: '[]',
       now: nowIso(),
       projectId: testProjectId(repo2)
-    })
+    }).id
 
     const res = handleClaimTask(svc2, { agent: 'agent-1' })
     expect(text(res)).toContain('EMPTY')
@@ -223,18 +239,21 @@ describe('auto-claim ceiling (#105)', () => {
     const repo2 = new TaskRepo(db2)
     const svc2 = new TaskService(repo2, { leaseTtlMin: 15, scope: 'test' })
 
-    for (let i = 0; i < 150; i++) {
-      repo2.insertTask({
-        title: `Blocked ${i}`,
-        description: null,
-        priority: 'p2',
-        assignee: null,
-        reporter: 'dev',
-        depends_on: JSON.stringify([999]),
-        now: nowIso(),
-        projectId: testProjectId(repo2)
-      })
-    }
+    // One transaction for the whole fixture: 150 rows, one WAL commit instead of 150.
+    repo2.transaction(() => {
+      for (let i = 0; i < 150; i++) {
+        repo2.insertTask({
+          title: `Blocked ${i}`,
+          description: null,
+          priority: 'p2',
+          assignee: null,
+          reporter: 'dev',
+          depends_on: JSON.stringify([999]),
+          now: nowIso(),
+          projectId: testProjectId(repo2)
+        })
+      }
+    })
     const _freeId = repo2.insertTask({
       title: 'Free',
       description: null,
@@ -244,7 +263,7 @@ describe('auto-claim ceiling (#105)', () => {
       depends_on: '[]',
       now: nowIso(),
       projectId: testProjectId(repo2)
-    })
+    }).id
 
     const res = handleClaimTask(svc2, { agent: 'agent-1' })
     expect(json(res).id).toBe(_freeId)
@@ -254,9 +273,12 @@ describe('auto-claim ceiling (#105)', () => {
 
   test('parse-once cache: auto-claim with many dep-blocked tasks finds free one', () => {
     // Regression: parse-once refactor must not change behavior for the common case
-    for (let i = 0; i < 10; i++) {
-      createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
-    }
+    // One transaction for the fixture rows: one WAL commit instead of one per row.
+    repo.transaction(() => {
+      for (let i = 0; i < 10; i++) {
+        createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
+      }
+    })
     const freeId = createTaskRow({ title: 'Free', reporter: 'dev' })
     const res = handleClaimTask(svc, { agent: 'agent-1' })
     expect(json(res).id).toBe(freeId)
@@ -585,10 +607,372 @@ describe('reporter/assignee length guards in createTask (#811)', () => {
     expect(text(res)).toContain('INVALID: assignee too long')
   })
 
-  test('createTask accepts assignee == MAX_AGENT_LENGTH', () => {
-    const id = json(handleCreateTask(svc, { title: 'OkAssignee', reporter: 'dev', assignee: OK_AGENT })).id
-    const row = getTaskRow(db, id)
-    expect(row.assignee).toBe(OK_AGENT)
+  test('createTask refuses assignee == MAX_AGENT_LENGTH: the length is in bounds, the creation is not', () => {
+    // The length guard runs first, so an in-bounds name reaches the creation refusal (#1872)
+    // instead of the length error: a name that is legal as a holder is still not a holder at birth.
+    const res = handleCreateTask(svc, { title: 'OkAssignee', reporter: 'dev', assignee: OK_AGENT })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+  })
+})
+
+// #1872: `assignee` means exactly "lease holder", and a task is born `queued` without a lease, so
+// a creation-time assignee would be a holder without a lease - a holder nothing would honour (the
+// queue is shared, the auto-pick is not assignee-aware, the first claim overwrites the column).
+// The value is refused at creation, and the store hard-writes NULL behind that guard.
+describe('a creation-time assignee is refused (#1872)', () => {
+  const REFUSAL = 'INVALID: assignee is refused at creation: a task holds a lease only from in_progress'
+
+  test('createTask refuses an assignee with the documented INVALID string', () => {
+    const res = handleCreateTask(svc, { title: 'Leased', reporter: 'dev', assignee: 'worker' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe(REFUSAL)
+  })
+
+  test('the refusal writes no task row, no audit row and no comment', () => {
+    const before = storeCounts()
+    handleCreateTask(svc, { title: 'Leased', reporter: 'dev', assignee: 'worker' })
+    expect(storeCounts()).toEqual(before)
+  })
+
+  test('a task created without an assignee has no holder and no lease', () => {
+    const id = json(handleCreateTask(svc, { title: 'Born', reporter: 'dev' })).id
+    const row = getTaskRow(db, id)!
+    expect(row.status).toBe('queued')
+    expect(row.assignee).toBeNull()
+    expect(row.lease_expires_at).toBeNull()
+  })
+
+  test('the epic rule is still checked first and keeps its own message', () => {
+    const res = handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true, assignee: 'boss' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: an epic takes no assignee: it holds no lease')
+  })
+
+  test('the length guard still runs first: an over-long assignee is refused as too long', () => {
+    const res = handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: 'a'.repeat(MAX_AGENT_LENGTH + 1) })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: assignee too long')
+  })
+
+  test('the store hard-writes a NULL assignee even when a bypass hands one in', () => {
+    // The guard is the first line of defence; the repo is the last one. A bypass or a cross-process
+    // race that reaches the store with a value in hand must not leave a holder without a lease.
+    const id = repo.insertTask({
+      title: 'Bypass', description: null, priority: 'p2', assignee: 'boss', reporter: 'dev',
+      depends_on: '[]', now: nowIso(), projectId: testProjectId(repo)
+    }).id
+    const row = getTaskRow(db, id)!
+    expect(row.status).toBe('queued')
+    expect(row.assignee).toBeNull()
+    expect(row.lease_expires_at).toBeNull()
+  })
+})
+
+describe('create_task input bounds (#1857)', () => {
+  // Both inputs are stored verbatim, so both are bounded: the schema refuses them on the wire and
+  // the create guard refuses them in the service, with the same two documented strings.
+  const LONG_DESCRIPTION = 'd'.repeat(MAX_DESCRIPTION_LENGTH + 1)
+  const OK_DESCRIPTION = 'd'.repeat(MAX_DESCRIPTION_LENGTH)
+  const TOO_MANY_DEPS = Array.from({ length: MAX_DEPENDS_ON + 1 }, (_, i) => 9000 + i)
+  const MAX_DEPS = Array.from({ length: MAX_DEPENDS_ON }, (_, i) => 9000 + i)
+
+  test('createTask refuses a description over the limit with the documented INVALID string', () => {
+    const res = handleCreateTask(svc, { title: 'LongDescription', reporter: 'dev', description: LONG_DESCRIPTION })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: description too long')
+  })
+
+  test('the description refusal writes no task row, no audit row and no comment', () => {
+    const before = storeCounts()
+    handleCreateTask(svc, { title: 'LongDescription', reporter: 'dev', description: LONG_DESCRIPTION })
+    expect(storeCounts()).toEqual(before)
+  })
+
+  test('createTask accepts a description exactly at the limit and stores it verbatim', () => {
+    const id = json(handleCreateTask(svc, { title: 'OkDescription', reporter: 'dev', description: OK_DESCRIPTION })).id
+    expect(getTaskRow(db, id).description).toBe(OK_DESCRIPTION)
+  })
+
+  test('createTask refuses a depends_on array over the limit with the documented INVALID string', () => {
+    const res = handleCreateTask(svc, { title: 'TooManyDeps', reporter: 'dev', depends_on: TOO_MANY_DEPS })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: depends_on too long')
+  })
+
+  test('the depends_on refusal writes no task row, no audit row and no comment', () => {
+    const before = storeCounts()
+    handleCreateTask(svc, { title: 'TooManyDeps', reporter: 'dev', depends_on: TOO_MANY_DEPS })
+    expect(storeCounts()).toEqual(before)
+  })
+
+  test('createTask accepts a depends_on array exactly at the limit and stores every id', () => {
+    const id = json(handleCreateTask(svc, { title: 'MaxDeps', reporter: 'dev', depends_on: MAX_DEPS })).id
+    expect(JSON.parse(getTaskRow(db, id).depends_on)).toEqual(MAX_DEPS)
+  })
+})
+
+// #1874: every create_task string bound means ONE thing in both layers - Unicode code points.
+// zod v4 measures `maxLength` in code points and the guard measures the same way
+// (`codePointLength`), so the advertised schema and the service guard refuse the same strings.
+// Before the fix the guard counted UTF-16 units, so a multi-byte description was ACCEPTED by the
+// schema and REFUSED by the guard: the two layers disagreed exactly at the boundary.
+describe('the create_task string bounds count code points (#1874)', () => {
+  // U+1F600: one code point, two UTF-16 units. A bound measured in the wrong unit misses it.
+  const EMOJI = '\u{1F600}'
+  const multiByte = (n: number): string => EMOJI.repeat(n)
+  // A string of exactly n code points, half ASCII and half multi-byte: a counter that measures
+  // only one kind of character would miss the other.
+  const mixed = (n: number): string => 'a'.repeat(Math.floor(n / 2)) + EMOJI.repeat(n - Math.floor(n / 2))
+  // The code-point count of a string, measured independently of the production helper.
+  const codePoints = (value: string): number => [...value].length
+
+  // The advertised shape, exactly as the MCP layer registers it: the layer the wire validates
+  // against, so a schema/guard disagreement shows up here and not only over the wire.
+  function createTaskShape(): any {
+    let shape: any
+    registerAllTools({ registerTool: (name: string, cfg: any) => { if (name === 'create_task') shape = cfg.inputSchema } } as any, svc)
+    return shape
+  }
+
+  describe('the schema and the guard agree at the boundary', () => {
+    test('a description of exactly MAX_DESCRIPTION_LENGTH code points is accepted by both layers', () => {
+      const description = multiByte(MAX_DESCRIPTION_LENGTH)
+      expect(codePoints(description)).toBe(MAX_DESCRIPTION_LENGTH)
+      expect(createTaskShape().safeParse({ title: 'Boundary', description }).success).toBe(true)
+      const res = handleCreateTask(svc, { title: 'Boundary', reporter: 'dev', description })
+      expect(res.isError).toBeUndefined()
+      const id = json(res).id
+      expect(codePoints(getTaskRow(db, id).description)).toBe(MAX_DESCRIPTION_LENGTH)
+    })
+
+    test('a description of MAX_DESCRIPTION_LENGTH + 1 code points is refused by both layers', () => {
+      const description = multiByte(MAX_DESCRIPTION_LENGTH + 1)
+      expect(codePoints(description)).toBe(MAX_DESCRIPTION_LENGTH + 1)
+      expect(createTaskShape().safeParse({ title: 'Over', description }).success).toBe(false)
+      const res = handleCreateTask(svc, { title: 'Over', reporter: 'dev', description })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: description too long')
+    })
+
+    test('a title of exactly MAX_TITLE_LENGTH code points is accepted by both layers', () => {
+      const title = multiByte(MAX_TITLE_LENGTH)
+      expect(codePoints(title)).toBe(MAX_TITLE_LENGTH)
+      expect(createTaskShape().safeParse({ title }).success).toBe(true)
+      const res = handleCreateTask(svc, { title, reporter: 'dev' })
+      expect(res.isError).toBeUndefined()
+      expect(codePoints(getTaskRow(db, json(res).id).title)).toBe(MAX_TITLE_LENGTH)
+    })
+
+    test('a title of MAX_TITLE_LENGTH + 1 code points is refused by both layers', () => {
+      const title = multiByte(MAX_TITLE_LENGTH + 1)
+      expect(codePoints(title)).toBe(MAX_TITLE_LENGTH + 1)
+      expect(createTaskShape().safeParse({ title }).success).toBe(false)
+      const res = handleCreateTask(svc, { title, reporter: 'dev' })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: title too long')
+    })
+  })
+
+  describe('a mixed string is measured the same way', () => {
+    test('a mixed description of exactly MAX_DESCRIPTION_LENGTH code points is accepted by both layers', () => {
+      // Half ASCII, half multi-byte: 20000 code points in 30000 UTF-16 units. A guard that counts
+      // units refuses it; a guard that counts code points accepts it.
+      const description = mixed(MAX_DESCRIPTION_LENGTH)
+      expect(codePoints(description)).toBe(MAX_DESCRIPTION_LENGTH)
+      expect(description.length).toBeGreaterThan(MAX_DESCRIPTION_LENGTH)
+      expect(createTaskShape().safeParse({ title: 'Mixed', description }).success).toBe(true)
+      const res = handleCreateTask(svc, { title: 'Mixed', reporter: 'dev', description })
+      expect(res.isError).toBeUndefined()
+      expect(codePoints(getTaskRow(db, json(res).id).description)).toBe(MAX_DESCRIPTION_LENGTH)
+    })
+
+    test('a mixed description of MAX_DESCRIPTION_LENGTH + 1 code points is refused by both layers', () => {
+      const description = mixed(MAX_DESCRIPTION_LENGTH + 1)
+      expect(codePoints(description)).toBe(MAX_DESCRIPTION_LENGTH + 1)
+      expect(createTaskShape().safeParse({ title: 'MixedOver', description }).success).toBe(false)
+      const res = handleCreateTask(svc, { title: 'MixedOver', reporter: 'dev', description })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: description too long')
+    })
+
+    test('a mixed title of exactly MAX_TITLE_LENGTH code points is accepted by both layers', () => {
+      const title = mixed(MAX_TITLE_LENGTH)
+      expect(codePoints(title)).toBe(MAX_TITLE_LENGTH)
+      expect(title.length).toBeGreaterThan(MAX_TITLE_LENGTH)
+      expect(createTaskShape().safeParse({ title }).success).toBe(true)
+      const res = handleCreateTask(svc, { title, reporter: 'dev' })
+      expect(res.isError).toBeUndefined()
+      expect(codePoints(getTaskRow(db, json(res).id).title)).toBe(MAX_TITLE_LENGTH)
+    })
+
+    test('a mixed title of MAX_TITLE_LENGTH + 1 code points is refused by both layers', () => {
+      const title = mixed(MAX_TITLE_LENGTH + 1)
+      expect(codePoints(title)).toBe(MAX_TITLE_LENGTH + 1)
+      expect(createTaskShape().safeParse({ title }).success).toBe(false)
+      const res = handleCreateTask(svc, { title, reporter: 'dev' })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: title too long')
+    })
+  })
+
+  describe('the refusal strings are exact and write nothing', () => {
+    test('the schema refuses a description with the exact documented string', () => {
+      const parsed = createTaskShape().safeParse({ title: 'Schema', description: multiByte(MAX_DESCRIPTION_LENGTH + 1) })
+      expect(parsed.success).toBe(false)
+      const issues = (parsed as any).error.issues
+      expect(issues[0].message).toBe('INVALID: description too long')
+      expect(issues[0].path).toEqual(['description'])
+    })
+
+    test('the schema refuses a title with the exact documented string', () => {
+      const parsed = createTaskShape().safeParse({ title: multiByte(MAX_TITLE_LENGTH + 1) })
+      expect(parsed.success).toBe(false)
+      const issues = (parsed as any).error.issues
+      expect(issues[0].message).toBe('INVALID: title too long')
+      expect(issues[0].path).toEqual(['title'])
+    })
+
+    test('the guard refuses a description with the exact documented string and writes nothing', () => {
+      const before = storeCounts()
+      const res = handleCreateTask(svc, { title: 'LongDescription', reporter: 'dev', description: multiByte(MAX_DESCRIPTION_LENGTH + 1) })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: description too long')
+      expect(storeCounts()).toEqual(before)
+    })
+
+    test('the guard refuses a title with the exact documented string and writes nothing', () => {
+      const before = storeCounts()
+      const res = handleCreateTask(svc, { title: multiByte(MAX_TITLE_LENGTH + 1), reporter: 'dev' })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: title too long')
+      expect(storeCounts()).toEqual(before)
+    })
+
+    test('the guard refuses a depends_on array with the exact documented string and writes nothing', () => {
+      const deps = Array.from({ length: MAX_DEPENDS_ON + 1 }, (_, i) => 9000 + i)
+      const before = storeCounts()
+      const res = handleCreateTask(svc, { title: 'TooManyDeps', reporter: 'dev', depends_on: deps })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: depends_on too long')
+      expect(storeCounts()).toEqual(before)
+    })
+  })
+
+  describe('the unchanged paths stay pinned', () => {
+    test('an epic still answers the epic refusal, not the creation refusal', () => {
+      const res = handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true, assignee: 'boss' })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: an epic takes no assignee: it holds no lease')
+    })
+
+    test('the length guard runs before the creation refusal: an over-long assignee is refused as too long', () => {
+      const res = handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: multiByte(MAX_AGENT_LENGTH + 1) })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: assignee too long')
+    })
+
+    test('depends_on is counted as ids in both layers', () => {
+      const maxDeps = Array.from({ length: MAX_DEPENDS_ON }, (_, i) => 9000 + i)
+      const tooManyDeps = Array.from({ length: MAX_DEPENDS_ON + 1 }, (_, i) => 9000 + i)
+      const shape = createTaskShape()
+      expect(shape.safeParse({ title: 'MaxDeps', depends_on: maxDeps }).success).toBe(true)
+      const ok = handleCreateTask(svc, { title: 'MaxDeps', reporter: 'dev', depends_on: maxDeps })
+      expect(ok.isError).toBeUndefined()
+      expect(JSON.parse(getTaskRow(db, json(ok).id).depends_on)).toEqual(maxDeps)
+
+      const parsed = shape.safeParse({ title: 'TooManyDeps', depends_on: tooManyDeps })
+      expect(parsed.success).toBe(false)
+      expect((parsed as any).error.issues[0].message).toBe('INVALID: depends_on too long')
+      const res = handleCreateTask(svc, { title: 'TooManyDeps', reporter: 'dev', depends_on: tooManyDeps })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: depends_on too long')
+    })
+  })
+
+  // #1880: `reporter` and `assignee` are the last two string fields the create guard bounds, and
+  // the advertised schema now carries their bound too (the guard always did). The SCHEMA is
+  // asserted, not only the behaviour: a bound that lives in the guard alone is a schema that
+  // understates what the service refuses, and the two layers drift apart at the boundary.
+  describe('the actor names carry the advertised bound (#1880)', () => {
+    // The registered create_task inputSchema, as JSON Schema: the shape the MCP layer validates
+    // against and advertises, so a bound missing from it shows up here and not only over the wire.
+    function advertisedSchema(): any {
+      return z.toJSONSchema(createTaskShape())
+    }
+
+    test('the registered schema bounds every string field the guard bounds', () => {
+      const schema = advertisedSchema()
+      expect(schema.properties.title.maxLength).toBe(MAX_TITLE_LENGTH)
+      expect(schema.properties.description.maxLength).toBe(MAX_DESCRIPTION_LENGTH)
+      expect(schema.properties.reporter.maxLength).toBe(MAX_AGENT_LENGTH)
+      expect(schema.properties.assignee.maxLength).toBe(MAX_AGENT_LENGTH)
+      // The two layers must refuse the same strings, so the bounded set is the guard's set in BOTH
+      // directions: a field the guard bounds but the schema does not advertise fails here, and so
+      // does a field the schema bounds but the guard does not.
+      const bounded = Object.entries(schema.properties)
+        .filter(([, prop]: any) => prop.maxLength !== undefined)
+        .map(([name]) => name)
+        .sort()
+      expect(bounded).toEqual(['assignee', 'description', 'reporter', 'title'])
+      // The id count is an array bound, so it travels as maxItems - it stays where it was.
+      expect(schema.properties.depends_on.maxItems).toBe(MAX_DEPENDS_ON)
+    })
+
+    test('a reporter of exactly MAX_AGENT_LENGTH code points is accepted by both layers', () => {
+      const reporter = multiByte(MAX_AGENT_LENGTH)
+      expect(codePoints(reporter)).toBe(MAX_AGENT_LENGTH)
+      expect(createTaskShape().safeParse({ title: 'ReporterAtLimit', reporter }).success).toBe(true)
+      const res = handleCreateTask(svc, { title: 'ReporterAtLimit', reporter })
+      expect(res.isError).toBeUndefined()
+      expect(codePoints(getTaskRow(db, json(res).id).reporter)).toBe(MAX_AGENT_LENGTH)
+    })
+
+    test('a reporter of MAX_AGENT_LENGTH + 1 code points is refused by both layers', () => {
+      const reporter = multiByte(MAX_AGENT_LENGTH + 1)
+      expect(codePoints(reporter)).toBe(MAX_AGENT_LENGTH + 1)
+      const parsed = createTaskShape().safeParse({ title: 'ReporterOver', reporter })
+      expect(parsed.success).toBe(false)
+      expect((parsed as any).error.issues[0].message).toBe('INVALID: reporter too long')
+      expect((parsed as any).error.issues[0].path).toEqual(['reporter'])
+      const res = handleCreateTask(svc, { title: 'ReporterOver', reporter })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: reporter too long')
+    })
+
+    test('the reporter refusal writes no task row, no audit row and no comment', () => {
+      const before = storeCounts()
+      handleCreateTask(svc, { title: 'ReporterOver', reporter: multiByte(MAX_AGENT_LENGTH + 1) })
+      expect(storeCounts()).toEqual(before)
+    })
+
+    test('the guard order is pinned: the length refusal comes before the creation refusal', () => {
+      // An over-long assignee is too long FIRST; an in-bounds one reaches the creation refusal.
+      // Both strings are unchanged - the order is what the test pins.
+      const over = handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: multiByte(MAX_AGENT_LENGTH + 1) })
+      expect(over.isError).toBe(true)
+      expect(text(over)).toBe('INVALID: assignee too long')
+      const inBounds = handleCreateTask(svc, { title: 'Assignee', reporter: 'dev', assignee: 'boss' })
+      expect(inBounds.isError).toBe(true)
+      expect(text(inBounds)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+    })
+
+    test('the assignee length refusal writes no task row, no audit row and no comment', () => {
+      const before = storeCounts()
+      handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: multiByte(MAX_AGENT_LENGTH + 1) })
+      expect(storeCounts()).toEqual(before)
+    })
+
+    test('an assignee of exactly MAX_AGENT_LENGTH code points is not too long: it reaches the creation refusal', () => {
+      // The boundary is exactly 200 code points: the schema accepts it, so the guard answers with
+      // the creation refusal instead of the length one.
+      const assignee = multiByte(MAX_AGENT_LENGTH)
+      expect(codePoints(assignee)).toBe(MAX_AGENT_LENGTH)
+      expect(createTaskShape().safeParse({ title: 'AssigneeAtLimit', assignee }).success).toBe(true)
+      const res = handleCreateTask(svc, { title: 'AssigneeAtLimit', reporter: 'dev', assignee })
+      expect(res.isError).toBe(true)
+      expect(text(res)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+    })
   })
 })
 

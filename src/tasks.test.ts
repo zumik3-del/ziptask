@@ -1,12 +1,12 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { isValidTransition, STATUS_CODES, TASK_STATUSES, TERMINAL_STATUSES, nowIso } from './core/tasks'
+import { isValidTransition, STATUS_CODES, TASK_STATUSES, TERMINAL_STATUSES, nowIso, codePointLength } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { TERMINAL_STATUSES_SQL } from './db/sql'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus, handleListTasks
-} from './mcp/tools'
+} from './mcp/task-tools'
 import {
   createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, testProjectId, driveToDone,
   type CreateTaskRowOpts
@@ -131,7 +131,8 @@ describe('claim_task', () => {
     expect(json(res).status).toBe('review')
     const after = getTaskRow(db, id)
     expect(after.status).toBe('review')
-    expect(after.assignee).toBe('agent-1')
+    // `assignee` is the lease holder: the row left in_progress, so the holder is cleared.
+    expect(after.assignee).toBeNull()
   })
 
   test('blocked→review without claim is valid transition (no assignee guard)', () => {
@@ -376,7 +377,7 @@ describe('listTasks deterministic ordering (#1445)', () => {
   const TIE_NOW = '2026-01-01T00:00:00.000Z'
   const insertAt = (title: string, now: string) => repo.insertTask({
     title, description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now, projectId: testProjectId(repo)
-  })
+  }).id
 
   test('same-millisecond created_at ties break by id DESC, not by scan order', () => {
     const ids = [insertAt('tie-1', TIE_NOW), insertAt('tie-2', TIE_NOW), insertAt('tie-3', TIE_NOW)]
@@ -534,6 +535,147 @@ describe('assignee release on reap and cancel (#431)', () => {
   })
 })
 
+describe('assignee is the lease holder (#1857)', () => {
+  // `assignee` means exactly "lease holder": it is written on in_progress and cleared on every
+  // other status. The refund path (blocked → queued) used to keep the previous holder, so a task
+  // that came back into the queue still carried a holder nobody could renew. Task #1872 removed the
+  // last exception: a task is born `queued` without a holder, so creation refuses an assignee.
+  const HOLDER = 'agent-a'
+
+  function claimed(title: string): number {
+    const id = json(handleCreateTask(svc, { title, reporter: 'dev' })).id
+    handleClaimTask(svc, { agent: HOLDER, task_id: id })
+    return id
+  }
+
+  // A blocked row that still carries a holder is what the pre-fix code wrote (only the terminal
+  // statuses cleared it), so the refund starts from the state the leak lived in.
+  function parkBlockedWithHolder(id: number): void {
+    db.run("UPDATE tasks SET status = 'blocked', lease_expires_at = NULL WHERE id = ?", [id])
+  }
+
+  test('a claimed task records the holder as assignee', () => {
+    const id = claimed('Holder')
+    const row = getTaskRow(db, id)
+    expect(row.assignee).toBe(HOLDER)
+    expect(row.lease_expires_at).not.toBeNull()
+  })
+
+  test('the blocked → queued refund path leaves the row without a holder', () => {
+    const id = claimed('Refund')
+    parkBlockedWithHolder(id)
+    const before = getTaskRow(db, id)
+    expect(before.assignee).toBe(HOLDER)
+
+    const res = handleUpdateStatus(svc, {
+      id, agent: 'dev', status: 'queued', version: before.version,
+      reset_attempts: true, comment: 'spent on accidental claims'
+    })
+    expect(res.isError).toBeUndefined()
+    expect(json(res).attempts).toBe(0)
+
+    const after = getTaskRow(db, id)
+    expect(after.status).toBe('queued')
+    expect(after.assignee).toBeNull()
+  })
+
+  test('the refund path and the reap path agree: both leave the row without a holder', () => {
+    const refunded = claimed('RefundParity')
+    parkBlockedWithHolder(refunded)
+    handleUpdateStatus(svc, {
+      id: refunded, agent: 'dev', status: 'queued', version: getTaskRow(db, refunded).version,
+      reset_attempts: true, comment: 'spent on accidental claims'
+    })
+
+    const reaped = claimed('ReapParity')
+    db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour') WHERE id = ?", [reaped])
+    svc.reapExpiredLeases()
+
+    expect(getTaskRow(db, refunded).assignee).toBeNull()
+    expect(getTaskRow(db, reaped).status).toBe('queued')
+    expect(getTaskRow(db, reaped).assignee).toBeNull()
+  })
+
+  test('in_progress still records the holder: the fix must not clear a live lease', () => {
+    const id = claimed('Reopened')
+    const v1 = getTaskRow(db, id).version
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'review', version: v1 })
+    const v2 = getTaskRow(db, id).version
+    const res = handleUpdateStatus(svc, { id, agent: HOLDER, status: 'in_progress', version: v2 })
+    expect(res.isError).toBeUndefined()
+
+    const row = getTaskRow(db, id)
+    expect(row.status).toBe('in_progress')
+    expect(row.assignee).toBe(HOLDER)
+    expect(row.lease_expires_at).not.toBeNull()
+  })
+
+  test('the holder is non-NULL exactly while the task is in_progress', () => {
+    // The invariant, walked end to end: `assignee` is the lease holder, so it is present in exactly
+    // one status. The birth, a review, a park, a refund and a terminal close all carry no holder -
+    // only in_progress does. The creation-time exception is gone (#1872), so the birth is in here.
+    const id = json(handleCreateTask(svc, { title: 'Invariant', reporter: 'dev' })).id
+    const holders: Array<[string, string | null]> = []
+    const observe = (label: string) => {
+      const row = getTaskRow(db, id)!
+      holders.push([label, row.assignee])
+      expect(`${label}: ${row.status} carries ${row.assignee ?? 'no holder'}`)
+        .toBe(`${label}: ${row.status} carries ${row.status === 'in_progress' ? HOLDER : 'no holder'}`)
+    }
+    const version = () => getTaskRow(db, id).version
+
+    observe('born')
+    handleClaimTask(svc, { agent: HOLDER, task_id: id })
+    observe('claimed')
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'review', version: version() })
+    observe('review')
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'in_progress', version: version() })
+    observe('sent back')
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'blocked', version: version() })
+    observe('blocked')
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'queued', version: version(), reset_attempts: true, comment: 'spent on accidents' })
+    observe('refunded')
+    handleClaimTask(svc, { agent: HOLDER, task_id: id })
+    observe('claimed again')
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'review', version: version() })
+    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'done', version: version(), comment: 'shipped' })
+    observe('done')
+
+    expect(holders).toEqual([
+      ['born', null],
+      ['claimed', HOLDER],
+      ['review', null],
+      ['sent back', HOLDER],
+      ['blocked', null],
+      ['refunded', null],
+      ['claimed again', HOLDER],
+      ['done', null]
+    ])
+  })
+
+  test('no queued row carries a holder: the creation path cannot produce one', () => {
+    // The invariant, globally: `assignee` is the lease holder, so a queued row - a task nobody works
+    // on - must never carry one. A creation that names a holder is refused (#1872), so the only
+    // way in leaves the column NULL; the old contract wrote it straight through.
+    const refused = handleCreateTask(svc, { title: 'NeverBorn', reporter: 'dev', assignee: HOLDER })
+    expect(refused.isError).toBe(true)
+
+    const queued = db.query('SELECT COUNT(*) AS n FROM tasks WHERE status = ? AND assignee IS NOT NULL').get('queued') as { n: number }
+    expect(queued.n).toBe(0)
+  })
+
+  test('the reap is the other way out of in_progress: the holder goes with the lease', () => {
+    const id = claimed('Reaped')
+    db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour') WHERE id = ?", [id])
+    svc.reapExpiredLeases()
+
+    const row = getTaskRow(db, id)!
+    expect(row.status).toBe('queued')
+    expect(row.assignee).toBeNull()
+    expect(row.lease_expires_at).toBeNull()
+  })
+})
+
 describe('title validation (#431)', () => {
   test('empty title rejected', () => {
     const res = handleCreateTask(svc, { title: '', reporter: 'dev' })
@@ -656,17 +798,21 @@ describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
     const dbB = createTestDb()
     const repoB = new TaskRepo(dbB)
     try {
-      const idA = repoA.insertTask({ title: 'A', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
-      const idB = repoB.insertTask({ title: 'B', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' })
-      // Inject 5 comments into both repos to establish baseline monotonicity
-      for (let i = 0; i < 5; i++) {
-        repoA.insertComment(idA, 'a', `ca${i}`)
-        repoB.insertComment(idB, 'b', `cb${i}`)
-      }
+      const idA = repoA.insertTask({ title: 'A', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' }).id
+      const idB = repoB.insertTask({ title: 'B', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' }).id
+      // Inject 5 comments into both repos to establish baseline monotonicity.
+      // One transaction per repo: the burst below is 500 rows, and one WAL commit per row is what
+      // made this fixture the slowest test in the suite (a per-row commit, not a per-row clock tick).
+      repoA.transaction(() => {
+        for (let i = 0; i < 5; i++) repoA.insertComment(idA, 'a', `ca${i}`)
+      })
+      repoB.transaction(() => {
+        for (let i = 0; i < 5; i++) repoB.insertComment(idB, 'b', `cb${i}`)
+      })
       // Advance the shared clock far ahead (≈500ms) with a burst through repoA
-      for (let i = 0; i < 500; i++) {
-        repoA.insertComment(idA, 'a', `ca-adv${i}`)
-      }
+      repoA.transaction(() => {
+        for (let i = 0; i < 500; i++) repoA.insertComment(idA, 'a', `ca-adv${i}`)
+      })
       // Shipped contract (#1608): every stamp comes from one process-wide monotonic clock
       // (monotonicNowMs in src/core/tasks.ts), so the two repos are NOT independent — repoB
       // inherits repoA's advance. This supersedes the per-instance independence that #795
@@ -732,7 +878,7 @@ describe('TaskRepo port conformance (#812)', () => {
       const id = repo3.insertTask({
         title: 'PortTest', description: null, priority: 'p2',
         assignee: null, reporter: 'dev', depends_on: '[]', now: nowIso()
-      })
+      }).id
       expect(repo3.getTaskRow(id)!.title).toBe('PortTest')
       expect(repo3.depsOf(id)).toBe('[]')
       expect(repo3.statusesOf([id]).get(id)).toBe('queued')
@@ -756,5 +902,37 @@ describe('TaskRepo port conformance (#812)', () => {
     } finally {
       closeTestDb(db3)
     }
+  })
+})
+
+// #1874: `codePointLength` is the ONE measurement every create_task string bound uses, and zod v4
+// measures `maxLength` in the same unit. If the helper counted UTF-16 units instead of code
+// points, the advertised schema and the service guard would drift apart at the boundary - which
+// is exactly what happened before the fix.
+describe('codePointLength (#1874)', () => {
+  // U+1F600: one code point, two UTF-16 units.
+  const EMOJI = '\u{1F600}'
+
+  test('an ASCII string counts one code point per unit', () => {
+    expect(codePointLength('')).toBe(0)
+    expect(codePointLength('abc')).toBe(3)
+  })
+
+  test('an emoji counts as one code point, not two UTF-16 units', () => {
+    expect(EMOJI.length).toBe(2)
+    expect(codePointLength(EMOJI)).toBe(1)
+    expect(codePointLength(EMOJI.repeat(200))).toBe(200)
+  })
+
+  test('a mixed string counts both kinds of character', () => {
+    expect(codePointLength('a' + EMOJI)).toBe(2)
+    expect(codePointLength('a'.repeat(100) + EMOJI.repeat(100))).toBe(200)
+  })
+
+  test('an unpaired surrogate counts as one code point, the way the schema layer counts it', () => {
+    // A lone surrogate is one unit in a JS string and one element when the string is spread, so
+    // the schema and the guard measure it the same way.
+    expect(codePointLength('\uD800')).toBe(1)
+    expect(codePointLength('\uD800\uD800')).toBe(2)
   })
 })

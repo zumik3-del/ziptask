@@ -29,6 +29,14 @@ permissions:
   - action: shell
     resource: "*"
     effect: ask
+  # ADD YOUR STACK'S COMMANDS HERE
+  # Copy the build/test/lint commands of YOUR toolchain from your project's AGENTS.md
+  # into `action: shell` / `resource: "<command>*"` / `effect: allow` entries.
+  # The last matching rule wins, so the `deny` rules further down still block their patterns.
+  # git mutations belong to the `git` agent: every git verb outside the read-only list below is refused
+  - action: shell
+    resource: "git *"
+    effect: deny
   - action: shell
     resource: "git status*"
     effect: allow
@@ -39,13 +47,48 @@ permissions:
     resource: "git diff*"
     effect: allow
   - action: shell
-    resource: "git branch*"
-    effect: allow
-  - action: shell
     resource: "git show*"
     effect: allow
+  # branch management belongs to the `git` agent: deny the family, re-allow the read-only forms
+  - action: shell
+    resource: "git branch*"
+    effect: deny
+  - action: shell
+    resource: "git branch"
+    effect: allow
+  - action: shell
+    resource: "git branch -a"
+    effect: allow
+  - action: shell
+    resource: "git branch -r"
+    effect: allow
+  - action: shell
+    resource: "git branch -v"
+    effect: allow
+  - action: shell
+    resource: "git branch -vv"
+    effect: allow
+  - action: shell
+    resource: "git branch --list *"
+    effect: allow
+  - action: shell
+    resource: "git branch --merged *"
+    effect: allow
+  - action: shell
+    resource: "git branch --show-current"
+    effect: allow
+  # `git remote add/remove/rename/set-url` belongs to the `git` agent: deny the family, re-allow the read-only forms
   - action: shell
     resource: "git remote*"
+    effect: deny
+  - action: shell
+    resource: "git remote"
+    effect: allow
+  - action: shell
+    resource: "git remote -v*"
+    effect: allow
+  - action: shell
+    resource: "git remote get-url*"
     effect: allow
   - action: shell
     resource: "ls*"
@@ -143,12 +186,13 @@ permissions:
   - action: shell
     resource: "bash scripts/*"
     effect: allow
+  # CI triggers change remote state: they ask first, like every other state change
   - action: shell
     resource: "gh workflow run*"
-    effect: allow
+    effect: ask
   - action: shell
     resource: "gh run rerun*"
-    effect: allow
+    effect: ask
   - action: shell
     resource: "timeout* rm *"
     effect: deny
@@ -214,6 +258,24 @@ permissions:
     effect: deny
   - action: shell
     resource: "git merge*"
+    effect: deny
+  - action: shell
+    resource: "git add*"
+    effect: deny
+  - action: shell
+    resource: "git checkout*"
+    effect: deny
+  - action: shell
+    resource: "git switch*"
+    effect: deny
+  - action: shell
+    resource: "git revert*"
+    effect: deny
+  - action: shell
+    resource: "gh pr*"
+    effect: deny
+  - action: shell
+    resource: "gh issue*"
     effect: deny
   - action: shell
     resource: "rm*"
@@ -300,7 +362,7 @@ If a task requires touching live infrastructure (running containers, real deploy
 
 1. Discover existing infrastructure-as-code first (`glob` for `Dockerfile*`, `docker-compose*`, `.github/workflows/*`, `*.yml`). Follow its conventions — do not introduce a parallel style.
 2. Write the minimal change satisfying the AC. Validate what is validatable in-place: YAML parse, `docker compose config` (read-only), lint if available.
-3. Non-mutating checks only by default (`docker ps/logs/inspect`, `gh run view`, `compose config`). Anything that changes runtime state → ask first.
+3. Non-mutating checks only by default (`docker ps/logs/inspect`, `gh run view`, `compose config`). Anything that changes runtime state → ask first — the CI triggers `gh workflow run` and `gh run rerun` included: they ask, they never run silently.
 4. Use `todowrite` to track multi-step work.
 
 ## Completion (hard)
@@ -312,7 +374,8 @@ If a task requires touching live infrastructure (running containers, real deploy
 
 - DESTRUCTIVE ACTIONS require explicit confirmation: stopping/removing containers, deleting volumes/networks/images, pruning, real deploys, restarting services. Report `blocked` and stop instead of doing it silently.
 - SECRETS never go into files: no tokens, passwords, keys, connection strings in any file you write — placeholders + documentation of required variables instead.
-- No git mutations (`git commit`/`push`/`reset`/`merge`/`clean` are denied) — VCS work belongs to `git` via the orchestrator.
+- No git mutations — every git verb outside the read-only list (`git status`, `git log`, `git diff`, `git show`, the listing forms of `git branch`, the read-only forms of `git remote`) is denied, `git commit`/`push`/`reset`/`merge`/`clean`/`add`/`checkout`/`switch`/`revert`/`tag`/`stash`/`cherry-pick`/`pull`/`fetch`/`rebase`/`rm`/`restore`/`worktree`/`apply`/`am`/`config`/`submodule`, branch and PR management and `gh issue*` included — VCS work belongs to `git` via the orchestrator.
+- Scratch space under `/tmp` is yours: `rm -rf /tmp/*`, `rm -f /tmp/*` and the redirections `* > /tmp/*` / `* >> /tmp/*` are re-allowed after the denies. Everywhere else `rm` and the shell redirects are refused.
 - Edits only within the task scope (task description Goal/AC/Constraints).
 
 ## Style

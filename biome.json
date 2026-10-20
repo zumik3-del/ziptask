@@ -110,8 +110,10 @@
                       "Task",
                       "TaskStatus",
                       "TaskPriority",
+                      "CreatedTaskStatus",
                       "CommentType",
                       "clampLimit",
+                      "clampCursor",
                       "Clock",
                       "nowIso",
                       "TERMINAL_STATUSES"
