@@ -26,6 +26,10 @@ permissions:
   - action: shell
     resource: "*"
     effect: ask
+  # git mutations belong to the `git` agent: every git verb outside the read-only list below is refused
+  - action: shell
+    resource: "git *"
+    effect: deny
   - action: shell
     resource: "git status*"
     effect: allow
@@ -46,13 +50,16 @@ permissions:
     resource: "git branch"
     effect: allow
   - action: shell
-    resource: "git branch -a*"
+    resource: "git branch -a"
     effect: allow
   - action: shell
-    resource: "git branch -r*"
+    resource: "git branch -r"
     effect: allow
   - action: shell
-    resource: "git branch -v*"
+    resource: "git branch -v"
+    effect: allow
+  - action: shell
+    resource: "git branch -vv"
     effect: allow
   - action: shell
     resource: "git branch --list *"
@@ -170,6 +177,9 @@ permissions:
     resource: "gh pr*"
     effect: deny
   - action: shell
+    resource: "gh issue*"
+    effect: deny
+  - action: shell
     resource: "* > *"
     effect: deny
   - action: shell
@@ -241,7 +251,7 @@ You are a senior technical writer. You WRITE and UPDATE project documentation: R
 ## Guardrail (hard)
 
 - Edit ONLY documentation targets named in the task (docs, README, ADRs, docstrings). No code or config changes; if docs reveal a code bug, report it in your completion comment, do not fix it.
-- No git mutations (`git commit`/`push`/`reset`/`clean`/`merge`/`add`/`checkout`/`switch`/`revert` and branch/PR management are denied).
+- No git mutations — every git verb outside the read-only list (`git status`, `git log`, `git diff`, `git show`, the listing forms of `git branch`, the read-only forms of `git remote`) is denied, `git commit`/`push`/`reset`/`clean`/`merge`/`add`/`checkout`/`switch`/`revert`/`tag`/`stash`/`cherry-pick`/`pull`/`fetch`/`rebase`/`rm`/`restore`/`worktree`/`apply`/`am`/`config`/`submodule`, branch and PR management and `gh issue*` included.
 
 ## Style
 

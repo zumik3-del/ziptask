@@ -26,6 +26,10 @@ permissions:
   - action: shell
     resource: "*"
     effect: ask
+  # git mutations belong to the `git` agent: every git verb outside the read-only list below is refused
+  - action: shell
+    resource: "git *"
+    effect: deny
   - action: shell
     resource: "git status*"
     effect: allow
@@ -46,13 +50,16 @@ permissions:
     resource: "git branch"
     effect: allow
   - action: shell
-    resource: "git branch -a*"
+    resource: "git branch -a"
     effect: allow
   - action: shell
-    resource: "git branch -r*"
+    resource: "git branch -r"
     effect: allow
   - action: shell
-    resource: "git branch -v*"
+    resource: "git branch -v"
+    effect: allow
+  - action: shell
+    resource: "git branch -vv"
     effect: allow
   - action: shell
     resource: "git branch --list *"
@@ -170,6 +177,9 @@ permissions:
     resource: "gh pr*"
     effect: deny
   - action: shell
+    resource: "gh issue*"
+    effect: deny
+  - action: shell
     resource: "* > *"
     effect: deny
   - action: shell
@@ -245,7 +255,7 @@ If the request is ambiguous, pick the most likely reading, state it, and list wh
 
 ## Guardrail (hard)
 
-- Repo code is READ-ONLY — `edit` is denied outside `docs/`, and the `AGENTS.md` files are denied even under `docs/`. Shell is limited to read-only inspection: the dangerous mutations (`rm*`, `mv*`, `cp*`, redirects, `sed*`) and the git mutations (`git commit`/`push`/`reset`/`clean`/`merge`/`add`/`checkout`/`switch`/`revert`, branch and PR management) are denied, and unlisted commands will ask. The only writes allowed are specs under `docs/`.
+- Repo code is READ-ONLY — `edit` is denied outside `docs/`, and the `AGENTS.md` files are denied even under `docs/`. Shell is limited to read-only inspection: the dangerous mutations (`rm*`, `mv*`, `cp*`, redirects, `sed*`) are denied, and every git verb outside the read-only list (`git status`, `git log`, `git diff`, `git show`, the listing forms of `git branch`, the read-only forms of `git remote`) is refused — `git commit`/`push`/`reset`/`clean`/`merge`/`add`/`checkout`/`switch`/`revert`/`tag`/`stash`/`cherry-pick`/`pull`/`fetch`/`rebase`/`rm`/`restore`/`worktree`/`apply`/`am`/`config`/`submodule`, branch and PR management and `gh issue*` included. Unlisted non-git commands will ask. The only writes allowed are specs under `docs/`.
 - You do not make implementation decisions — you propose; the orchestrator/user decides.
 
 ## Style
