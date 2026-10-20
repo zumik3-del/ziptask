@@ -107,7 +107,25 @@ export function nowIso(): string {
   return new Date(monotonicNowMs()).toISOString()
 }
 
-// Normalize an unknown value into a Clock or null (shared by TaskRepo/TaskService/etc.).
+// Test-only seam: reset the process-wide counter so a test file starts from a known state (the
+// next stamp is the current wall clock again). Production code must never call it — the ordering
+// guarantee (#1608) holds only for the stamps taken between two resets.
+export function resetMonotonicClock(): void {
+  lastTimestampMs = 0
+}
+
+// Normalize an unknown value into a Clock or null. This is the single place that says which clock
+// shapes exist, and every clock consumer (TaskRepo, TaskService, LeaseReaper) normalizes through
+// it, so they accept exactly this set:
+//   - null / undefined              → no clock; the caller falls back to the process-wide source
+//   - () => number                  → a bare nowMs function
+//   - { nowIso(): string }          → nowIso as given; nowMs from nowMs/now/monotonicNowMs when
+//                                    present, otherwise parsed out of nowIso()
+//   - { nowMs(): number }           → nowIso is derived from nowMs
+//   - { now(): number }             → alias of nowMs
+//   - { monotonicNowMs(): number }  → alias of nowMs
+//   - { clock: <any of the above> } → unwrapped and normalized
+// Anything else → null (the caller falls back to the process-wide source).
 export function asClock(input: unknown): Clock | null {
   if (input == null) return null
   if (typeof input === 'function') {

@@ -4,7 +4,7 @@ import { readRequestBody } from '@modelcontextprotocol/sdk/server/requestBody.js
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { TaskService } from './core/service'
 import { formatError } from './core/result'
-import { TASK_STATUS_VALUES, monotonicNowMs } from './core/tasks'
+import { TASK_STATUS_VALUES } from './core/tasks'
 import type { TaskStatus } from './core/tasks'
 import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
@@ -80,12 +80,22 @@ export function trackStreamActivity(response: Response, session: Session): Respo
 export class InMemoryEventStore implements EventStore {
   private events = new Map<string, { streamId: string; message: JSONRPCMessage }>()
   private seq = 0
+  private lastEventTs = 0
+
+  // Transport-local timestamp: the domain clock (monotonicNowMs in src/core/tasks.ts) belongs to
+  // the task stamps, and transport traffic must not advance it — every event would push the next
+  // created_at into the future. This counter is per store and keeps the id prefix increasing.
+  private eventTimestamp(): number {
+    const now = Date.now()
+    this.lastEventTs = now > this.lastEventTs ? now : this.lastEventTs + 1
+    return this.lastEventTs
+  }
 
   // Event ids must order the same way events were stored: the timestamp prefix alone is
   // ambiguous because bursts land in the same millisecond, so it is paired with a
   // fixed-width monotonic counter. Ids are unique and lexicographically ordered.
   private generateEventId(streamId: string): string {
-    return `${streamId}_${monotonicNowMs()}_${String(++this.seq).padStart(10, '0')}`
+    return `${streamId}_${this.eventTimestamp()}_${String(++this.seq).padStart(10, '0')}`
   }
 
   async storeEvent(streamId: string, message: JSONRPCMessage): Promise<string> {
