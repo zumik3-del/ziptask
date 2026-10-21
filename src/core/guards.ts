@@ -10,7 +10,7 @@ type GuardStore = Pick<TaskStore, 'batchTasks' | 'getTaskRow' | 'statusesOf' | '
 type DepsStore = Pick<TaskStore, 'statusesOf'>
 
 export type CreateTaskInput = {
-  title: string; description?: string | null; priority?: string; assignee?: string | null
+  title: string; description?: string | null; priority?: unknown; assignee?: string | null
   depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
   defaultReporter: string
   project: string; projectArchived: boolean

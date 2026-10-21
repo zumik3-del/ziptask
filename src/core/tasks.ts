@@ -19,6 +19,48 @@ export const TASK_PRIORITIES = Object.freeze(['p0', 'p1', 'p2', 'p3'] as const)
 
 export type TaskPriority = (typeof TASK_PRIORITIES)[number]
 
+// The shapes a caller may write a priority in: the canonical "pN" string, the number N and the
+// digit string "N". They all resolve to the canonical string through normalizePriority below.
+export type TaskPriorityInput = TaskPriority | number | string
+
+// The one refusal text for a priority outside the accepted set. The set is derived from the list
+// above, so the message cannot drift from it.
+// The text is BARE, like every other service refusal (src/core/guards.ts): the service carries it
+// in a SvcError and formatError adds the code prefix (src/core/result.ts), while the schema layers
+// add the `INVALID: ` prefix themselves. A message that carried the prefix as well would read
+// "INVALID: INVALID: priority must be ..." on the service path.
+export const PRIORITY_INVALID_MESSAGE =
+  `priority must be one of ${TASK_PRIORITIES.join(', ')} or the number 0..${TASK_PRIORITIES.length - 1}`
+
+// The one mapping from an accepted shape to the canonical string: "p2", 2 and "2" all become "p2".
+// Every other value is refused (out of range, fractional, an unknown string, another type), so no
+// caller can write a priority that breaks the queue order: the column is sorted lexicographically
+// and only the canonical "pN" strings keep that order (p0 first, p3 last).
+// The digit string is matched by shape (a single ASCII digit), never by parsing it: Number()
+// trims whitespace and reads other Unicode decimal digits, so " " would become 0 and "٣" 3.
+export function normalizePriority(value: unknown): TaskPriority | null {
+  const last = TASK_PRIORITIES.length - 1
+  if (typeof value === 'number') {
+    if (!Number.isInteger(value) || value < 0 || value > last) return null
+    return `p${value}` as TaskPriority
+  }
+  if (typeof value === 'string') {
+    const canonical = TASK_PRIORITIES.find(priority => priority === value)
+    if (canonical) return canonical
+    if (!/^[0-9]$/.test(value)) return null
+    const digit = Number(value)
+    if (digit > last) return null
+    return `p${digit}` as TaskPriority
+  }
+  return null
+}
+
+// The type guard for the accepted shapes: the schema layers ask it, and it narrows an untrusted
+// value to the accepted set. An absent priority is not one of them — the default takes its place.
+export function isTaskPriorityInput(value: unknown): value is TaskPriorityInput {
+  return normalizePriority(value) !== null
+}
+
 // The status a task is born with: a regular task starts queued, an epic starts open. The repo
 // owns that rule and reports the status it wrote (src/db/repo.ts).
 export type CreatedTaskStatus = 'queued' | 'open'
