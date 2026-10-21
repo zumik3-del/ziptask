@@ -32,7 +32,7 @@ Sources of truth: the wire protocol in `src/mcp/instructions.md`, the domain rul
 - MCP SDK 1.30 + zod v4: a tool handler must return a `type` alias, not an `interface` — `CallToolResult` is `$loose`; interfaces fail tsc with a misleading overload error.
 
 ## 6. Branching & hosting
-- Feature work on `dev`; `main` is PR-only. Conventional commits (`feat:`, `fix:`). Remote: GitHub `zumik3-del/ziptask` — commits/push/PR/tag/Release via the git subagent. Never commit `data/`, `.test-data/`, `node_modules/`.
+- Feature work on `dev`; `main` is PR-only, and the user merges the PR themselves — the agent opens it and stops. Conventional commits (`feat:`, `fix:`). Remote: GitHub `zumik3-del/ziptask` — commits/push/PR/tag/Release via the git subagent. Never commit `data/`, `.test-data/`, `node_modules/`.
 - Git scan safety: never enumerate every ref or run `git ls-tree -r`/`git show` per ref — that fan-out can retain GBs. Prefer `rg` on checked-out files; for history use a named ref, an explicit path, `--max-count` and bounded output.
 - Remote sync guard (issue #14): the git subagent never rewrites pushed history (rebase/force-push/reset) and never pulls/fetches unless asked. After any sync the orchestrator verifies tree completeness (`tsc` + `bun test`) before the next commit.
 - Release (merge-driven): bump `version` on `dev`, commit `chore: bump version to X.Y.Z`, PR dev→main, merge. `release.yml` triggers on `main`, builds `dist/ziptask` (bun 1.4.2, frozen lockfile), creates the tag + Release. Assets: `ziptask-linux-x86_64`, `ziptask-<TAG>-linux-x86_64.tar.gz`. Install/update/uninstall go through the vendored `deploy/` framework.
