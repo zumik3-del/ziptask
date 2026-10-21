@@ -1,5 +1,5 @@
 import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, Clock } from './tasks'
-import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, asClock } from './tasks'
+import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, asClock, normalizePriority, PRIORITY_INVALID_MESSAGE } from './tasks'
 import type { CommentRow, LifecycleStore, ProjectListItem, ProjectRow, ProjectStore, QueryStore, TaskServiceStore, TimelineRow, SvcResult, SvcError, UpdateStatusData } from './types'
 import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
@@ -14,8 +14,11 @@ import {
   DEFAULT_REPORTER, DEFAULT_LIST_LIMIT, DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT
 } from '../defaults'
 
+// `priority` is the value as the caller wrote it, so it stays `unknown` here: the service, not
+// the type, decides what is acceptable — it normalizes the value (the canonical "pN", the number
+// N or the digit string "N") and refuses everything else.
 type CreateTaskArgs = {
-  title: string; description?: string; priority?: TaskPriority; assignee?: string
+  title: string; description?: string; priority?: unknown; assignee?: string
   depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number; project?: string
 }
 
@@ -134,6 +137,12 @@ export class TaskLifecycleService {
     if (!project.ok) return fail(project.error)
     const guard = this._createTaskGuard(args, project.data)
     if (guard) return fail(guard)
+    // The priority is normalized here, not at the schema: the row carries the canonical "pN"
+    // string, and the queue order is a lexicographic sort of that column. A value outside the
+    // accepted set is refused instead of written, so no caller can break the queue order. Only an
+    // absent priority takes the default — a null or any other unusable value is refused.
+    const priority = normalizePriority(args.priority === undefined ? this.opts.defaultPriority : args.priority)
+    if (priority === null) return fail({ code: 'INVALID', message: PRIORITY_INVALID_MESSAGE })
     const deps = args.depends_on ?? []
     const reporter = args.reporter ?? this.opts.defaultReporter
     const now = this._nowIso()
@@ -144,7 +153,7 @@ export class TaskLifecycleService {
       const created = this.store.insertTask({
         title: args.title,
         description: args.description ?? null,
-        priority: args.priority ?? this.opts.defaultPriority,
+        priority,
         // The creation path never writes a holder: a task is born `queued` without a lease and the
         // claim writes the holder. The guard refuses a caller's `assignee`; the store ignores it.
         assignee: null,

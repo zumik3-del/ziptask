@@ -8,7 +8,15 @@ import {
   DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT, DEFAULT_LOG_LEVEL, DEFAULT_AUDIT_LOG,
   LEVELS
 } from './defaults'
-import { TASK_PRIORITIES } from './core/tasks'
+import { isTaskPriorityInput, normalizePriority, PRIORITY_INVALID_MESSAGE } from './core/tasks'
+
+// The configured default accepts the same shapes as create_task (the canonical "pN", the number N
+// and the digit string "N"): the normalizer in src/core/tasks.ts is the one mapping, and the
+// transform turns the accepted shape into the canonical string the settings carry.
+const PRIORITY_INPUT = z.unknown().refine(
+  (value) => value === undefined || isTaskPriorityInput(value),
+  { message: `INVALID: ${PRIORITY_INVALID_MESSAGE}` }
+)
 
 export const DEFAULTS = Object.freeze({
   dbPath: DEFAULT_DB_PATH,
@@ -44,7 +52,7 @@ const boundaries = {
   autoClaimCeiling: z.number().int().positive(),
   http: partialGroup({ maxSessions: z.number().int().positive(), sessionTtlMs: z.number().int().positive() }),
   defaults: partialGroup({
-    priority: z.enum(TASK_PRIORITIES),
+    priority: PRIORITY_INPUT.optional().transform(value => normalizePriority(value) ?? undefined),
     reporter: z.string(),
     listLimit: z.number().int().positive(),
     timelineLimit: z.number().int().positive(),

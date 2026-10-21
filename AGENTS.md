@@ -41,6 +41,7 @@ Sources of truth: the wire protocol in `src/mcp/instructions.md`, the domain rul
 - SynaptoMind slug `ziptask`; always pass `cwd=/mnt/external/zum/PROJECTS/local/ziptask`. State pointers ≤600 chars, English, identifiers verbatim.
 - Tracker **project** slug `ziptask` — the required `project` argument on every enumerating call (`create_task`, `list_queue`, `list_tasks` without `ids`, auto-pick `claim_task`). It is a scope filter, not a token; by-id calls never take it; there is no default project and no all-projects mode (`docs/projects.md`).
 - Task/epic/comment text comes from the tracker templates (`get_template`); their source of truth is `templates/`.
+- Task priority scale: `p0` = highest urgency (blocker), `p1` = high, `p2` = normal (the default), `p3` = lowest (chore). The number descends as urgency rises — `p0` outranks `p1` outranks `p2` outranks `p3`; never read `p3` as more important than `p0`. Pass it as `pN`; `create_task` accepts the bare number `0..3` too (`2` → `p2`) — the canonical value is what gets stored and returned unchanged (`TASK_PRIORITIES`, `src/core/tasks.ts`).
 
 ## 8. Known pitfalls
 - Do not reintroduce webhooks/Redis/Hono — rejected (pull model, MCP-only).
