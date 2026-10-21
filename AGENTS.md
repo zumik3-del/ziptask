@@ -46,7 +46,7 @@ Sources of truth: the wire protocol in `src/mcp/instructions.md`, the domain rul
 - Re-parenting between epics has no API tool (`epic_id` is immutable): use the SQL recipe in `docs/epics.md`; verify the target is a non-terminal, non-sub-task epic and leave `version` untouched.
 
 ## 9. Delegation map
-Roles and handoff rules: the global `AGENTS.md` (`~/.config/opencode/AGENTS.md`). Project delta: the tester owns the smoke suite (§3).
+Roles and handoff rules live in the global `AGENTS.md` (`~/.config/opencode/AGENTS.md`); the only project-specific part is §3 — the canonical commands each role verifies against.
 
 ## 10. Workspace & communication
 - Project slug: `ziptask` — use it verbatim for both systems: the `forgejo_artifacts` `project:` argument (documents → `authelia/artifacts` under `ziptask/`) and the tracker `project:` on enumerating calls (§7). The two register projects independently, so their listings differ — never infer one slug from the other's.
