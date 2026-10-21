@@ -12,8 +12,7 @@ Sources of truth: the wire protocol in `src/mcp/instructions.md`, the domain rul
 - Config: optional `settings.json` (`--settings <path>` or `ZIPTASK_SETTINGS`; see `settings.example.json`), then env overrides (`ZIPTASK_DB`, `ZIPTASK_PORT`, `ZIPTASK_HOST`, …; full table: `docs/configuration.md`).
 
 ## 3. Verification commands
-- `bun test` · `bunx biome check src/ scripts/` · `bunx tsc --noEmit` · smoke `bun run src/smoke.ts`.
-- The smoke suite is the tester's — once per batch, never in a dev task.
+- `bun test` · `bunx biome check src/ scripts/` · `bunx tsc --noEmit` · smoke `bun run src/smoke.ts` (the tester's — once per batch, never in a dev task).
 
 ## 4. Code conventions
 - No comments unless truly necessary. Reuse before reimplementing: extend or generalise an existing module; write from scratch only when nothing fits.
@@ -37,12 +36,12 @@ Sources of truth: the wire protocol in `src/mcp/instructions.md`, the domain rul
 
 ## 7. Memory conventions
 - SynaptoMind slug `ziptask`; always pass `cwd=/mnt/external/zum/PROJECTS/local/ziptask`.
-- Tracker **project** slug: `ziptask` (§10) — required on every enumerating call; a scope filter, not a token; by-id calls never take it; no default project, no all-projects mode (`docs/projects.md`).
+- Tracker **project** slug: `ziptask` (§10) — required on every enumerating call; a scope filter, not a token; no default project and no all-projects mode (`docs/projects.md`).
 
 ## 8. Known pitfalls
 - Do not reintroduce webhooks/Redis/Hono — rejected (pull model, MCP-only).
 - Old v1 DBs are schema-incompatible — delete, do not migrate.
-- Epics are never claimable and their status is manual: roll up via `get_task fields:["subtasks"]`; `update_status(epic→done|failed|canceled)` is guarded (`CHILDREN: N sub-tasks not terminal`); dep-on-epic is rejected at create.
+- Epic status is manual: `update_status(epic→done|failed|canceled)` is guarded (`CHILDREN: N sub-tasks not terminal`); dep-on-epic is rejected at create.
 - Re-parenting between epics has no API tool (`epic_id` is immutable): use the SQL recipe in `docs/epics.md`; verify the target is a non-terminal, non-sub-task epic and leave `version` untouched.
 
 ## 9. Delegation map
@@ -50,4 +49,4 @@ Roles and handoff rules live in the global `AGENTS.md` (`~/.config/opencode/AGEN
 
 ## 10. Workspace & communication
 - Project slug: `ziptask` — use it verbatim for both systems: the `forgejo_artifacts` `project:` argument (documents → `authelia/artifacts` under `ziptask/`) and the tracker `project:` on enumerating calls (§7). The two register projects independently, so their listings differ — never infer one slug from the other's.
-- Code → this repo; long-form documents live in the artifacts repo, state pointers in SynaptoMind with the artifact permalink.
+- Code → this repo.
