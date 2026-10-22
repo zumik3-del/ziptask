@@ -39,7 +39,7 @@ export interface ProjectStore {
   projectBySlug(slug: string): ProjectRow | null
   projectSlugs(): string[]
   listProjects(): ProjectListItem[]
-  updateProject(id: number, patch: { slug?: string; folderPath?: string; archived?: boolean }, now: string): number
+  updateProject(id: number, patch: { folderPath?: string; archived?: boolean }, now: string): number
   deleteProject(id: number): number
   projectTaskCount(id: number): number
 }

@@ -91,7 +91,7 @@ export class ProjectService {
     return this.store.listProjects()
   }
 
-  update(args: { project: string; slug?: string; folder_path?: string; archived?: boolean }): SvcResult<{ slug: string }> {
+  update(args: { project: string; folder_path?: string; archived?: boolean }): SvcResult<{ slug: string }> {
     return updateProject(this.store, args)
   }
 
@@ -552,10 +552,5 @@ export class TaskService {
     return this.query.listComments(id)
   }
 
-  // Test-only seam: it forces a sweep regardless of the cooldown and has no production caller —
-  // production reaps through the read paths and the claim/update write paths.
-  reapExpiredLeases(): void {
-    this.lifecycle.reapExpiredLeases()
-  }
 }
 

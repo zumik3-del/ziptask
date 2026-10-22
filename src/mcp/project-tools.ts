@@ -13,7 +13,6 @@ const LIST_PROJECTS_SHAPE = {}
 
 const UPDATE_PROJECT_SHAPE = {
   project: z.string().describe('slug of the project to update'),
-  slug: z.string().optional(),
   folder_path: z.string().optional().describe('absolute path; a relative one is refused: INVALID: folder_path must be an absolute path'),
   archived: z.boolean().optional().describe('true stamps archived_at (create_task refuses); false clears it and is idempotent')
 }
@@ -36,7 +35,7 @@ export function handleListProjects(svc: TaskService, args: object): ToolResult {
 }
 
 export function handleUpdateProject(svc: TaskService, args: {
-  project: string; slug?: string; folder_path?: string; archived?: boolean
+  project: string; folder_path?: string; archived?: boolean
 }): ToolResult {
   const unknown = rejectUnknownArgs('update_project', UPDATE_PROJECT_SHAPE, args)
   if (unknown) return unknown
@@ -61,7 +60,7 @@ export function registerProjectTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleListProjects(svc, args))
 
   server.registerTool('update_project', {
-    description: 'Update a project by slug (slug?, folder_path?, archived?). archived:false is idempotent; INVALID: nothing to update only when no optional argument is given. Output {slug}',
+    description: 'Update a project by slug (folder_path?, archived?). archived:false is idempotent; INVALID: nothing to update only when no optional argument is given. Output {slug}',
     inputSchema: z.object(UPDATE_PROJECT_SHAPE).catchall(z.unknown())
   }, async (args) => handleUpdateProject(svc, args))
 
