@@ -441,22 +441,6 @@ try {
     `rejected claim left no side effect: still in list_queue ("${aliasQueue.split('\n').join(' / ')}")`
   )
 
-  const aliasConflict = await client.callTool({
-    name: 'claim_task',
-    arguments: { agent: 'smoke', id: aliasId, task_id: idB }
-  })
-  assert(aliasConflict.isError === true, 'claim_task id/task_id disagreement → error')
-  assert(
-    textOf(aliasConflict) === `INVALID: claim_task id/task_id conflict (id=${aliasId} task_id=${idB}); task_id is canonical`,
-    `conflict error text: ${textOf(aliasConflict)}`
-  )
-
-  const aliasClaim = parseToolResult(await client.callTool({
-    name: 'claim_task',
-    arguments: { agent: 'smoke', id: aliasId }
-  }))
-  assert(aliasClaim.id === aliasId, `claim_task {agent, id} claims exactly that task, id=${aliasId}`)
-
   const canonicalClaim = parseToolResult(await client.callTool({
     name: 'claim_task',
     arguments: { agent: 'smoke', task_id: idB }

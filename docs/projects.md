@@ -48,7 +48,7 @@ The full table plus every refusal string: [MCP tools → Projects and scope](mcp
 |---|---|
 | `create_project` | Register a project; `slug` derives from the folder name. Returns `{slug}` |
 | `list_projects` | One `slug|folder|open` line per project, ordered by `slug` ASC |
-| `update_project` | Rename, re-point `folder_path`, archive/un-archive. Returns `{slug}` |
+| `update_project` | Re-point `folder_path`, archive/un-archive. Returns `{slug}` |
 | `delete_project` | Delete a project that holds no tasks. Returns `{deleted:<slug>}` |
 
 Per-tool inputs and refusals: [MCP tools](mcp-tools.md).

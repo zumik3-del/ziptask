@@ -5,7 +5,7 @@ import type { TaskStatus, TaskPriorityInput } from '../core/tasks'
 import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, MAX_DEPENDS_ON, isTaskPriorityInput, PRIORITY_INVALID_MESSAGE } from '../core/tasks'
 import { foldResult } from '../core/result'
 import {
-  type ToolResult, jsonResult, textResult, errorResult, errorTool, toToolResult, pickFields, rejectUnknownArgs,
+  type ToolResult, jsonResult, textResult, errorTool, toToolResult, pickFields, rejectUnknownArgs,
   PROJECT_ARG, TaskId
 } from './common'
 
@@ -69,7 +69,6 @@ const LIST_TASKS_SHAPE = {
 const CLAIM_TASK_SHAPE = {
   agent: z.string().optional().describe('agent name; defaults to "unknown" when omitted'),
   task_id: TaskId.optional(),
-  id: TaskId.optional().describe('alias of task_id'),
   include: z.array(z.string()).optional(),
   lease_ttl_min: z.number().int().positive().optional().describe('lease TTL in minutes for this claim; overrides the server default for this claim only'),
   project: PROJECT_ARG
@@ -180,17 +179,13 @@ export function handleListTasks(svc: TaskService, args: {
 export function handleClaimTask(svc: TaskService, args: {
   agent?: string
   task_id?: number
-  id?: number
   include?: string[]
   lease_ttl_min?: number
   project?: string
 }): ToolResult {
   const unknown = rejectUnknownArgs('claim_task', CLAIM_TASK_SHAPE, args)
   if (unknown) return unknown
-  if (args.task_id !== undefined && args.id !== undefined && args.task_id !== args.id) {
-    return errorResult(`INVALID: claim_task id/task_id conflict (id=${args.id} task_id=${args.task_id}); task_id is canonical`)
-  }
-  const taskId = args.task_id !== undefined ? args.task_id : args.id
+  const taskId = args.task_id
   return foldResult(svc.claimTask({ agent: args.agent ?? 'unknown', taskId, leaseTtlMin: args.lease_ttl_min, project: args.project }), ({ id, leaseTtlMin, task }) => {
     const result: Record<string, unknown> = { id, lease_ttl_min: leaseTtlMin, version: task.version }
     Object.assign(result, pickFields(task, args.include ?? []))
@@ -253,7 +248,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleListTasks(svc, args))
 
   server.registerTool('claim_task', {
-    description: 'Claim a task (auto-picks the best queued, or task_id — queued/blocked). id is an alias of task_id: id alone claims it, id equal to task_id is fine, id different from task_id is an INVALID conflict. `project` (slug) is required for the auto-pick (it is the only scoped branch); a by-id claim stays unscoped. agent is optional (defaults to "unknown"); lease_ttl_min overrides the server default lease for this claim only. include: extra fields in response',
+    description: 'Claim a task (auto-picks the best queued, or task_id — queued/blocked). `project` (slug) is required for the auto-pick (it is the only scoped branch); a by-id claim stays unscoped. agent is optional (defaults to "unknown"); lease_ttl_min overrides the server default lease for this claim only. include: extra fields in response',
     inputSchema: z.object(CLAIM_TASK_SHAPE).catchall(z.unknown())
   }, async (args) => handleClaimTask(svc, args))
 

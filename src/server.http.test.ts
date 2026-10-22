@@ -571,45 +571,11 @@ describe('argument contract over MCP (F1 #1040)', () => {
     }
   }
 
-  describe('claim_task id alias', () => {
-    test('id alone claims exactly that task over the wire (alias survives parsing)', async () => {
-      const bait = getId(srv.svc.createTask({ title: 'Bait', reporter: 'dev', priority: 'p0' }))
-      const target = getId(srv.svc.createTask({ title: 'Alias target', reporter: 'dev', priority: 'p3' }))
-
-      const res: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', id: target } })
-      expect(res.isError).toBeUndefined()
-      expect(JSON.parse(textOf(res)).id).toBe(target)
-      expect((srv.db.query('SELECT status FROM tasks WHERE id = ?').get(target) as any).status).toBe('in_progress')
-      // The p0 bait is what auto-pick would have taken: it must be untouched.
-      expect((srv.db.query('SELECT status FROM tasks WHERE id = ?').get(bait) as any).status).toBe('queued')
-    })
-
-    test('task_id alone still claims that task (canonical name byte-identical)', async () => {
+  describe('claim_task by task_id', () => {
+    test('task_id alone claims that task over the wire', async () => {
       const target = getId(srv.svc.createTask({ title: 'Canonical', reporter: 'dev', priority: 'p0' }))
       const res: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: target } })
       expect(JSON.parse(textOf(res)).id).toBe(target)
-    })
-
-    test('id and task_id equal → claims without error', async () => {
-      const target = getId(srv.svc.createTask({ title: 'BothEqual', reporter: 'dev' }))
-      const res: any = await client.callTool({
-        name: 'claim_task', arguments: { agent: 'tester', id: target, task_id: target }
-      })
-      expect(res.isError).toBeUndefined()
-      expect(JSON.parse(textOf(res)).id).toBe(target)
-    })
-
-    test('id and task_id disagree → isError, nothing claimed', async () => {
-      const a = getId(srv.svc.createTask({ title: 'A', reporter: 'dev' }))
-      const b = getId(srv.svc.createTask({ title: 'B', reporter: 'dev' }))
-      const before = storeSnapshot()
-
-      const res: any = await client.callTool({
-        name: 'claim_task', arguments: { agent: 'tester', id: a, task_id: b }
-      })
-      expect(res.isError).toBe(true)
-      expect(textOf(res)).toBe(`INVALID: claim_task id/task_id conflict (id=${a} task_id=${b}); task_id is canonical`)
-      expect(storeSnapshot()).toEqual(before)
     })
   })
 
@@ -618,7 +584,7 @@ describe('argument contract over MCP (F1 #1040)', () => {
       const target = getId(srv.svc.createTask({ title: 'Intended', reporter: 'dev', priority: 'p0' }))
 
       const res: any = await client.callTool({
-        name: 'claim_task', arguments: { agent: 'tester', id: target, bogus: 1 }
+        name: 'claim_task', arguments: { agent: 'tester', task_id: target, bogus: 1 }
       })
       expect(res.isError).toBe(true)
       expect(textOf(res)).toContain('INVALID: unknown argument bogus')
@@ -627,7 +593,7 @@ describe('argument contract over MCP (F1 #1040)', () => {
       expect(queue).toContain(`${target}|p0|Intended`)
 
       // Still genuinely claimable afterwards — no lease, no attempts bump.
-      const claim: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', id: target } })
+      const claim: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: target } })
       expect(JSON.parse(textOf(claim)).id).toBe(target)
     })
 
@@ -691,12 +657,11 @@ describe('argument contract over MCP (F1 #1040)', () => {
       }
     })
 
-    test('claim_task advertises the id alias and keeps task_id', async () => {
+    test('claim_task no longer advertises the id alias', async () => {
       const listed = await client.listTools()
       const claim = (listed.tools as any[]).find(t => t.name === 'claim_task')!
       const props = claim.inputSchema.properties
-      expect(Object.keys(props).sort()).toEqual(['agent', 'id', 'include', 'lease_ttl_min', 'project', 'task_id'])
-      expect(props.id.description).toContain('alias of task_id')
+      expect(Object.keys(props).sort()).toEqual(['agent', 'include', 'lease_ttl_min', 'project', 'task_id'])
     })
 
     test('update_status advertises renew and reset_attempts as booleans', async () => {

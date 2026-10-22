@@ -146,7 +146,7 @@ describe('the service and its reaper share one clock', () => {
           id
         ])
 
-        svc.reapExpiredLeases()
+        svc.lifecycle.reapExpiredLeases()
 
         const reaped = getTaskRow(db, id)
         expect(reaped.status).toBe('queued')
@@ -172,7 +172,7 @@ describe('the service and its reaper share one clock', () => {
       if (!created.ok) throw new Error(`createTask failed: ${formatError(created.error)}`)
       const createdAt = Date.parse(getTaskRow(db, created.data.id).created_at)
       expect(Math.abs(createdAt - Date.now())).toBeLessThan(60_000)
-      expect(() => svc.reapExpiredLeases()).not.toThrow()
+      expect(() => svc.lifecycle.reapExpiredLeases()).not.toThrow()
     } finally {
       closeTestDb(db)
     }

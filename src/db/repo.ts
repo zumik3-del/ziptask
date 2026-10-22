@@ -349,10 +349,9 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     ).all() as ProjectListItem[]
   }
 
-  updateProject(id: number, patch: { slug?: string; folderPath?: string; archived?: boolean }, now: string): number {
+  updateProject(id: number, patch: { folderPath?: string; archived?: boolean }, now: string): number {
     const assignments = ['updated_at = ?']
     const params: SqlParam[] = [now]
-    if (patch.slug !== undefined) { assignments.push('slug = ?'); params.push(patch.slug) }
     if (patch.folderPath !== undefined) { assignments.push('folder_path = ?'); params.push(patch.folderPath) }
     if (patch.archived !== undefined) { assignments.push('archived_at = ?'); params.push(patch.archived ? now : null) }
     params.push(id)
