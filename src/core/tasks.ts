@@ -96,7 +96,6 @@ export const STATUS_CODES = Object.freeze(
   ])
 ) as Record<TaskStatus | 'not_found', number>
 
-// The canonical tuple under its historical name: callers pass it to z.enum and iterate it.
 export const TASK_STATUSES = TASK_STATUS_VALUES
 
 export function statusToCode(status: TaskStatus | 'not_found'): number {
@@ -209,7 +208,6 @@ export function asClock(input: unknown): Clock | null {
   return null
 }
 
-// Default process-wide clock handle (reflects the global monotonic source).
 export const defaultClock: Clock = {
   nowMs: monotonicNowMs,
   nowIso: nowIso
