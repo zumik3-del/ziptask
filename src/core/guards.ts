@@ -1,5 +1,5 @@
 import type { Task, TaskStatus } from './tasks'
-import { isValidTransition, TERMINAL_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON } from './tasks'
+import { isValidTransition, TERMINAL_STATUSES, EDITABLE_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_CONTENT_LENGTH, MAX_DEPENDS_ON, normalizePriority, PRIORITY_INVALID_MESSAGE } from './tasks'
 import type { TaskStore, SvcError } from './types'
 import { parseDeps, depsSatisfied } from './deps'
 import { requiredError, tooLongError, optionalFieldError, epicError } from './validation'
@@ -19,6 +19,21 @@ export type CreateTaskInput = {
 export type UpdateStatusInput = {
   id: number; agent: string; status: TaskStatus; version?: number
   comment?: string; renew?: boolean; reset_attempts?: boolean
+}
+
+export type UpdateTaskInput = {
+  id: number; agent: string; version?: number
+  title?: string; description?: string | null; priority?: unknown; depends_on?: number[]; comment?: string
+}
+
+export function editableWindowError(task: Task): SvcError | null {
+  if (!EDITABLE_STATUSES.includes(task.status)) {
+    return { code: 'INVALID', message: `cannot edit #${task.id} in status=${task.status}: only a queued task (or an open epic) is editable` }
+  }
+  if (task.assignee !== null || task.lease_expires_at !== null) {
+    return { code: 'INVALID', message: `task #${task.id} holds a lease and is not editable` }
+  }
+  return null
 }
 
 // An epic is never leased. The exact wire string is written here once, so claim_task and the
@@ -194,7 +209,7 @@ export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: b
   // row read, the status window by isValidTransition, so is_epic and deps are the rest. Both use
   // claimEligibilityError; review -> in_progress is a deliberate superset (work sent back) and asks
   // only for the epic half, because its deps are provably still satisfied: deps are immutable after
-  // create and a dependency closed for work stays closed for work — the administrative edge out of
+  // the claim and a dependency closed for work stays closed for work — the administrative edge out of
   // `failed` (`failed -> canceled`) closes a task out, it never reopens one.
   if (args.status === 'in_progress' && !selfEdge) {
     const eligibilityErr = task.status === 'queued' || task.status === 'blocked'
@@ -216,6 +231,53 @@ export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: b
   if (task.is_epic && TERMINAL_STATUSES.includes(args.status)) {
     const open = store.nonTerminalChildCount(args.id)
     if (open > 0) return { code: 'CHILDREN', message: `${open} sub-tasks not terminal` }
+  }
+  return null
+}
+
+export function updateTaskGuard(args: UpdateTaskInput, task: Task, store: GuardStore): SvcError | null {
+  const agentErr = requiredError(args.agent, 'agent') ?? tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent')
+  if (agentErr) return agentErr
+  if (args.comment !== undefined) {
+    const commentErr = tooLongError(args.comment, MAX_CONTENT_LENGTH, 'comment')
+    if (commentErr) return commentErr
+  }
+  if (args.version !== undefined && task.version !== args.version) {
+    return { code: 'CONFLICT', message: `expected version ${task.version}, got ${args.version}` }
+  }
+  const windowErr = editableWindowError(task)
+  if (windowErr) return windowErr
+  const hasField =
+    args.title !== undefined ||
+    args.description !== undefined ||
+    args.priority !== undefined ||
+    args.depends_on !== undefined
+  if (!hasField) return { code: 'INVALID', message: 'nothing to update' }
+  if (args.title !== undefined) {
+    const titleErr = requiredError(args.title, 'title') ?? tooLongError(args.title, MAX_TITLE_LENGTH, 'title')
+    if (titleErr) return titleErr
+  }
+  if (args.description !== undefined) {
+    if (args.description === null) return { code: 'INVALID', message: 'description required' }
+    const descErr = tooLongError(args.description, MAX_DESCRIPTION_LENGTH, 'description')
+    if (descErr) return descErr
+  }
+  if (args.priority !== undefined) {
+    if (normalizePriority(args.priority) === null) {
+      return { code: 'INVALID', message: PRIORITY_INVALID_MESSAGE }
+    }
+  }
+  if (args.depends_on !== undefined) {
+    if (!Array.isArray(args.depends_on)) return { code: 'INVALID', message: 'depends_on too long' }
+    if (args.depends_on.length > MAX_DEPENDS_ON) return { code: 'INVALID', message: 'depends_on too long' }
+    if (task.is_epic) return { code: 'INVALID', message: 'an epic cannot have depends_on' }
+    const batch = store.batchTasks(args.depends_on)
+    for (const [d, t] of batch) {
+      if (t?.is_epic) return { code: 'INVALID', message: `dependencies on epic tasks not allowed (#${d})` }
+      if (t && t.project !== task.project) {
+        return { code: 'INVALID', message: `dependency #${d} belongs to project '${t.project ?? ''}'` }
+      }
+    }
   }
   return null
 }

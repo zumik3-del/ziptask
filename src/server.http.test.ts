@@ -638,14 +638,14 @@ describe('argument contract over MCP (F1 #1040)', () => {
       expect(textOf(res)).toBe('INVALID: unknown argument field on get_task (accepted: fields, id)')
     })
 
-    test('every one of the 13 tools rejects an unknown key, and the accepted list matches tools/list', async () => {
+    test('every one of the 14 tools rejects an unknown key, and the accepted list matches tools/list', async () => {
       const id = getId(srv.svc.createTask({ title: 'Base', reporter: 'dev', priority: 'p0' }))
       const version = getVersion(srv.db, id)
       const listed = await client.listTools()
       const schemas = new Map<string, any>(
         (listed.tools as any[]).map(t => [t.name, t.inputSchema as any])
       )
-      expect(schemas.size).toBe(13)
+      expect(schemas.size).toBe(14)
 
       const calls: Array<[string, Record<string, unknown>]> = [
         ['create_task', { title: 'Nope', reporter: 'dev', bogus: 1 }],
@@ -653,6 +653,7 @@ describe('argument contract over MCP (F1 #1040)', () => {
         ['list_tasks', { bogus: 1 }],
         ['claim_task', { agent: 'tester', bogus: 1 }],
         ['update_status', { id, agent: 'tester', status: 'review', version, bogus: 1 }],
+        ['update_task', { id, agent: 'tester', title: 'nope', bogus: 1 }],
         ['list_queue', { bogus: 1 }],
         ['add_comment', { id, agent: 'tester', content: 'nope', bogus: 1 }],
         ['get_timeline', { id, bogus: 1 }],
@@ -662,7 +663,7 @@ describe('argument contract over MCP (F1 #1040)', () => {
         ['update_project', { project: 'test', bogus: 1 }],
         ['delete_project', { project: 'test', bogus: 1 }]
       ]
-      expect(calls.length).toBe(13)
+      expect(calls.length).toBe(14)
 
       const before = storeSnapshot()
       for (const [tool, args] of calls) {
@@ -679,10 +680,10 @@ describe('argument contract over MCP (F1 #1040)', () => {
   })
 
   describe('advertised schema (R7 guard against a later .strict() "fix")', () => {
-    test('no tool advertises additionalProperties: false, all 13 advertise it', async () => {
+    test('no tool advertises additionalProperties: false, all 14 advertise it', async () => {
       const listed = await client.listTools()
       const tools = listed.tools as any[]
-      expect(tools.length).toBe(13)
+      expect(tools.length).toBe(14)
       for (const t of tools) {
         expect(`${t.name}:${JSON.stringify(t.inputSchema.additionalProperties)}`)
           .toBe(`${t.name}:{}`)

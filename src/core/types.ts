@@ -23,6 +23,9 @@ export interface TaskStore {
   transitionStatus(id: number, expectedVersion: number, status: TaskStatus,
     now: string, completedAt: string | null, leaseUntilIso: string | null,
     holder?: string | null, resetAttempts?: 0 | 1): number
+  updateTaskFields(id: number, expectedVersion: number,
+    patch: { title?: string; description?: string | null; priority?: TaskPriority; dependsOn?: string },
+    now: string): number
   transaction<T>(fn: () => T): T
   nonTerminalChildCount(epicId: number): number
   childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number; canceled: number }
@@ -60,7 +63,7 @@ export interface Store extends TaskStore, ProjectStore, CommentStore, AuditStore
 // reach the whole aggregate. The same Pick pattern the guards apply locally (src/core/guards.ts).
 export type LifecycleStore = Pick<TaskStore,
   'getTaskRow' | 'insertTask' | 'deleteTask' | 'depsOf' | 'statusesOf' | 'batchTasks'
-  | 'markClaimed' | 'transitionStatus' | 'transaction' | 'nonTerminalChildCount'
+  | 'markClaimed' | 'transitionStatus' | 'updateTaskFields' | 'transaction' | 'nonTerminalChildCount'
   | 'promoteEpicWithMirror' | 'appendEpicAuditMirror' | 'queuedCandidates'
 > & Pick<CommentStore, 'insertComment'> & Pick<AuditStore, 'auditAppend'> & LeaseStore
 
@@ -93,3 +96,4 @@ export type SvcResult<T> = { ok: true; data: T } | { ok: false; error: SvcError 
 
 // attempts is present only when update_status was called with reset_attempts
 export type UpdateStatusData = { id: number; status: TaskStatus; version: number; attempts?: number }
+export type UpdateTaskData = { id: number; version: number; changed: ('title' | 'description' | 'priority' | 'depends_on')[] }
