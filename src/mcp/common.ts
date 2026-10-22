@@ -59,7 +59,6 @@ export function rejectUnknownArgs(tool: string, shape: object, args: object): To
   )
 }
 
-// Re-exports for convenience
 export type { Task, TaskStatus, TaskPriority } from '../core/tasks'
 export { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS } from '../core/tasks'
 export { TASK_PRIORITIES } from '../defaults'

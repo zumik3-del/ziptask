@@ -96,8 +96,11 @@ export const STATUS_CODES = Object.freeze(
   ])
 ) as Record<TaskStatus | 'not_found', number>
 
-// The canonical tuple under its historical name: callers pass it to z.enum and iterate it.
 export const TASK_STATUSES = TASK_STATUS_VALUES
+
+// The statuses in which a task may still be edited: the states in which nobody holds the contract yet.
+// One list, next to TERMINAL_STATUSES — the guard, the write and the docs all read it.
+export const EDITABLE_STATUSES: readonly TaskStatus[] = Object.freeze(['queued', 'open'])
 
 export function statusToCode(status: TaskStatus | 'not_found'): number {
   return STATUS_CODES[status]
@@ -209,7 +212,6 @@ export function asClock(input: unknown): Clock | null {
   return null
 }
 
-// Default process-wide clock handle (reflects the global monotonic source).
 export const defaultClock: Clock = {
   nowMs: monotonicNowMs,
   nowIso: nowIso

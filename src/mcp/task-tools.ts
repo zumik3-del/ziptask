@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
 import type { TaskStatus, TaskPriorityInput } from '../core/tasks'
-import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_AGENT_LENGTH, MAX_DEPENDS_ON, isTaskPriorityInput, PRIORITY_INVALID_MESSAGE } from '../core/tasks'
+import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, MAX_DEPENDS_ON, isTaskPriorityInput, PRIORITY_INVALID_MESSAGE } from '../core/tasks'
 import { foldResult } from '../core/result'
 import {
   type ToolResult, jsonResult, textResult, errorResult, errorTool, toToolResult, pickFields, rejectUnknownArgs,
@@ -83,6 +83,17 @@ const UPDATE_STATUS_SHAPE = {
   comment: z.string().optional().describe('typed resolution when done/failed/canceled'),
   renew: z.boolean().optional().describe('with status=in_progress on an in_progress task: re-arm your own lease (heartbeat, ~lease_ttl_min/3)'),
   reset_attempts: z.boolean().optional().describe('with any legal transition: zero attempts (budget refund, max_attempts untouched), requires comment, max_attempts untouched, echoes attempts in the response; not on epics, not on tasks closed for work')
+}
+
+const UPDATE_TASK_SHAPE = {
+  id: TaskId,
+  agent: z.string().max(MAX_AGENT_LENGTH, 'INVALID: agent too long'),
+  version: z.number().int().optional().describe('optimistic lock; omit to skip the version check (a stale version still refuses)'),
+  title: z.string().max(MAX_TITLE_LENGTH, 'INVALID: title too long').optional(),
+  description: z.string().max(MAX_DESCRIPTION_LENGTH, 'INVALID: description too long').optional(),
+  priority: PRIORITY_INPUT.optional(),
+  depends_on: z.array(TaskId).max(MAX_DEPENDS_ON, 'INVALID: depends_on too long').optional(),
+  comment: z.string().max(MAX_CONTENT_LENGTH, 'INVALID: comment too long').optional()
 }
 
 const LIST_QUEUE_SHAPE = {
@@ -201,6 +212,21 @@ export function handleUpdateStatus(svc: TaskService, args: {
   return toToolResult(svc.updateStatus(args))
 }
 
+export function handleUpdateTask(svc: TaskService, args: {
+  id: number
+  agent: string
+  version?: number
+  title?: string
+  description?: string | null
+  priority?: TaskPriorityInput
+  depends_on?: number[]
+  comment?: string
+}): ToolResult {
+  const unknown = rejectUnknownArgs('update_task', UPDATE_TASK_SHAPE, args)
+  if (unknown) return unknown
+  return toToolResult(svc.updateTask(args))
+}
+
 export function handleListQueue(svc: TaskService, args: { limit?: number; project?: string }): ToolResult {
   const unknown = rejectUnknownArgs('list_queue', LIST_QUEUE_SHAPE, args)
   if (unknown) return unknown
@@ -235,6 +261,11 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
     description: 'Transition status. Optimistic lock via version — read current version via get_task fields:["version"] (or from your claim response); on CONFLICT re-read version and retry, except CONFLICT: lease held by <other>, which means hand the task back to that agent. version is optional: when omitted the version check is skipped (a concurrent write still refuses with CONFLICT). canceled is terminal and withdraws any non-terminal task; a `failed` task is closed for work and can be withdrawn to `canceled` administratively — it is never reopened. Epics use `open` status, not queued/blocked/review, and close directly to done/failed/canceled. A non-renewal status=in_progress needs claim-grade eligibility: refused for an epic (INVALID: #N is an epic, not claimable) and for unsatisfied dependencies when entering from queued/blocked (BLOCKED: dependencies not satisfied) — an epic is never leased, and claim_task is the door to a lease. A renewal heartbeat on an epic is answered by the renewal path instead (INVALID: #N is an epic). renew:true with status=in_progress extends your own in_progress lease (heartbeat ~lease_ttl_min/3); the holder must match assignee and the version bumps. reset_attempts:true rides on any legal transition: zeroes attempts (budget refund, max_attempts untouched), requires a comment, and echoes attempts in the response; rejected on epics and on tasks closed for work (a failed task is recovered by recreating it, or withdrawn to canceled)',
     inputSchema: z.object(UPDATE_STATUS_SHAPE).catchall(z.unknown())
   }, async (args) => handleUpdateStatus(svc, args))
+
+  server.registerTool('update_task', {
+    description: 'Edit a task that is not under way yet: a queued task (regular) or an open epic, with no lease holder. Fields: title? (<=200 code points), description? (<=20000 code points; the contract), priority? (p0..p3, the number 0..3 or the digit string "0".."3"), depends_on? (<=100 ids; replaces the list; an epic takes no deps). Everything else is immutable: status belongs to update_status, assignee is the lease holder, project/epic_id/reporter/max_attempts never change. version is an optional optimistic lock (the write always compares against the version it read). Refused without a write: a task that is in_progress/review/blocked or closed for work (INVALID: cannot edit #N in status=<s>: only a queued task (or an open epic) is editable) — use add_comment there; a stale version (CONFLICT: expected version N, got M). No editable field at all is INVALID: nothing to update. A supplied value equal to the stored one is a no-op: changed lists only the fields that really changed. Output {id, version, changed}',
+    inputSchema: z.object(UPDATE_TASK_SHAPE).catchall(z.unknown())
+  }, async (args) => handleUpdateTask(svc, args))
 
   server.registerTool('list_queue', {
     description: 'Deps-satisfied queued tasks of one project, pipe lines id|priority|title. `project` (slug) is required (no default, no all-projects mode)',
