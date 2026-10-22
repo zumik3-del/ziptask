@@ -4,7 +4,8 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "scripts": {    "start": "bun run src/index.ts",
+  "scripts": {
+    "start": "bun run src/index.ts",
     "start:stdio": "bun run src/index.ts --stdio",
     "dev": "bun --watch run src/index.ts",
     "build": "bun run tsc --noEmit",
