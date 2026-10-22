@@ -33,18 +33,13 @@ const createTask = (title: string, priority?: string) => {
   return json(handleCreateTask(svc, args)).id as number
 }
 
-describe('claim_task id alias (F1 #1040)', () => {
-  test('id alone claims exactly that task, never an auto-picked one', () => {
-    // p0 first in queue order, so pre-fix auto-pick would have claimed `first`, not `second`.
-    const first = createTask('Auto-pick bait', 'p0')
-    const second = createTask('Alias target', 'p3')
-    expect(first).not.toBe(second)
-
-    const res = json(handleClaimTask(svc, { agent: 'dev', id: second }))
-    expect(res.id).toBe(second)
-    expect(getTaskRow(db, second).status).toBe('in_progress')
-    expect(getTaskRow(db, first).status).toBe('queued')
-    expect(getTaskRow(db, first).lease_expires_at).toBeNull()
+describe('claim_task id alias removed (task #1963)', () => {
+  test('id is now an unknown argument, nothing claimed', () => {
+    const target = createTask('Alias target', 'p3')
+    const res = handleClaimTask(svc, { agent: 'dev', id: target } as any)
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: unknown argument id on claim_task (accepted: agent, include, lease_ttl_min, project, task_id)')
+    expect(getTaskRow(db, target).status).toBe('queued')
   })
 
   test('task_id alone still claims exactly that task (canonical name unchanged)', () => {
@@ -56,45 +51,10 @@ describe('claim_task id alias (F1 #1040)', () => {
     expect(getTaskRow(db, first).status).toBe('queued')
   })
 
-  test('id and task_id both present and equal → claims, no error', () => {
-    const id = createTask('Both equal', 'p1')
-    const res = handleClaimTask(svc, { agent: 'dev', id, task_id: id })
-    expect(res.isError).toBeUndefined()
-    expect(json(res).id).toBe(id)
-    expect(getTaskRow(db, id).status).toBe('in_progress')
-  })
-
-  test('id and task_id disagree → exact conflict text, nothing claimed, both stay queued', () => {
-    const a = createTask('A', 'p0')
-    const b = createTask('B', 'p1')
-
-    const forward = handleClaimTask(svc, { agent: 'dev', id: b, task_id: a })
-    expect(forward.isError).toBe(true)
-    expect(text(forward)).toBe(`INVALID: claim_task id/task_id conflict (id=${b} task_id=${a}); task_id is canonical`)
-
-    const reverse = handleClaimTask(svc, { agent: 'dev', id: a, task_id: b })
-    expect(reverse.isError).toBe(true)
-    expect(text(reverse)).toBe(`INVALID: claim_task id/task_id conflict (id=${a} task_id=${b}); task_id is canonical`)
-
-    expect(getTaskRow(db, a).status).toBe('queued')
-    expect(getTaskRow(db, b).status).toBe('queued')
-    expect(getTaskRow(db, a).lease_expires_at).toBeNull()
-    expect(getTaskRow(db, b).lease_expires_at).toBeNull()
-  })
-
-  test('alias conflict writes no claim audit row', () => {
-    const a = createTask('A', 'p0')
-    const b = createTask('B', 'p1')
-    const before = db.query("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'claim'").get() as { n: number }
-    handleClaimTask(svc, { agent: 'dev', id: b, task_id: a })
-    const after = db.query("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'claim'").get() as { n: number }
-    expect(after.n).toBe(before.n)
-  })
-
-  test('alias resolution precedes the queue: id-only claim on a blocked-by-deps task is BLOCKED, not EMPTY', () => {
+  test('task_id on a blocked-by-deps task is BLOCKED, not EMPTY', () => {
     const dep = createTask('Dep')
     const target = json(handleCreateTask(svc, { title: 'Target', reporter: 'dev', depends_on: [dep] })).id as number
-    const res = handleClaimTask(svc, { agent: 'dev', id: target })
+    const res = handleClaimTask(svc, { agent: 'dev', task_id: target })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('BLOCKED')
   })
@@ -107,7 +67,7 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
 
     const res = handleClaimTask(svc, { agent: 'dev', id_typo: first } as any)
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: unknown argument id_typo on claim_task (accepted: agent, id, include, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe('INVALID: unknown argument id_typo on claim_task (accepted: agent, include, lease_ttl_min, project, task_id)')
 
     const queue = text(handleListQueue(svc, {}))
     expect(queue).toContain(`${first}|p0|Intended`)
@@ -119,7 +79,7 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
     const id = createTask('Bait', 'p0')
     const res = handleClaimTask(svc, { agent: 'dev', b: 1, a: 2 } as any)
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: unknown arguments a, b on claim_task (accepted: agent, id, include, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe('INVALID: unknown arguments a, b on claim_task (accepted: agent, include, lease_ttl_min, project, task_id)')
     expect(getTaskRow(db, id).status).toBe('queued')
   })
 
@@ -127,7 +87,7 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
     createTask('Bait', 'p0')
     const first = text(handleClaimTask(svc, { agent: 'dev', zebra: 1, alpha: 2, mike: 3 } as any))
     const second = text(handleClaimTask(svc, { agent: 'dev', mike: 3, zebra: 1, alpha: 2 } as any))
-    expect(first).toBe('INVALID: unknown arguments alpha, mike, zebra on claim_task (accepted: agent, id, include, lease_ttl_min, project, task_id)')
+    expect(first).toBe('INVALID: unknown arguments alpha, mike, zebra on claim_task (accepted: agent, include, lease_ttl_min, project, task_id)')
     expect(second).toBe(first)
   })
 
@@ -135,7 +95,7 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
     const id = createTask('Guarded', 'p0')
     const res = handleClaimTask(svc, { agent: 'dev', task_id: id, id_typo: 1 } as any)
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: unknown argument id_typo on claim_task (accepted: agent, id, include, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe('INVALID: unknown argument id_typo on claim_task (accepted: agent, include, lease_ttl_min, project, task_id)')
     expect(getTaskRow(db, id).status).toBe('queued')
   })
 
@@ -175,12 +135,6 @@ describe('task_id 0 must not auto-pick (F1 #1040)', () => {
     expect(getTaskRow(db, bait).lease_expires_at).toBeNull()
   })
 
-  test('handleClaimTask with id 0 errors and claims nothing', () => {
-    const bait = createTask('Bait', 'p0')
-    const res = handleClaimTask(svc, { agent: 'dev', id: 0 })
-    expect(res.isError).toBe(true)
-    expect(getTaskRow(db, bait).status).toBe('queued')
-  })
 
   test('service.claimTask with taskId 0 returns NOT_FOUND, never an auto-claim', () => {
     const bait = createTask('Bait', 'p0')
@@ -329,7 +283,7 @@ describe('renew / reset_attempts argument contract (F2 #1065 + F3 #1066)', () =>
   test('renew: true on claim_task → exact unknown-argument text, nothing claimed', () => {
     const id = createTask('Untouched', 'p0')
     const res = handleClaimTask(svc, { agent: 'dev', task_id: id, renew: true } as any)
-    expect(text(res)).toBe('INVALID: unknown argument renew on claim_task (accepted: agent, id, include, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe('INVALID: unknown argument renew on claim_task (accepted: agent, include, lease_ttl_min, project, task_id)')
     expect(getTaskRow(db, id).status).toBe('queued')
     expect(getTaskRow(db, id).lease_expires_at).toBeNull()
   })

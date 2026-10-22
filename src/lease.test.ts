@@ -12,7 +12,7 @@ import { createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, drive
 
 // F2 (#1065) lease heartbeat + F3 (#1066) attempts recovery, against the production symbols
 // (isValidTransition, TaskService, TaskRepo — never a local double) and through the real reap seam
-// TaskService.reapExpiredLeases(), so the reaper is the thing under test rather than a stub.
+// TaskLifecycleService.reapExpiredLeases(), so the reaper is the thing under test rather than a stub.
 
 let db: Database
 let repo: TaskRepo
@@ -64,7 +64,7 @@ const claimError = (id: number, agent: string): string | undefined => {
 const burnAttempt = (id: number, agent = 'developer') => {
   claimOrThrow(id, agent)
   expireLease(id)
-  svc.reapExpiredLeases()
+  svc.lifecycle.reapExpiredLeases()
 }
 // A leased row the service can no longer produce: legacy, hand-edited, or rolled back. Written with
 // the production statement shape (transitionStatus sets status/assignee/lease_expires_at in one UPDATE),
@@ -140,7 +140,7 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     for (let beat = 0; beat < 3; beat++) {
       const res = leaseField(id, HOLDER, versionOf(id))
       expect(json(res).version).toBe(versionOf(id))
-      svc.reapExpiredLeases()
+      svc.lifecycle.reapExpiredLeases()
       expect(row(id).status).toBe('in_progress')
       expect(row(id).attempts).toBe(0)
       expect(row(id).lease_expires_at).not.toBeNull()
@@ -150,7 +150,7 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     // Same sweep, same second: a task whose lease really did elapse is requeued and charged, so
     // the survival above is the renewal's doing and not an inert sweep.
     expireLease(control)
-    svc.reapExpiredLeases()
+    svc.lifecycle.reapExpiredLeases()
     expect(row(control).status).toBe('queued')
     expect(row(control).attempts).toBe(1)
 
@@ -463,7 +463,7 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     // expiry from `failed` and still claimable.
     claimOrThrow(id, HOLDER)
     expireLease(id)
-    svc.reapExpiredLeases()
+    svc.lifecycle.reapExpiredLeases()
     expect(row(id).status).toBe('failed')
     expect(row(id).attempts).toBe(4)
 
@@ -480,7 +480,7 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
 
     claimOrThrow(id, HOLDER)
     expireLease(id)
-    svc.reapExpiredLeases()
+    svc.lifecycle.reapExpiredLeases()
     expect(row(id).status).toBe('queued')
     expect(row(id).attempts).toBe(1)
     expect(row(id).max_attempts).toBe(3)
@@ -521,7 +521,7 @@ describe('reaper policy: a heartbeat is liveness, not progress (D-F3-5)', () => 
     expect(countAudit(id, 'lease_renewed')).toBe(2)
 
     expireLease(id)
-    svc.reapExpiredLeases()
+    svc.lifecycle.reapExpiredLeases()
 
     const reaped = row(id)
     expect(reaped.status).toBe('queued')
@@ -555,7 +555,7 @@ describe('reaper policy: a heartbeat is liveness, not progress (D-F3-5)', () => 
       claimOrThrow(id, HOLDER)
       leaseField(id, HOLDER, versionOf(id))
       expireLease(id)
-      svc.reapExpiredLeases()
+      svc.lifecycle.reapExpiredLeases()
     }
     expect(row(id).status).toBe('failed')
     expect(row(id).attempts).toBe(4)
@@ -627,12 +627,12 @@ describe('reap invariants untouched by F2/F3 (D-F3-5: zero diff in _doReap)', ()
     const id = createTaskRow('Charge')
     claimOrThrow(id, HOLDER)
     expireLease(id)
-    svc.reapExpiredLeases()
+    svc.lifecycle.reapExpiredLeases()
     expect(row(id).attempts).toBe(1)
 
     claimOrThrow(id, HOLDER)
     expireLease(id)
-    svc.reapExpiredLeases()
+    svc.lifecycle.reapExpiredLeases()
     expect(row(id).attempts).toBe(2)
 
     const expired = db.query('SELECT old_value, new_value FROM audit_log WHERE task_id = ? AND action = ?').all(id, 'lease_expired') as any[]
@@ -773,7 +773,7 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     handleUpdateStatus(svc, { id: blocked, agent: HOLDER, status: 'in_progress', version: versionOf(blocked) })
 
     expect(claimError(blocked, HOLDER)).toBe('BLOCKED: dependencies not satisfied')
-    svc.reapExpiredLeases()
+    svc.lifecycle.reapExpiredLeases()
     expect(row(blocked).status).toBe('queued')
     expect(row(blocked).attempts).toBe(0)
     expect(row(blocked).lease_expires_at).toBeNull()
@@ -814,7 +814,7 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     // Control: a real task in the same state, so the sweep below is provably live, not inert.
     const control = seedLease(createTaskRow('Control'), HOLDER, -HOUR)
 
-    svc.reapExpiredLeases()
+    svc.lifecycle.reapExpiredLeases()
 
     expect(row(control).status).toBe('queued')
     expect(row(control).attempts).toBe(1)

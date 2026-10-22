@@ -316,15 +316,16 @@ describe('projects: CRUD contract (ADR D4)', () => {
     expect(second.slug).toBe('alpha')
     expect(repo.projectBySlug('alpha')!.archived_at).toBeNull()
 
-    const rename = json(handleUpdateProject(svc, { project: 'alpha', slug: 'alpha2' }))
-    expect(rename.slug).toBe('alpha2')
-    expect(repo.projectBySlug('alpha')).toBeNull()
-    expect(repo.projectBySlug('alpha2')).not.toBeNull()
+    // slug is immutable after create: passing it is now an unknown argument.
+    const rename = handleUpdateProject(svc, { project: 'alpha', slug: 'alpha2' } as any)
+    expect(rename.isError).toBe(true)
+    expect(text(rename)).toBe('INVALID: unknown argument slug on update_project (accepted: archived, folder_path, project)')
+    expect(repo.projectBySlug('alpha')).not.toBeNull()
   })
 
-  test('legacy is reserved in update_project too (E2)', () => {
+  test('legacy is reserved in create_project only (E2)', () => {
     seedProject(db, 'alpha')
-    const res = handleUpdateProject(svc, { project: 'alpha', slug: 'legacy' })
+    const res = handleCreateProject(svc, { folder_path: '/tmp/x', slug: 'legacy' })
     expect(res.isError).toBe(true)
     expect(text(res)).toBe("INVALID: 'legacy' is a reserved project slug")
   })

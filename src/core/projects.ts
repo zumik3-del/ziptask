@@ -70,21 +70,14 @@ export function createProject(store: ProjectStore, args: { slug?: string; folder
 }
 
 export function updateProject(store: ProjectStore, args: {
-  project: string; slug?: string; folder_path?: string; archived?: boolean
+  project: string; folder_path?: string; archived?: boolean
 }): SvcResult<{ slug: string }> {
   const found = requireProject(store, args.project)
   if (!found.ok) return fail(found.error)
-  if (args.slug === undefined && args.folder_path === undefined && args.archived === undefined) {
+  if (args.folder_path === undefined && args.archived === undefined) {
     return fail('INVALID', 'nothing to update')
   }
-  const patch: { slug?: string; folderPath?: string; archived?: boolean } = {}
-  if (args.slug !== undefined) {
-    const invalid = slugError(args.slug)
-    if (invalid) return fail(invalid)
-    const clash = store.projectBySlug(args.slug)
-    if (clash && clash.id !== found.data.id) return fail('CONFLICT', `project '${args.slug}' already exists`)
-    patch.slug = args.slug
-  }
+  const patch: { folderPath?: string; archived?: boolean } = {}
   if (args.folder_path !== undefined) {
     const folderErr = requiredError(args.folder_path, 'folder_path')
     if (folderErr) return fail(folderErr)
@@ -94,7 +87,7 @@ export function updateProject(store: ProjectStore, args: {
   }
   if (args.archived !== undefined) patch.archived = args.archived
   store.updateProject(found.data.id, patch, nowIso())
-  return ok({ slug: patch.slug ?? found.data.slug })
+  return ok({ slug: found.data.slug })
 }
 
 export function deleteProject(store: ProjectStore, project: string): SvcResult<{ deleted: string }> {

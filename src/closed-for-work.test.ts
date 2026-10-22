@@ -47,7 +47,7 @@ const failTask = (id: number, agent = 'developer'): number => {
 const burnAttempt = (id: number, agent = 'developer'): void => {
   handleClaimTask(svc, { agent, task_id: id })
   db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [new Date(Date.now() - 3600_000).toISOString(), id])
-  svc.reapExpiredLeases()
+  svc.lifecycle.reapExpiredLeases()
 }
 
 describe('failed -> canceled: the administrative withdrawal (#1896)', () => {

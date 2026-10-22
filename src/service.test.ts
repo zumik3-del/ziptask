@@ -167,7 +167,7 @@ describe('reap cooldown (#104)', () => {
     expect(reapCallCount).toBe(3)
 
     // Public reap always forces
-    svc.reapExpiredLeases()
+    svc.lifecycle.reapExpiredLeases()
     expect(reapCallCount).toBe(4)
   })
 
@@ -189,9 +189,9 @@ describe('reap cooldown (#104)', () => {
 
     svc.getTaskView(1)
     expect(reapCallCount).toBe(1)
-    svc.reapExpiredLeases()
+    svc.lifecycle.reapExpiredLeases()
     expect(reapCallCount).toBe(2)
-    svc.reapExpiredLeases()
+    svc.lifecycle.reapExpiredLeases()
     expect(reapCallCount).toBe(3)
   })
 })
