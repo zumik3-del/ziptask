@@ -678,7 +678,7 @@ describe('reap invariants untouched by F2/F3 (D-F3-5: zero diff in _doReap)', ()
 // in_progress the guard demands claim-grade eligibility (not an epic; deps satisfied from
 // queued/blocked), reusing claimTask's two error strings verbatim. review → in_progress is a
 // deliberate superset: work sent back is exactly the sanctioned case, and its deps are provably
-// still satisfied (depends_on is immutable after create, and a dependency closed for work stays
+// still satisfied (depends_on is immutable after the claim, and a dependency closed for work stays
 // closed for work — the administrative edge out of `failed` (`failed -> canceled`) closes a task
 // out and never reopens one).
 describe('acquiring a lease: update_status → in_progress needs claim-grade eligibility', () => {
@@ -999,7 +999,7 @@ describe('review → in_progress: work sent back takes the lease', () => {
   })
 
   test('the review edge asks no deps question, even on a row whose dep is open', () => {
-    // Provably unnecessary rather than unchecked: depends_on is immutable after create, and a
+    // Provably unnecessary rather than unchecked: depends_on is immutable after the claim, and a
     // dependency closed for work stays closed for work — the administrative edge out of `failed`
     // (`failed -> canceled`) closes a task out and never reopens one — so a satisfied dep stays
     // satisfied. The seeded row is the only way to observe it, and it shows the edge makes no

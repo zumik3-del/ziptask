@@ -3,7 +3,7 @@ import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, CommentType, Cl
 import { asClock, clampCursor, clampLimit, nowIso, TERMINAL_STATUSES } from '../core/tasks'
 import type { AuditStore, CommentRow, CommentStore, LeaseStore, ProjectListItem, ProjectRow, ProjectStore, TaskStore } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
-import { PRIORITY_ORDER_SQL, TASK_SELECT, TERMINAL_STATUSES_SQL } from './sql'
+import { PRIORITY_ORDER_SQL, TASK_SELECT, TERMINAL_STATUSES_SQL, EDITABLE_STATUSES_SQL } from './sql'
 
 type SqlParam = string | number | null
 
@@ -183,6 +183,28 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     params.push(id, expectedVersion)
     const result = this.db.run(
       `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND version = ?`,
+      bindParams(params)
+    )
+    return Number(result.changes)
+  }
+
+  updateTaskFields(id: number, expectedVersion: number,
+    patch: { title?: string; description?: string | null; priority?: TaskPriority; dependsOn?: string },
+    now: string): number {
+    const hasField = patch.title !== undefined || patch.description !== undefined
+      || patch.priority !== undefined || patch.dependsOn !== undefined
+    if (!hasField) return 0
+    const assignments: string[] = []
+    const params: SqlParam[] = []
+    if (patch.title !== undefined) { assignments.push('title = ?'); params.push(patch.title) }
+    if (patch.description !== undefined) { assignments.push('description = ?'); params.push(patch.description) }
+    if (patch.priority !== undefined) { assignments.push('priority = ?'); params.push(patch.priority) }
+    if (patch.dependsOn !== undefined) { assignments.push('depends_on = ?'); params.push(patch.dependsOn) }
+    assignments.push('version = version + 1', 'updated_at = ?')
+    params.push(now)
+    params.push(id, expectedVersion)
+    const result = this.db.run(
+      `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND version = ? AND status IN ${EDITABLE_STATUSES_SQL} AND assignee IS NULL AND lease_expires_at IS NULL`,
       bindParams(params)
     )
     return Number(result.changes)

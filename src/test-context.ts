@@ -73,6 +73,7 @@ export function taskStoreStubs(overrides: Partial<Store> = {}): Store {
     batchTasks: () => new Map(),
     markClaimed: () => 0,
     transitionStatus: () => 0,
+    updateTaskFields: () => 0,
     transaction: <T>(fn: () => T) => fn(),
     expiredLeases: () => [],
     reapTransition: () => 0,

@@ -1,11 +1,12 @@
 import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, Clock } from './tasks'
-import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, asClock, normalizePriority, PRIORITY_INVALID_MESSAGE } from './tasks'
-import type { CommentRow, LifecycleStore, ProjectListItem, ProjectRow, ProjectStore, QueryStore, TaskServiceStore, TimelineRow, SvcResult, SvcError, UpdateStatusData } from './types'
+import { createHash } from 'node:crypto'
+import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, asClock, normalizePriority, PRIORITY_INVALID_MESSAGE, codePointLength } from './tasks'
+import type { CommentRow, LifecycleStore, ProjectListItem, ProjectRow, ProjectStore, QueryStore, TaskServiceStore, TimelineRow, SvcResult, SvcError, UpdateStatusData, UpdateTaskData } from './types'
 import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
 import { LeaseReaper } from './reaper'
-import { createTaskGuard, updateStatusGuard, claimEligibilityError, epicNotClaimableError, epicTargetChangedError, epicPromotionRaceError } from './guards'
+import { createTaskGuard, updateStatusGuard, updateTaskGuard, editableWindowError, claimEligibilityError, epicNotClaimableError, epicTargetChangedError, epicPromotionRaceError } from './guards'
 import { requiredError, tooLongError } from './validation'
 import { resolveProject, createProject, updateProject, deleteProject } from './projects'
 import {
@@ -29,6 +30,11 @@ type ListTasksArgs = {
 
 type UpdateStatusArgs = {
   id: number; agent: string; status: TaskStatus; version?: number; comment?: string; renew?: boolean; reset_attempts?: boolean
+}
+
+type UpdateTaskArgs = {
+  id: number; agent: string; version?: number
+  title?: string; description?: string | null; priority?: unknown; depends_on?: number[]; comment?: string
 }
 
 type ListQueueArgs = { limit?: number; project?: string }
@@ -260,6 +266,96 @@ export class TaskLifecycleService {
     return this._applyTransition(args, task, refund)
   }
 
+  private _digestDescription(value: string | null): string {
+    const hash = createHash('sha256').update(value ?? '', 'utf8').digest('hex').slice(0, 16)
+    return `sha256:${hash}:${codePointLength(value ?? '')}`
+  }
+
+  updateTask(args: UpdateTaskArgs): SvcResult<UpdateTaskData> {
+    const agentErr = agentError(args.agent)
+    if (agentErr) return fail(agentErr)
+    if (args.comment !== undefined) {
+      const commentErr = tooLongError(args.comment, MAX_CONTENT_LENGTH, 'comment')
+      if (commentErr) return fail(commentErr)
+    }
+    const task = this.store.getTaskRow(args.id)
+    if (!task) return fail('NOT_FOUND')
+    const guard = updateTaskGuard(args, task, this.store)
+    if (guard) return fail(guard)
+
+    // Normalize the patch and compute the effective (changed) subset.
+    const changed: ('title' | 'description' | 'priority' | 'depends_on')[] = []
+    const patch: { title?: string; description?: string | null; priority?: TaskPriority; dependsOn?: string } = {}
+    let newPriority: TaskPriority | undefined
+    if (args.title !== undefined && args.title !== task.title) {
+      changed.push('title')
+      patch.title = args.title
+    }
+    if (args.description !== undefined && args.description !== task.description) {
+      changed.push('description')
+      patch.description = args.description
+    }
+    if (args.priority !== undefined) {
+      const np = normalizePriority(args.priority)
+      if (np !== null && np !== task.priority) {
+        changed.push('priority')
+        patch.priority = np
+        newPriority = np
+      }
+    }
+    if (args.depends_on !== undefined) {
+      const newDeps = JSON.stringify(args.depends_on)
+      if (newDeps !== task.depends_on) {
+        changed.push('depends_on')
+        patch.dependsOn = newDeps
+      }
+    }
+    // Reorder changed to a stable field order.
+    const order = ['title', 'description', 'priority', 'depends_on']
+    changed.sort((a, b) => order.indexOf(a) - order.indexOf(b))
+
+    if (changed.length === 0) {
+      return ok({ id: args.id, version: task.version, changed: [] })
+    }
+
+    const now = this._nowIso()
+    return this.store.transaction((): SvcResult<UpdateTaskData> => {
+      if (changed.includes('depends_on') && args.depends_on !== undefined) {
+        if (createsCycle((depId) => this.store.depsOf(depId), args.id, args.depends_on)) {
+          return fail('CYCLE', 'dependency graph contains a cycle')
+        }
+      }
+      const expectedVersion = args.version ?? task.version
+      const changes = this.store.updateTaskFields(args.id, expectedVersion, patch, now)
+      if (changes !== 1) {
+        const updated = this.store.getTaskRow(args.id)
+        if (!updated || editableWindowError(updated)) {
+          return fail('CONFLICT', `task #${args.id} changed state during the update`)
+        }
+        return fail('CONFLICT', 'concurrent modification')
+      }
+      const updated = this.store.getTaskRow(args.id)
+      if (!updated) return fail('CONFLICT', 'concurrent modification')
+      if (this.opts.auditLog) {
+        for (const field of changed) {
+          if (field === 'title') {
+            this.store.auditAppend(args.id, args.agent, 'update_task:title', task.title, args.title)
+          } else if (field === 'priority') {
+            this.store.auditAppend(args.id, args.agent, 'update_task:priority', task.priority, newPriority)
+          } else if (field === 'depends_on') {
+            this.store.auditAppend(args.id, args.agent, 'update_task:depends_on', task.depends_on, JSON.stringify(args.depends_on))
+          } else if (field === 'description') {
+            this.store.auditAppend(args.id, args.agent, 'update_task:description', this._digestDescription(task.description), this._digestDescription(args.description ?? null))
+          }
+        }
+      }
+      if (args.comment) {
+        this.store.insertComment(args.id, args.agent, args.comment, 'comment')
+      }
+      return ok({ id: args.id, version: updated.version, changed })
+    })
+  }
+
   private _applyTransition(args: UpdateStatusArgs, task: Task, refund: boolean): SvcResult<UpdateStatusData> {
     const renewal = task.status === 'in_progress' && args.status === 'in_progress' && args.renew === true
     const now = this._nowIso()
@@ -434,6 +530,10 @@ export class TaskService {
 
   updateStatus(args: UpdateStatusArgs): SvcResult<UpdateStatusData> {
     return this.lifecycle.updateStatus(args)
+  }
+
+  updateTask(args: UpdateTaskArgs): SvcResult<UpdateTaskData> {
+    return this.lifecycle.updateTask(args)
   }
 
   listQueue(args: ListQueueArgs): SvcResult<ReadonlyArray<Readonly<Task>>> {
