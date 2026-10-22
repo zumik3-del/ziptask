@@ -21,15 +21,12 @@ export type UpdateStatusInput = {
   comment?: string; renew?: boolean; reset_attempts?: boolean
 }
 
-// -- claim-grade eligibility -------------------------------------------------
-
 // An epic is never leased. The exact wire string is written here once, so claim_task and the
 // update_status acquisition guard can never drift apart.
 export function epicNotClaimableError(task: Task): SvcError | null {
   return task.is_epic ? { code: 'INVALID', message: `#${task.id} is an epic, not claimable` } : null
 }
 
-// The full claim precondition set: not an epic, deps satisfied.
 export function claimEligibilityError(task: Task, store: DepsStore): SvcError | null {
   const epicErr = epicNotClaimableError(task)
   if (epicErr) return epicErr
@@ -37,8 +34,6 @@ export function claimEligibilityError(task: Task, store: DepsStore): SvcError | 
   if (!depsSatisfied(store.statusesOf(deps), deps)) return { code: 'BLOCKED', message: 'dependencies not satisfied' }
   return null
 }
-
-// -- epic_id target preconditions --------------------------------------------
 
 // The epic_id target preconditions, in ONE predicate. `null` means the target is attachable; a
 // refusal names the precondition that failed. Both call sites read this list — the up-front guard
@@ -85,11 +80,6 @@ export function epicTargetGuardError(refusal: EpicTargetRefusal, epicId: number)
   }
 }
 
-// -- create_task guard -------------------------------------------------------
-
-// Pure precondition set for create_task: title/actor/description lengths, the depends_on size
-// bound, the epic↔(epic_id|deps) conflicts, the dep-on-epic rule, and the epic_id target shape.
-// Returns the first failure or null.
 export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcError | null {
   const titleErr = requiredError(args.title, 'title') ?? tooLongError(args.title, MAX_TITLE_LENGTH, 'title')
   if (titleErr) return titleErr
@@ -101,7 +91,6 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   if (descriptionErr) return descriptionErr
   const deps = args.depends_on ?? []
   if (deps.length > MAX_DEPENDS_ON) return { code: 'INVALID', message: 'depends_on too long' }
-  // D5: epic cannot coexist with epic_id or depends_on
   if (args.epic && args.epic_id !== undefined) return { code: 'INVALID', message: 'epic cannot have a parent epic' }
   if (args.epic && deps.length > 0) return { code: 'INVALID', message: 'epic cannot have depends_on' }
   // An epic is never leased, so it never has a holder; `assignee` means exactly "lease holder"
@@ -124,7 +113,6 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
     return { code: 'INVALID', message: `create_task is refused in the reserved project '${RESERVED_PROJECT_SLUG}'` }
   }
   if (args.projectArchived) return { code: 'INVALID', message: `project '${args.project}' is archived` }
-  // D5: rejects depends_on pointing at an epic; G3: a dependency must live in the same project
   if (deps.length > 0) {
     const batch = store.batchTasks(deps)
     for (const [d, t] of batch) {
@@ -134,7 +122,6 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
       }
     }
   }
-  // D5: epic_id target must exist, be non-terminal, and have epic_id IS NULL
   // G4: it must also live in the same project (G5: an epic's children inherit, never guess)
   if (args.epic_id !== undefined) {
     const refusal = epicTargetRefusal(store.getTaskRow(args.epic_id), args.project)
@@ -142,8 +129,6 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   }
   return null
 }
-
-// -- epic promotion race -----------------------------------------------------
 
 // The one refusal for the promotion race: the epic_id target left the state the up-front guard
 // accepted, so the attach is refused. It is a conflict, not a malformed request — the target moved.
@@ -163,11 +148,6 @@ export function epicTargetChangedError(target: Task | null, epicId: number, proj
   return epicTargetRefusal(target, project) ? epicPromotionRaceError(epicId) : null
 }
 
-// -- update_status guard -----------------------------------------------------
-
-// All refusals that do not touch the row: version CAS, the lease self-edge/renew rules, the
-// transition table, claim-grade eligibility for a non-renewal in_progress, the epic refund ban
-// and the epic terminal close-guard. Returns the first failure or null.
 export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: boolean, store: GuardStore): SvcError | null {
   // version is optional: when omitted the read-time check is skipped, but the write still CASes on
   // the version read here, so a concurrent modification between read and write refuses as CONFLICT.
@@ -233,7 +213,6 @@ export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: b
       return { code: 'INVALID', message: `cannot reset attempts on terminal task #${task.id}` }
     }
   }
-  // D3: epic terminal guard — reject done/failed while non-terminal children exist
   if (task.is_epic && TERMINAL_STATUSES.includes(args.status)) {
     const open = store.nonTerminalChildCount(args.id)
     if (open > 0) return { code: 'CHILDREN', message: `${open} sub-tasks not terminal` }
