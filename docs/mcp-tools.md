@@ -154,4 +154,8 @@ Reads are not guaranteed to be side-effect-free. Before answering, `get_task`, `
 
 `TaskLifecycleService.reapExpiredLeases()` is a **test-only seam**: it forces a sweep regardless of cooldown and has no production caller — production code reaps through the read paths and `claim_task`/`update_status` above.
 
+## Audit trail
+
+Every state write appends an audit row, rendered by `get_timeline` as `seq|type|agent|at|text`. The action names a client may meet: `create`, `update_status`, `lease_renewed: <old>-><new>` (a renewal, not a status change), `attempts_reset: N->0`, `resolution`, `comment`, `subtask_add`/`subtask_done`/`subtask_failed`, and one row per edited field — `update_task:title`, `update_task:priority`, `update_task:depends_on`, `update_task:description`. The description is audited as a digest, not the text: `sha256:<16 hex>:<code points>` (`sha256` of the UTF-8 bytes, the first 16 hex characters, and the code-point length), so a rewritten contract leaves a cheap, comparable fingerprint. An `update_task` call that changes nothing writes no audit row at all.
+
 The sweep is also what fences the lease heartbeat: `update_status` reaps unconditionally before it reads the task, so a renewal that arrives after its deadline sees the requeued task (and the charged `attempts` step) and is rejected — it never resurrects a dead lease. There is no grace window; the recovery is a re-claim. Renew roughly every `lease_ttl_min`/3 so one missed call is not fatal.
