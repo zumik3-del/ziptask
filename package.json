@@ -15,14 +15,14 @@
     "changelog": "bun run scripts/changelog.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.15",
-    "@commitlint/cli": "^21.2.2",
-    "@commitlint/config-conventional": "^21.2.2",
-    "@types/bun": "^1.4.3",
+    "@biomejs/biome": "^2.6.3",
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
+    "@types/bun": "^1.4.4",
     "typescript": "^7.0.2"
   }
 }
