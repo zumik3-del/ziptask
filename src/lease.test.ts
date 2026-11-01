@@ -358,7 +358,7 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     expect(text(missing)).toBe('INVALID: reset_attempts requires a comment')
 
     const blank = handleUpdateStatus(svc, { id, agent: 'operator', status: 'queued', version: before.version, reset_attempts: true, comment: '   ' })
-    expect(text(blank)).toBe('INVALID: content required')
+    expect(text(blank)).toBe('INVALID: comment required')
 
     const after = row(id)
     expect(after.status).toBe('blocked')

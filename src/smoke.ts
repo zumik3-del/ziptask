@@ -110,11 +110,11 @@ try {
 
   const claim = parseToolResult(await client.callTool({
     name: 'claim_task',
-    arguments: { agent: 'smoke-agent', task_id: idA, include: ['description'] }
+    arguments: { agent: 'smoke-agent', task_id: idA, fields: ['description'] }
   }))
   assert(
     claim.id === idA && claim.lease_ttl_min === 15 && claim.description === 'Smoke description' && !('lease_until' in claim),
-    `claim_task include → {id, lease_ttl_min, description}: ${JSON.stringify(claim)}`
+    `claim_task fields → {id, lease_ttl_min, description}: ${JSON.stringify(claim)}`
   )
 
   // ── F2 lease heartbeat + F3 attempts recovery (F2 #1065 / F3 #1066) ─────────
