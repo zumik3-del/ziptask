@@ -76,6 +76,10 @@ function contentError(content: string): SvcError | null {
   return requiredError(content, 'content') ?? tooLongError(content, MAX_CONTENT_LENGTH, 'content')
 }
 
+function commentError(comment: string): SvcError | null {
+  return requiredError(comment, 'comment') ?? tooLongError(comment, MAX_CONTENT_LENGTH, 'comment')
+}
+
 export class ProjectService {
   constructor(private readonly store: ProjectStore, private readonly scope?: string) {}
 
@@ -253,7 +257,7 @@ export class TaskLifecycleService {
     const agentErr = agentError(args.agent)
     if (agentErr) return fail(agentErr)
     if (args.comment !== undefined) {
-      const commentErr = contentError(args.comment)
+      const commentErr = commentError(args.comment)
       if (commentErr) return fail(commentErr)
     }
     const refund = args.reset_attempts === true

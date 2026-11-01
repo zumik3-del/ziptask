@@ -578,7 +578,7 @@ describe('projects: enumeration isolation on all three paths (ADR D2)', () => {
     expect(byId.project).toBe('alpha')
     expect('project_id' in json(handleGetTask(svc, { id: a1, fields: ['project_id'] }))).toBe(false)
     expect(json(handleListTasks(svc, { project: 'alpha', fields: ['id', 'project'] })).tasks[0].project).toBe('alpha')
-    expect(json(handleClaimTask(svc, { agent: 'dev', project: 'alpha', include: ['project'] })).project).toBe('alpha')
+    expect(json(handleClaimTask(svc, { agent: 'dev', project: 'alpha', fields: ['project'] })).project).toBe('alpha')
   })
 
   test('a by-id claim stays unscoped (D2 rule 5)', () => {

@@ -509,7 +509,7 @@ describe('length limits: agent and content (#795)', () => {
     const task = getTaskRow(db, id)
     const res = handleUpdateStatus(svc, { id, agent: 'ok', status: 'review', version: task!.version, comment: LONG_CONTENT })
     expect(res.isError).toBe(true)
-    expect(text(res)).toContain('INVALID: content too long')
+    expect(text(res)).toContain('INVALID: comment too long')
   })
 
   test('updateStatus accepts comment == MAX_CONTENT_LENGTH', () => {
@@ -554,7 +554,7 @@ describe('empty/whitespace comment rejection in updateStatus (#810)', () => {
     const task = getTaskRow(db, id)
     const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task!.version, comment: '' })
     expect(res.isError).toBe(true)
-    expect(text(res)).toContain('INVALID: content required')
+    expect(text(res)).toContain('INVALID: comment required')
   })
 
   test('updateStatus rejects whitespace-only comment', () => {
@@ -563,7 +563,7 @@ describe('empty/whitespace comment rejection in updateStatus (#810)', () => {
     const task = getTaskRow(db, id)
     const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task!.version, comment: '   ' })
     expect(res.isError).toBe(true)
-    expect(text(res)).toContain('INVALID: content required')
+    expect(text(res)).toContain('INVALID: comment required')
   })
 
   test('updateStatus accepts non-empty comment', () => {

@@ -19,7 +19,7 @@ Leases: `claim_task` is the door to a lease, and a non-renewal transition into `
 
 ## Tools
 - `create_task` -> regular tasks start `queued`, epics `open`; `blocked` is a manual flag only; build `description` from `get_template("task")`, or `get_template("epic")` for epics. Bounds: `description` 20000, `title`/`reporter`/`assignee` 200 code points, `depends_on` 100 ids.
-- `list_queue` -> pipe `id|priority|title`; `list_tasks` -> JSON, or batch `ids` -> pipe `id|code`; `description` only via explicit `fields`; `project` via `fields` (`get_task`, `list_tasks`, `claim_task include`).
+- `list_queue` -> pipe `id|priority|title`; `list_tasks` -> JSON, or batch `ids` -> pipe `id|code`; `description` only via explicit `fields`; `project` via `fields` (`get_task`, `list_tasks`, `claim_task fields`).
 - `get_task` -> brief (`id,title,status,priority,blocked_by`), more via `fields`; `description` is the contract (goal, AC, constraints, deliverable).
 - `update_task` -> version-locked patch of `title`/`description`/`priority`/`depends_on` on a `queued` task (regular) or an `open` epic with no lease holder; `agent` required, `version` optional lock, `comment?` rationale. A supplied value equal to the stored one is a no-op (`changed: []`, no version bump). Output `{id, version, changed}`.
 - `claim_task` -> input key `task_id` -> `{id, lease_ttl_min, version}`; `update_status` -> optimistic `version` lock: a `done`/`failed`/`canceled` target takes a resolution `comment`, and `reset_attempts: true` requires a `comment` and echoes `attempts`; `add_comment`; `get_timeline` -> pipe `seq|type|agent|at|text`; `get_template`.

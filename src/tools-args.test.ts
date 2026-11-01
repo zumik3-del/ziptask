@@ -38,7 +38,7 @@ describe('claim_task id alias removed (task #1963)', () => {
     const target = createTask('Alias target', 'p3')
     const res = handleClaimTask(svc, { agent: 'dev', id: target } as any)
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: unknown argument id on claim_task (accepted: agent, include, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe('INVALID: unknown argument id on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)')
     expect(getTaskRow(db, target).status).toBe('queued')
   })
 
@@ -67,7 +67,7 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
 
     const res = handleClaimTask(svc, { agent: 'dev', id_typo: first } as any)
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: unknown argument id_typo on claim_task (accepted: agent, include, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe('INVALID: unknown argument id_typo on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)')
 
     const queue = text(handleListQueue(svc, {}))
     expect(queue).toContain(`${first}|p0|Intended`)
@@ -79,7 +79,7 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
     const id = createTask('Bait', 'p0')
     const res = handleClaimTask(svc, { agent: 'dev', b: 1, a: 2 } as any)
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: unknown arguments a, b on claim_task (accepted: agent, include, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe('INVALID: unknown arguments a, b on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)')
     expect(getTaskRow(db, id).status).toBe('queued')
   })
 
@@ -87,7 +87,7 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
     createTask('Bait', 'p0')
     const first = text(handleClaimTask(svc, { agent: 'dev', zebra: 1, alpha: 2, mike: 3 } as any))
     const second = text(handleClaimTask(svc, { agent: 'dev', mike: 3, zebra: 1, alpha: 2 } as any))
-    expect(first).toBe('INVALID: unknown arguments alpha, mike, zebra on claim_task (accepted: agent, include, lease_ttl_min, project, task_id)')
+    expect(first).toBe('INVALID: unknown arguments alpha, mike, zebra on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)')
     expect(second).toBe(first)
   })
 
@@ -95,7 +95,7 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
     const id = createTask('Guarded', 'p0')
     const res = handleClaimTask(svc, { agent: 'dev', task_id: id, id_typo: 1 } as any)
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: unknown argument id_typo on claim_task (accepted: agent, include, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe('INVALID: unknown argument id_typo on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)')
     expect(getTaskRow(db, id).status).toBe('queued')
   })
 
@@ -283,7 +283,7 @@ describe('renew / reset_attempts argument contract (F2 #1065 + F3 #1066)', () =>
   test('renew: true on claim_task → exact unknown-argument text, nothing claimed', () => {
     const id = createTask('Untouched', 'p0')
     const res = handleClaimTask(svc, { agent: 'dev', task_id: id, renew: true } as any)
-    expect(text(res)).toBe('INVALID: unknown argument renew on claim_task (accepted: agent, include, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe('INVALID: unknown argument renew on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)')
     expect(getTaskRow(db, id).status).toBe('queued')
     expect(getTaskRow(db, id).lease_expires_at).toBeNull()
   })

@@ -90,18 +90,18 @@ describe('claim_task', () => {
     expect(json(res).id).toBe(p0id)
   })
 
-  test('include returns requested fields with lease_ttl_min (v2)', () => {
+  test('fields returns requested fields with lease_ttl_min (v2)', () => {
     const id = json(handleCreateTask(svc, { title: 'With desc', reporter: 'dev', description: 'Do the thing' })).id
-    const res = json(handleClaimTask(svc, { agent: 'agent-1', task_id: id, include: ['description'] }))
+    const res = json(handleClaimTask(svc, { agent: 'agent-1', task_id: id, fields: ['description'] }))
     expect(res.id).toBe(id)
     expect(res.lease_ttl_min).toBe(15)
     expect(res.lease_until).toBeUndefined()
     expect(res.description).toBe('Do the thing')
   })
 
-  test('include omits null fields (v2)', () => {
+  test('fields omits null fields (v2)', () => {
     const id = json(handleCreateTask(svc, { title: 'No desc', reporter: 'dev' })).id
-    const res = json(handleClaimTask(svc, { agent: 'agent-1', task_id: id, include: ['description'] }))
+    const res = json(handleClaimTask(svc, { agent: 'agent-1', task_id: id, fields: ['description'] }))
     expect('description' in res).toBe(false)
     expect(res.lease_ttl_min).toBe(15)
   })

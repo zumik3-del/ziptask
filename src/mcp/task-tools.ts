@@ -62,24 +62,24 @@ const LIST_TASKS_SHAPE = {
   updated_since: z.number().finite().min(-MAX_SAFE_TIMESTAMP_MS).max(MAX_SAFE_TIMESTAMP_MS).optional(),
   epic_id: TaskId.optional(),
   is_epic: z.boolean().optional(),
-  ids: z.array(z.number().int()).max(MAX_RESULT_LIMIT).optional(),
+  ids: z.array(TaskId).max(MAX_RESULT_LIMIT).optional(),
   project: PROJECT_ARG
 }
 
 const CLAIM_TASK_SHAPE = {
-  agent: z.string().optional().describe('agent name; defaults to "unknown" when omitted'),
+  agent: z.string().max(MAX_AGENT_LENGTH, 'INVALID: agent too long').optional().describe('agent name; defaults to "unknown" when omitted; <=200 code points'),
   task_id: TaskId.optional(),
-  include: z.array(z.string()).optional(),
+  fields: z.array(z.string()).optional().describe('extra fields to include in the response'),
   lease_ttl_min: z.number().int().positive().optional().describe('lease TTL in minutes for this claim; overrides the server default for this claim only'),
   project: PROJECT_ARG
 }
 
 const UPDATE_STATUS_SHAPE = {
   id: TaskId,
-  agent: z.string(),
+  agent: z.string().max(MAX_AGENT_LENGTH, 'INVALID: agent too long').describe('agent name; <=200 code points'),
   status: z.enum(TASK_STATUSES),
   version: z.number().int().optional().describe('optimistic lock; omit to skip the version check (a stale version still refuses)'),
-  comment: z.string().optional().describe('typed resolution when done/failed/canceled'),
+  comment: z.string().max(MAX_CONTENT_LENGTH, 'INVALID: comment too long').optional().describe('typed resolution when done/failed/canceled; <=10000 code points'),
   renew: z.boolean().optional().describe('with status=in_progress on an in_progress task: re-arm your own lease (heartbeat, ~lease_ttl_min/3)'),
   reset_attempts: z.boolean().optional().describe('with any legal transition: zero attempts (budget refund, max_attempts untouched), requires comment, max_attempts untouched, echoes attempts in the response; not on epics, not on tasks closed for work')
 }
@@ -179,7 +179,7 @@ export function handleListTasks(svc: TaskService, args: {
 export function handleClaimTask(svc: TaskService, args: {
   agent?: string
   task_id?: number
-  include?: string[]
+  fields?: string[]
   lease_ttl_min?: number
   project?: string
 }): ToolResult {
@@ -188,7 +188,7 @@ export function handleClaimTask(svc: TaskService, args: {
   const taskId = args.task_id
   return foldResult(svc.claimTask({ agent: args.agent ?? 'unknown', taskId, leaseTtlMin: args.lease_ttl_min, project: args.project }), ({ id, leaseTtlMin, task }) => {
     const result: Record<string, unknown> = { id, lease_ttl_min: leaseTtlMin, version: task.version }
-    Object.assign(result, pickFields(task, args.include ?? []))
+    Object.assign(result, pickFields(task, args.fields ?? []))
     return jsonResult(result)
   }, errorTool)
 }
@@ -248,7 +248,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleListTasks(svc, args))
 
   server.registerTool('claim_task', {
-    description: 'Claim a task (auto-picks the best queued, or task_id — queued/blocked). `project` (slug) is required for the auto-pick (it is the only scoped branch); a by-id claim stays unscoped. agent is optional (defaults to "unknown"); lease_ttl_min overrides the server default lease for this claim only. include: extra fields in response',
+    description: 'Claim a task (auto-picks the best queued, or task_id — queued/blocked). `project` (slug) is required for the auto-pick (it is the only scoped branch); a by-id claim stays unscoped. agent is optional (defaults to "unknown"); lease_ttl_min overrides the server default lease for this claim only. fields: extra fields to include in the response',
     inputSchema: z.object(CLAIM_TASK_SHAPE).catchall(z.unknown())
   }, async (args) => handleClaimTask(svc, args))
 

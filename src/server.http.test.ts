@@ -8,7 +8,7 @@ import { startTestServer, textOf, TEST_PROJECT_SLUG } from './test-context'
 import type { TestServer } from './test-context'
 import { readBodyWithLimit } from './server'
 import { DEFAULT_HTTP_MAX_BODY_BYTES } from './defaults'
-import { MAX_AGENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON, MAX_TITLE_LENGTH } from './core/tasks'
+import { MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON, MAX_TITLE_LENGTH } from './core/tasks'
 
 // The HTTP/MCP surface: the task-view endpoint, the schema guards in front of the tools, and the
 // argument contract as it reaches the wire. Session lifecycle and the event store live in the
@@ -661,7 +661,7 @@ describe('argument contract over MCP (F1 #1040)', () => {
       const listed = await client.listTools()
       const claim = (listed.tools as any[]).find(t => t.name === 'claim_task')!
       const props = claim.inputSchema.properties
-      expect(Object.keys(props).sort()).toEqual(['agent', 'include', 'lease_ttl_min', 'project', 'task_id'])
+      expect(Object.keys(props).sort()).toEqual(['agent', 'fields', 'lease_ttl_min', 'project', 'task_id'])
     })
 
     test('update_status advertises renew and reset_attempts as booleans', async () => {
@@ -671,6 +671,25 @@ describe('argument contract over MCP (F1 #1040)', () => {
       expect(Object.keys(props).sort()).toEqual(['agent', 'comment', 'id', 'renew', 'reset_attempts', 'status', 'version'])
       expect(props.renew.type).toBe('boolean')
       expect(props.reset_attempts.type).toBe('boolean')
+    })
+
+    test('the actor and comment bounds are advertised on every schema that carries them', async () => {
+      const listed = await client.listTools()
+      const tools = new Map((listed.tools as any[]).map(t => [t.name, t]))
+      for (const name of ['claim_task', 'update_status', 'add_comment']) {
+        expect((tools.get(name)!.inputSchema.properties as any).agent.maxLength).toBe(MAX_AGENT_LENGTH)
+      }
+      expect((tools.get('update_status')!.inputSchema.properties as any).comment.maxLength).toBe(MAX_CONTENT_LENGTH)
+      const addComment = (tools.get('add_comment')!.inputSchema.properties as any)
+      for (const key of ['content', 'text', 'comment']) {
+        expect(addComment[key].maxLength).toBe(MAX_CONTENT_LENGTH)
+      }
+    })
+
+    test('list_tasks ids are positive integers on the wire', async () => {
+      const res: any = await client.callTool({ name: 'list_tasks', arguments: { ids: [0] } })
+      expect(res.isError).toBe(true)
+      expect(textOf(res)).toContain('Invalid arguments for tool list_tasks')
     })
   })
 

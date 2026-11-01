@@ -1,15 +1,15 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
-import { sanitizePipe, pipeJoin, MAX_RESULT_LIMIT } from '../core/tasks'
+import { sanitizePipe, pipeJoin, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from '../core/tasks'
 import { type ToolResult, toToolResult, rejectUnknownArgs, foldResult, textResult, errorTool, TaskId } from './common'
 
 const ADD_COMMENT_SHAPE = {
   id: TaskId,
-  agent: z.string(),
-  content: z.string().optional().describe('English; fill get_template("comment-success") or "comment-failure"'),
-  text: z.string().optional().describe('alias of content'),
-  comment: z.string().optional().describe('alias of content')
+  agent: z.string().max(MAX_AGENT_LENGTH, 'INVALID: agent too long').describe('agent name; <=200 code points'),
+  content: z.string().max(MAX_CONTENT_LENGTH, 'INVALID: content too long').optional().describe('English; fill get_template("comment-success") or "comment-failure"; <=10000 code points'),
+  text: z.string().max(MAX_CONTENT_LENGTH, 'INVALID: content too long').optional().describe('alias of content'),
+  comment: z.string().max(MAX_CONTENT_LENGTH, 'INVALID: content too long').optional().describe('alias of content')
 }
 
 const GET_TIMELINE_SHAPE = {
