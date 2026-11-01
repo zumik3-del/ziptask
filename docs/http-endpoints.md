@@ -11,7 +11,7 @@
 
 Every path returns `404` `Not Found` when it does not match. No endpoint authenticates — keep the listener bound to `127.0.0.1` (`ZIPTASK_HOST`/`settings.json`) and put an authenticating reverse proxy in front if it must be reachable from other hosts.
 
-The two `/api/*` read endpoints are browser-facing, so they answer with permissive CORS headers (`Access-Control-Allow-Origin: *`, `Allow-Methods: GET, OPTIONS`) on success and on error alike, and an `OPTIONS` preflight returns `204` with no body. `/mcp` carries no CORS headers: it is an agent-to-server channel, not a page fetch.
+The two `/api/*` read endpoints are browser-facing, so they answer with permissive CORS headers (`Access-Control-Allow-Origin: *`, `Allow-Methods: GET, OPTIONS`, `Allow-Headers: Content-Type`) on success and on error alike, and an `OPTIONS` preflight returns `204` with no body. `/mcp` carries no CORS headers: it is an agent-to-server channel, not a page fetch.
 
 `GET /health` is purely additive over `{"ok":true}`: `version` carries the running package version (no leading `v`) so the deploy framework's health gate can compare it against the target release (`HEALTH_VERSION_FIELD`, `expected = ${TAG#v}`).
 

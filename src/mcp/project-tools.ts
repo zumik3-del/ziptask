@@ -55,7 +55,7 @@ export function registerProjectTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleCreateProject(svc, args))
 
   server.registerTool('list_projects', {
-    description: 'Pipe lines slug|folder|open (open = non-terminal tasks), ordered by slug; archived projects are listed identically (no archived column)',
+    description: 'Pipe lines slug|folder|open (open = non-terminal tasks), ordered by slug; archived projects are listed identically (the pipe carries no archive flag)',
     inputSchema: z.object(LIST_PROJECTS_SHAPE).catchall(z.unknown())
   }, async (args) => handleListProjects(svc, args))
 

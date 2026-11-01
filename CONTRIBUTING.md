@@ -26,7 +26,7 @@ Open an issue with the `feature` label. Describe the problem you want to solve a
 1. Fork the repo and create a feature branch from `dev`.
 2. Make your changes following the code conventions below.
 3. Run `bun test` to make sure tests pass.
-4. Run `bunx biome check src/` for lint.
+4. Run `bunx biome check src/ scripts/` for lint.
 5. Run `bunx tsc --noEmit` for type checking.
 6. Open a pull request `dev` → `main` with a **Conventional Commit title** (see below).
 7. PRs are merged with a **merge commit** (never squash) — the PR title becomes the merge-commit subject on `main`.
@@ -81,7 +81,7 @@ src/
 ```bash
 bun install
 bun test                    # run tests
-bunx biome check src/       # lint
+bunx biome check src/ scripts/  # lint
 bunx tsc --noEmit           # type check
 bun run start               # start server (HTTP)
 bun run dev                 # watch mode (restart on change)

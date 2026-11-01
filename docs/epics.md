@@ -66,12 +66,14 @@ Nested membership is rejected (epic cannot be a sub-task; sub-task cannot be an 
 | `depends_on` pointing at an epic | `INVALID: dependencies on epic tasks not allowed (#N)` |
 | `depends_on` pointing outside the new task's project | `INVALID: dependency #N belongs to project 'y'` |
 | `epic_id` pointing outside the new task's project | `INVALID: epic #N belongs to project 'y'` |
+| `epic_id` pointing at an unknown id | `NOT_FOUND:` |
 | `epic_id` pointing at a terminal task | `INVALID: cannot attach to a terminal task` |
 | `epic_id` pointing at a sub-task (nesting) | `INVALID: cannot attach to a sub-task (no nesting)` |
 | `epic_id` pointing at a non-`queued` task that is not yet an epic | `INVALID: cannot promote #N from <status>: only a queued task can become an epic` |
 | `epic_id` target that left its state between the guard and the write | `CONFLICT: epic #N changed state during promotion` |
 | Explicit `claim_task` on an epic | `INVALID: #N is an epic, not claimable` |
-| `queued`/`in_progress`/`review`/`blocked` on an epic | `INVALID: <status> → <status>` (epics only accept `done`/`failed`/`canceled`) |
+| `queued`/`review`/`blocked` on an epic | `INVALID: <status> → <status>` (epics only accept `done`/`failed`/`canceled`) |
+| `in_progress` on an `open` epic | `INVALID: #N is an epic, not claimable` (the acquisition guard answers before the transition table) |
 | Close with children that are not closed for work | `CHILDREN: N sub-tasks not terminal` |
 
 ## Re-parent or detach (escape hatch)

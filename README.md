@@ -23,7 +23,7 @@ One-liner — installs the published binary via the `deploy/` framework (see
 curl -fsSL https://raw.githubusercontent.com/zumik3-del/ziptask/main/deploy/install.sh | bash
 
 # from a checkout, or pinned to a version
-sudo bash deploy/install.sh --version v0.4.0
+sudo bash deploy/install.sh --version v0.5.4
 ```
 
 Canonical layout: binary in `/opt/ziptask`, database **and** `settings.json` in
@@ -43,8 +43,9 @@ Prebuilt release binaries target Linux x86_64 only. On other platforms (macOS, a
 When systemd is detected and running, the installer renders
 `/etc/systemd/system/ziptask.service` from the framework's unit template
 (`Restart=always`, a bounded `TimeoutStopSec`, and the usual hardening) and
-starts it. The unit runs as the user that invoked the installer — even under
-`sudo`, `SUDO_USER` is honoured. Manage it with:
+starts it. The unit runs as `opencode` — the `SERVICE_USER` in
+[`deploy/app.env`](deploy/app.env), which wins over `SUDO_USER`; edit that file
+before installing to run under another account. Manage it with:
 
 ```bash
 sudo systemctl start ziptask
@@ -70,7 +71,7 @@ database and the state directory by default; add `--purge` to delete them.
 }
 ```
 
-Pass `--settings` so the DB path and options come from `settings.json` regardless of the client's working directory — otherwise the DB defaults to `./data/ziptask.db` under the client's cwd. Clients do not expand `~` in `command`/`args`; substitute the absolute path (the installer prints a ready-to-paste block).
+Pass `--settings` so the DB path and options come from `settings.json` regardless of the client's working directory — otherwise the DB defaults to `./data/ziptask.db` under the client's cwd. Clients do not expand `~` in `command`/`args`, so substitute the absolute path (`/var/lib/ziptask/settings.json` in the canonical layout).
 
 ### MCP client config (remote HTTP)
 
