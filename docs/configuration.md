@@ -34,7 +34,7 @@ An optional JSON file; `settings.example.json` shows the full shape. Every key i
 
 After the env layer is applied, the merged result is re-validated before it is returned (`MergedSettingsSchema` and the final `safeParse`, `loadSettings`, `src/config.ts`). Parsing is strict on purpose, so a typo cannot be reinterpreted: an `int` variable must match `^\d+$` **on the raw value** (no sign, decimal point or surrounding whitespace), and a `bool` variable accepts exactly `true`/`false` in any case — `1`, `yes` and the empty string are refused rather than guessed. A value that fails its type is ignored: the lower layer's value stays, and the caller is warned (`ignoring invalid ZIPTASK_PORT value`, with the offending value in the record) — `src/index.ts` buffers those warnings until the logger exists and replays them then. A value that parses but breaks its bound (`ZIPTASK_LEASE_TTL_MIN=0`, a `leaseTtlMin` above its cap) aborts startup with `Invalid configuration after env overrides: …`; a value that never parses is only warned about and dropped, so a signed or decimal `ZIPTASK_PORT` (`-1`, `1.5`) leaves the lower layer's port in place instead of aborting. The same bad number in `settings.json` does abort — that layer is a schema, so a negative `port` there throws `Invalid settings.json: …`. `logging.level` stays a bare `string` in that merged schema, so a bad level still reaches the logger rather than aborting here.
 
-`leaseTtlMin` — in `settings.json`, in `ZIPTASK_LEASE_TTL_MIN` and as the `claim_task` `lease_ttl_min` argument — is capped at **1440 minutes** (`MAX_LEASE_TTL_MIN`). A larger value is refused, never clamped: the settings layers fail validation (`Invalid settings.json: …` / `Invalid configuration after env overrides: leaseTtlMin: Too big: expected number to be <=1440`), and the tool answers `INVALID: lease_ttl_min too large`. The cap covers the configured default too — it is enforced once when the service is constructed (`resolveOptions`, `src/core/service.ts`), and every lease the server hands out without an explicit TTL, the claim default and each `update_status` renewal alike, is computed from that validated value — so a server cannot start with a lease policy the tool would refuse, and no renewal can outlive the cap.
+`leaseTtlMin` — in `settings.json`, in `ZIPTASK_LEASE_TTL_MIN` and as the `claim_task` `lease_ttl_min` argument — is capped at **1440 minutes** (`MAX_LEASE_TTL_MIN`). A larger value is refused, never clamped: the settings layers fail validation (`Invalid settings.json: …` / `Invalid configuration after env overrides: leaseTtlMin: Too big: expected number to be <=1440`), and an explicit `lease_ttl_min` on a claim is refused with `INVALID: lease_ttl_min too large`. The cap covers the configured default too: the settings layers refuse an over-cap value before a service exists (so the process exits at startup, see above), and `resolveOptions` (`src/core/service.ts`) refuses it again when `TaskService` is constructed. Every lease the server hands out without an explicit TTL — the claim default and each `update_status` renewal alike — is computed from that validated value, so no renewal can outlive the cap.
 
 **There is deliberately no project key in either layer**: no `project` in `settings.json` and no `ZIPTASK_PROJECT`. The project slug is a required per-call argument on the enumerating tools ([Projects and scope](mcp-tools.md#projects-and-scope)), so an install cannot silently widen or narrow every call from config — the failure is a loud `INVALID: project required`.
 
@@ -78,11 +78,16 @@ The hook finds `settings.json` at `${DATA_DIR}/settings.json` first — the same
 
 ### Rollback: moving `settings.json` back out of `DATA_DIR`
 
-Nothing under `DATA_DIR` is touched by a payload swap, so reverting the config move is a `cp` and a re-render — no database restore is involved, and no code change. The destination is root-owned, so the copy needs `sudo` (as does any other write into `~/.ziptask/scripts/`):
+Nothing under `DATA_DIR` is touched by a payload swap, so reverting the config move is a copy into `~/.ziptask/scripts/` and a re-render — no database restore is involved, and no code change. The destination is root-owned, so the copy needs `sudo` (as does any other write into `~/.ziptask/scripts/`):
 
 ```bash
 sudo systemctl stop ziptask
-sudo cp -p /var/lib/ziptask/settings.json ~/.ziptask/scripts/settings.json
+# `install`, not `cp -p`: `-p` preserves the source owner and mode, and this copy
+# must be root-owned — the pre-update hook runs as root and reads `dbPath` from
+# it, so a service-owned copy would let the service account steer a root-run
+# `sqlite3 .backup` at a path of its choosing.
+sudo install -m 0640 -o root -g <service-group> \
+  /var/lib/ziptask/settings.json ~/.ziptask/scripts/settings.json
 # edit EXEC_START in ~/.ziptask/scripts/app.env back to (root-owned 0640, so
 # use sudoedit):
 #   /opt/ziptask/ziptask --settings /home/opencode/.ziptask/scripts/settings.json
