@@ -28,6 +28,11 @@
 #      --no-service    Skip systemd unit installation and start
 #      --help, -h      Show this help
 #
+#  Refuses before writing: if RUN_DIR itself, RUN_DIR/scripts, RUN_DIR/hooks or
+#  RUN_DIR/scripts/app.env is a symlink (dangling included) the run ABORTS
+#  before it copies a helper, rewrites app.env or runs a hook, so a planted link
+#  can never make this root run write, source or execute through it.
+#
 #  Seeded ports: a FRESH config.json gets server.port = PORT and mcp.httpPort =
 #  MCP_PORT (optional, defaults to PORT + 1); a fresh settings.json gets port =
 #  PORT. An existing config is preserved verbatim. See resolve_mcp_port().
@@ -118,7 +123,7 @@ parse_args() {
       --force)      FORCE=true;       shift   ;;
       --no-service) NO_SERVICE=true;  shift   ;;
       --help|-h)
-        sed -n '3,37p' "$0" 2>/dev/null || echo "See the comment header of install.sh"
+        sed -n '3,42p' "$0" 2>/dev/null || echo "See the comment header of install.sh"
         exit 0 ;;
       *) error "unknown option: $1 (try --help)" ;;
     esac
@@ -986,6 +991,14 @@ main() {
   HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-60}"
   HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:$(resolve_port)/health}"
   HOOKS_DIR="${HOOKS_DIR:-${RUN_DIR}/hooks}"
+  # THE DEPLOY-STATE PREFLIGHT, and it comes BEFORE the first write anywhere in
+  # this script. install_helper_scripts/install_hook_scripts copy INTO
+  # ${RUN_DIR}/scripts and ${RUN_DIR}/hooks, persist_layout REWRITES
+  # ${RUN_DIR}/scripts/app.env, and every later phase executes a hook from that
+  # tree — through a link, all of it lands on the link's target as root (task
+  # #2256). Screened here, the refusal is a preflight the operator can trust:
+  # "nothing was changed" is true, because nothing has been done yet.
+  assert_run_dir_not_symlinked
   # Before the payload is fetched, so an unreadable contract is refused while
   # the host is still untouched.
   require_health_contract

@@ -140,6 +140,41 @@ run_update() {
 
 main() {
   parse_args "$@"
+  # THE DEPLOY-STATE PREFLIGHT, BEFORE load_app_env (task #2256). load_app_env
+  # SOURCES the app.env it finds next to this script, and `.` follows a link: a
+  # planted scripts/ or a planted app.env would execute whatever the target
+  # holds, under this run's identity, before any later check could look at it.
+  #
+  # The root comes from THIS script's own installed location
+  # (${RUN_DIR}/scripts/updater.sh) rather than from RUN_DIR, because app.env is
+  # what DEFINES RUN_DIR — by the time RUN_DIR is known, the file has already
+  # been sourced, which is the thing to prevent.
+  #
+  # The LOGICAL path, on purpose: SCRIPT_DIR above is `pwd -P`, so it reports a
+  # linked scripts/ as the directory it points AT and would hide the very link
+  # this screens for. Only the display form differs — dirname-ing the path as
+  # typed keeps the link visible.
+  local _pf_script="${BASH_SOURCE[0]:-$0}" _pf_dir _pf_root
+  case "$_pf_script" in
+    */*) _pf_dir="${_pf_script%/*}" ;;
+    *)   _pf_dir="${PWD:-.}" ;;
+  esac
+  if [ "$_pf_dir" = "." ]; then _pf_dir="${PWD:-.}"; fi
+  case "$_pf_dir" in
+    /*) : ;;
+    *)  _pf_dir="${PWD:-.}/${_pf_dir}" ;;
+  esac
+  _pf_root="${_pf_dir%/*}"
+  if [ -z "$_pf_root" ]; then _pf_root="/"; fi
+  # Guarded because this file is the FROZEN bootstrap (contract v1): the five
+  # files are installed together, so a tree where common.sh predates this
+  # function is a hand-copied one. Dying there on a missing command would break
+  # the update path over a screen that tree never had; saying so does not.
+  if declare -F assert_run_dir_not_symlinked >/dev/null 2>&1; then
+    assert_run_dir_not_symlinked "$_pf_root"
+  else
+    warn "cannot screen ${_pf_root} for symlinks: the installed lib/common.sh predates it — re-run install.sh to refresh ${SCRIPT_DIR}"
+  fi
   load_app_env
   resolve_target_user
   INSTALL_DIR="${INSTALL_DIR:-/opt/${APP_NAME}}"

@@ -408,6 +408,46 @@ apply_ownership() {
   return 0
 }
 
+# assert_run_dir_not_symlinked [ROOT] — refuse a LINKED deploy-state tree,
+# BEFORE the run writes into it.
+#
+# ROOT defaults to RUN_DIR. The four entries screened are exactly what a
+# privileged run WRITES THROUGH (ROOT itself, scripts/, hooks/) or SOURCES
+# (scripts/app.env): cp, chown, chmod, `.` and `bash` all DEREFERENCE, so one
+# link anywhere in that set retargets the whole run at whatever it points to
+# (/etc, /root/.ssh, the payload tree) — and an update runs as root.
+#
+# FATAL, and it is a PREFLIGHT the entry points call before their first write
+# (install.sh, update.sh, updater.sh), not a check they make afterwards.
+# #2252 put the screen inside apply_run_dir_ownership(), i.e. AFTER install.sh
+# had already copied the helpers and rewritten app.env through the link, so the
+# "nothing under RUN_DIR was changed by this run" sentence it printed was a
+# claim about work the same run had just done (review #2255). A screen that runs
+# after the writes it is meant to prevent is a report, not a defence. The
+# ownership pass keeps a call of its own as a RACE check — its screen must also
+# be fatal, so a link planted between the preflight and the heal cannot silently
+# turn into a warn-and-continue.
+#
+# ROOT is a PARAMETER because updater.sh must screen the tree it is about to
+# SOURCE app.env from and has no RUN_DIR at that point: app.env is what DEFINES
+# RUN_DIR, so the root has to come from the script's own installed location.
+assert_run_dir_not_symlinked() {
+  local root="${1:-${RUN_DIR:-}}" d linked=""
+  # No root, nothing to screen: RUN_DIR is optional in app.env (resolve_target_user
+  # defaults it) and each entry point calls this only once it has one. A `return`
+  # here is not a silent skip — there is no tree to write through.
+  [ -n "$root" ] || return 0
+  # `-L` alone, never `-e`: a DANGLING link is still a pointer the next write
+  # follows as soon as something exists at the far end, and `-e` answers "no"
+  # for it. The if-form (not `[ -L ] && ...`) keeps the last loop iteration's
+  # status from failing the function under `set -e` on a clean tree.
+  for d in "$root" "${root}/scripts" "${root}/hooks" "${root}/scripts/app.env"; do
+    if [ -L "$d" ]; then linked="${linked}${linked:+, }${d}"; fi
+  done
+  [ -z "$linked" ] || error "refusing to continue: ${linked} is a symlink. This run writes, executes and sources under ${root}, and cp, chown, chmod, source and bash all DEREFERENCE — the work would land on the link's target, as this run's user (root for an install or an update). NOTHING was changed by this run: inspect the target, remove the link, find out why it was planted, then re-run."
+  return 0
+}
+
 # apply_run_dir_ownership — the framework's own state under RUN_DIR pinned to
 # ROOT, with the service group allowed to read and execute but never to write.
 #
@@ -440,11 +480,12 @@ apply_ownership() {
 # a settings.json); a blind `chown -R root` would take that too, and `sudo` size
 # is exactly what this function must stop handing out.
 #
-# NOTHING HERE FOLLOWS A SYMLINK, the three roots included: they are screened
-# before the first chown/chmod and one planted link refuses the whole pass (see
-# the screen in the body, task #2252).
+# NOTHING HERE FOLLOWS A SYMLINK, the three roots included: assert_run_dir_not_
+# symlinked() screens them before the first chown/chmod and one planted link
+# ABORTS the whole run (task #2252 screened them, task #2256 made the refusal
+# fatal and moved the preflight to the entry points).
 apply_run_dir_ownership() {
-  local d f linked=""
+  local d f
   # Guarded BEFORE the loop, not inside it: the loop list is expanded when the
   # `for` runs, so a `[ -n "$RUN_DIR" ]` test in the body would be reached only
   # after "${RUN_DIR}/scripts" had already tripped `set -u` on a host whose
@@ -474,31 +515,16 @@ apply_run_dir_ownership() {
   # only the entries INSIDE those directories while the directories themselves
   # were declared "not attacker-controlled"; they are.
   #
-  # THE SCREEN IS A SEPARATE PASS OVER ALL THREE, and one hit refuses the WHOLE
-  # pass. Skipping only the offending entry would still run chown on
-  # ${RUN_DIR}/scripts through a symlinked RUN_DIR, and a half-healed tree (two
-  # of three roots tightened, one left at the old owner) is harder for the
-  # operator to reason about than a clean "nothing was changed". `-L` is tested
-  # on its own, so a DANGLING link is refused as well — it is still a pointer
-  # the next run would follow once something exists at the far end.
-  #
-  # NOT FATAL, same decision as the rest of this section: warn, name the path
-  # and the remedy, change nothing, and let the rest of the install/update
-  # continue. A refusal cannot leave an install broken either — the tree stays
+  # THE SCREEN IS THE SHARED PREFLIGHT, and it is FATAL (task #2256). It used
+  # to be a local loop that warned and returned 0 — a shape that left the
+  # install/update running after the refusal, so everything after this pass (the
+  # unit render, the restart, the post-update hook) still went through the linked
+  # tree. The entry points now call the same function before their first write,
+  # and this call is the RACE check: `apply_run_dir_ownership` is reached after
+  # several phases' worth of work, and a link planted between the preflight and
+  # here must abort, not warn. Nothing is lost by aborting: the tree stays
   # exactly as it already was.
-  for d in "$RUN_DIR" "${RUN_DIR}/scripts" "${RUN_DIR}/hooks"; do
-    if [ -L "$d" ]; then
-      linked="${linked}${linked:+, }${d}"
-    fi
-  done
-  if [ -n "$linked" ]; then
-    warn "refusing to change RUN_DIR ownership: ${linked} is a symlink."
-    warn "  chmod, and a dereferencing chown, would hand root:${TARGET_GROUP:-${TARGET_USER}}"
-    warn "  and mode 0750 to whatever it points at. NOTHING under ${RUN_DIR} was changed by this run."
-    warn "  inspect the target, remove the link, find out why it was planted (this tree is"
-    warn "  writable by $(ownership_target) until this pass succeeds), then re-run."
-    return 0
-  fi
+  assert_run_dir_not_symlinked "$RUN_DIR"
   for d in "$RUN_DIR" "${RUN_DIR}/scripts" "${RUN_DIR}/hooks"; do
     own_root_controlled "$d" 0750
   done

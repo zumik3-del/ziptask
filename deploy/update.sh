@@ -17,6 +17,11 @@
 #      -> fetch + swap -> post-update hook -> refresh unit -> restart + health
 #      -> rollback hint
 #
+#  Refuses before starting: a symlinked deploy state dir (RUN_DIR, scripts/,
+#  hooks/ or scripts/app.env) ABORTS the run before the pre-update hook and
+#  before any write into RUN_DIR — cp, chown, chmod, source and bash all follow
+#  a link, and this run is the one that holds root.
+#
 #  DIST=binary swaps a release tarball's payload (executable + vec0.so +
 #  lib/libonnxruntime.so.1) instead of a git checkout; see
 #  docs/adr/0001-self-contained-binary-tarball-deployment.md.
@@ -48,7 +53,7 @@ parse_args() {
     case "$1" in
       --version) ARG_VERSION="$2"; shift 2 ;;
       --yes|-y)  ASSUME_YES=true;  shift   ;;
-      --help|-h) sed -n '2,16p' "$0" 2>/dev/null || echo "See the comment header of update.sh"; exit 0 ;;
+      --help|-h) sed -n '2,23p' "$0" 2>/dev/null || echo "See the comment header of update.sh"; exit 0 ;;
       *) error "unknown option: $1 (try --help)" ;;
     esac
   done
@@ -818,6 +823,19 @@ main() {
    HEALTH_CONFIRM_TIMEOUT="${HEALTH_CONFIRM_TIMEOUT:-30}"
    HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:$(resolve_port)/health}"
    HOOKS_DIR="${HOOKS_DIR:-${RUN_DIR}/hooks}"
+   # THE DEPLOY-STATE PREFLIGHT (task #2256), placed before the FIRST thing this
+   # run does with RUN_DIR beyond reading app.env for the layout. Everything
+   # below either SOURCES ${RUN_DIR}/scripts/app.env through a hook (run_hook
+   # pre-update) or writes through the tree (apply_run_dir_ownership's
+   # chown/chmod), and both dereference: through a planted link they act on the
+   # target as root. The pre-update hook is the first of them, so screening here
+   # is what makes "the hook never ran" true rather than hopeful.
+   #
+   # app.env itself has already been read at this point — the layout is what
+   # names RUN_DIR, so it cannot be screened earlier HERE. The bootstrap is where
+   # a linked app.env must never be sourced, and updater.sh does exactly that
+   # (its preflight runs before load_app_env, off its own installed location).
+   assert_run_dir_not_symlinked
    # Before the fetch, and before the pre-update hook: an unreadable health
    # contract is a configuration error, and refusing it here means the operator
    # has no database backup to reason about afterwards.
