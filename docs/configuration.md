@@ -67,7 +67,7 @@ Upgrades go through the `deploy/` framework. `bash ~/.ziptask/scripts/updater.sh
 
 ```bash
 bash ~/.ziptask/scripts/updater.sh
-bash ~/.ziptask/scripts/updater.sh --version v0.5.4
+bash ~/.ziptask/scripts/updater.sh --version v0.5.5
 ```
 
 `~/.ziptask/scripts/` is root-owned (`app.env` is `0640 root:<service-group>`, helpers and hooks `0750`): the service account and the operator can read and execute it, only root can change it — edit `app.env` with `sudoedit`. The service account must be a member of the service group, or the pre-update hook cannot read `app.env`.
