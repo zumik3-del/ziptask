@@ -141,7 +141,7 @@ describe('epic-dep rejection message (#106)', () => {
     const res = handleCreateTask(svc, { title: 'Bad', reporter: 'dev', depends_on: [epicId, 999] })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain(`#${epicId}`)
-    // Unknown dep 999 is ignored (no row → not an epic)
+    // The first offending id in input order wins: the epic is reported ahead of the unknown 999.
   })
 })
 
@@ -172,7 +172,8 @@ describe('corrupt depends_on tolerance (#107)', () => {
 
   test('blocked_by lists dangling deps, matching readiness (never runs but not listed = footgun)', () => {
     const depId = json(handleCreateTask(svc, { title: 'Dep', reporter: 'dev' })).id
-    const id = json(handleCreateTask(svc, { title: 'Dependent', reporter: 'dev', depends_on: [depId, 999] })).id
+    // A dangling id can no longer be written through the service, so the row is seeded.
+    const id = createTaskRow({ title: 'Dependent', reporter: 'dev', depends_on: [depId, 999] })
 
     expect(json(handleGetTask(svc, { id })).blocked_by).toEqual([depId, 999])
 

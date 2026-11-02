@@ -273,6 +273,10 @@ describe('MCP schema guards (#431)', () => {
   const taskCount = (): number =>
     (srv.db.query('SELECT COUNT(*) AS n FROM tasks').get() as { n: number }).n
 
+  // A dependency must exist, so a boundary list of ids is seeded with real rows.
+  const seedDeps = (count: number): number[] =>
+    Array.from({ length: count }, (_, i) => getId(srv.svc.createTask({ title: `Dep ${i}`, reporter: 'dev' })))
+
   test('updated_since out of zod range is rejected by MCP layer', async () => {
     const tooHigh = await client.callTool({
       name: 'list_tasks',
@@ -322,7 +326,7 @@ describe('MCP schema guards (#431)', () => {
 
     const good = await client.callTool({
       name: 'create_task',
-      arguments: { title: 'Valid dep', reporter: 'dev', depends_on: [999], project: 'test' }
+      arguments: { title: 'Valid dep', reporter: 'dev', depends_on: [getId(srv.svc.createTask({ title: 'Dep', reporter: 'dev' }))], project: 'test' }
     })
     expect(good.isError).toBeUndefined()
   })
@@ -368,7 +372,7 @@ describe('MCP schema guards (#431)', () => {
   })
 
   test('create_task accepts a depends_on array exactly at the limit on the wire (#1857)', async () => {
-    const deps = Array.from({ length: MAX_DEPENDS_ON }, (_, i) => 9000 + i)
+    const deps = seedDeps(MAX_DEPENDS_ON)
     const res: any = await client.callTool({
       name: 'create_task',
       arguments: { title: 'Max deps', reporter: 'dev', depends_on: deps, project: 'test' }
