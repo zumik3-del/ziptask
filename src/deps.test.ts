@@ -1,13 +1,14 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { createsCycle, depsSatisfied, parseDeps } from './core/deps'
+import { MAX_DEPENDS_ON } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus, handleListQueue
 } from './mcp/task-tools'
 import {
-  createTestDb, closeTestDb, insertTaskRow, json, text, driveToDone, testProjectId,
+  createTestDb, closeTestDb, getTaskRow, insertTaskRow, json, text, driveToDone, testProjectId,
   type CreateTaskRowOpts
 } from './test-context'
 
@@ -142,6 +143,62 @@ describe('epic-dep rejection message (#106)', () => {
     expect(res.isError).toBe(true)
     expect(text(res)).toContain(`#${epicId}`)
     // The first offending id in input order wins: the epic is reported ahead of the unknown 999.
+  })
+})
+
+describe('dependency validation (#2244)', () => {
+  const storeCounts = (): { tasks: number; audit: number; comments: number } => {
+    const count = (table: string) => (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+    return { tasks: count('tasks'), audit: count('audit_log'), comments: count('comments') }
+  }
+  // A boundary list needs real rows: an unknown id is refused on its own, so a length test seeded
+  // with fabricated ids would pass for the wrong reason.
+  const seedDeps = (count: number): number[] =>
+    repo.transaction(() => Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' })))
+
+  test('create_task refuses an unknown dependency id and writes nothing', () => {
+    const dep = createTaskRow({ title: 'Known', reporter: 'dev' })
+    const before = storeCounts()
+    const res = handleCreateTask(svc, { title: 'Bad', reporter: 'dev', depends_on: [dep, 998] })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: dependency #998 not found')
+    expect(storeCounts()).toEqual(before)
+  })
+
+  test('create_task names the first missing id in input order', () => {
+    const res = handleCreateTask(svc, { title: 'Bad', reporter: 'dev', depends_on: [997, 996] })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: dependency #997 not found')
+  })
+
+  test('create_task stores a repeated id once and lists it once in blocked_by', () => {
+    const dep = createTaskRow({ title: 'Dep', reporter: 'dev' })
+    const id = json(handleCreateTask(svc, { title: 'Dup', reporter: 'dev', depends_on: [dep, dep, dep] })).id
+    expect(JSON.parse(getTaskRow(db, id).depends_on)).toEqual([dep])
+    expect(json(handleGetTask(svc, { id })).blocked_by).toEqual([dep])
+  })
+
+  test('create_task counts duplicates once against the limit: 101 entries of 100 ids are accepted', () => {
+    const deps = seedDeps(MAX_DEPENDS_ON)
+    const id = json(handleCreateTask(svc, { title: 'Boundary', reporter: 'dev', depends_on: [...deps, deps[0]] })).id
+    expect(JSON.parse(getTaskRow(db, id).depends_on)).toEqual(deps)
+  })
+
+  test('create_task refuses 101 distinct existing ids and writes nothing', () => {
+    const deps = seedDeps(MAX_DEPENDS_ON + 1)
+    const before = storeCounts()
+    const res = handleCreateTask(svc, { title: 'TooMany', reporter: 'dev', depends_on: deps })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: depends_on too long')
+    expect(storeCounts()).toEqual(before)
+  })
+
+  test('createTask refuses a non-array depends_on on the direct service path', () => {
+    const before = storeCounts()
+    const res = svc.createTask({ title: 'Bad', reporter: 'dev', depends_on: 'x' as any })
+    if (res.ok) throw new Error('a non-array depends_on was accepted')
+    expect(res.error).toEqual({ code: 'INVALID', message: 'invalid depends_on' })
+    expect(storeCounts()).toEqual(before)
   })
 })
 

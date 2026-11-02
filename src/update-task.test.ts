@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
-import { codePointLength, nowIso } from './core/tasks'
+import { codePointLength, nowIso, MAX_DEPENDS_ON } from './core/tasks'
 import {
   handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus, handleUpdateTask
 } from './mcp/task-tools'
@@ -333,11 +333,74 @@ describe('update_task: validation', () => {
     // make a depend on b -> cycle
     const beforeVersion = row(a).version
     const beforeDeps = row(a).depends_on
+    const before = storeCounts()
     const res = handleUpdateTask(svc, { id: a, agent: 'dev', depends_on: [b] })
     expect(res.isError).toBe(true)
     expect(text(res)).toBe('CYCLE: dependency graph contains a cycle')
     expect(row(a).version).toBe(beforeVersion)
     expect(row(a).depends_on).toBe(beforeDeps)
+    expect(storeCounts()).toEqual(before)
+  })
+})
+
+describe('update_task: dependency validation (#2244)', () => {
+  // A boundary list needs real rows: an unknown id is refused on its own, so a length test seeded
+  // with fabricated ids would pass for the wrong reason.
+  const seedDeps = (count: number): number[] =>
+    repo.transaction(() => Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' })))
+
+  test('unknown dependency id refused, first missing id named, nothing written', () => {
+    const dep = createTaskRow({ title: 'Dep' })
+    const id = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id as number
+    const before = storeCounts()
+    const beforeVersion = row(id).version
+    const beforeDeps = row(id).depends_on
+    const res = handleUpdateTask(svc, { id, agent: 'dev', depends_on: [dep, 998, 997], comment: 'note' })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: dependency #998 not found')
+    expect(storeCounts()).toEqual(before)
+    expect(row(id).version).toBe(beforeVersion)
+    expect(row(id).depends_on).toBe(beforeDeps)
+  })
+
+  test('a repeated id collapses to one stored entry and one blocked_by entry', () => {
+    const dep = createTaskRow({ title: 'Dep' })
+    const id = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id as number
+    const res = handleUpdateTask(svc, { id, agent: 'dev', depends_on: [dep, dep] })
+    expect(res.isError).toBeUndefined()
+    expect(json(res).changed).toEqual(['depends_on'])
+    expect(JSON.parse(row(id).depends_on)).toEqual([dep])
+    expect(json(handleGetTask(svc, { id })).blocked_by).toEqual([dep])
+  })
+
+  test('101 entries of 100 distinct ids are accepted, 101 distinct ids refused', () => {
+    const deps = seedDeps(MAX_DEPENDS_ON + 1)
+    const id = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id as number
+    let res = handleUpdateTask(svc, { id, agent: 'dev', depends_on: deps })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: depends_on too long')
+    res = handleUpdateTask(svc, { id, agent: 'dev', depends_on: [...deps.slice(0, MAX_DEPENDS_ON), deps[0]] })
+    expect(res.isError).toBeUndefined()
+    expect(JSON.parse(row(id).depends_on)).toEqual(deps.slice(0, MAX_DEPENDS_ON))
+  })
+
+  test('depends_on: [] on an epic with an empty stored list is a no-op', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    const version = versionOf(epicId)
+    const res = handleUpdateTask(svc, { id: epicId, agent: 'dev', depends_on: [] })
+    expect(res.isError).toBeUndefined()
+    expect(json(res)).toEqual({ id: epicId, version, changed: [] })
+    expect(row(epicId).version).toBe(version)
+    expect(countAudit(epicId, 'update_task:depends_on')).toBe(0)
+  })
+
+  test('an epic with a seeded depends_on list still refuses depends_on: []', () => {
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', [JSON.stringify([epicId]), epicId])
+    const res = handleUpdateTask(svc, { id: epicId, agent: 'dev', depends_on: [] })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: an epic cannot have depends_on')
+    expect(JSON.parse(row(epicId).depends_on)).toEqual([epicId])
   })
 })
 
