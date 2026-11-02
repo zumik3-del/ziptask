@@ -19,11 +19,11 @@ create_project {folder_path: "/srv/work/myproj"}   → {"slug":"myproj"}
 list_projects                                      → myproj|/srv/work/myproj|0
 ```
 
-`list_projects` prints one pipe line per project — `slug|folder|open`, ordered by `slug` ASC, where `open` counts the project's non-terminal tasks. Archived projects and `legacy` are listed identically; there is deliberately no archived column (the idempotent `update_project` below is how you un-archive). An empty table prints empty text.
+`list_projects` prints one pipe line per project — `slug|folder|open`, ordered by `slug` ASC, where `open` counts the project's non-terminal tasks. Archived projects and `legacy` are listed identically; the pipe deliberately carries no archive flag (the idempotent `update_project` below is how you un-archive). An empty table prints empty text.
 
 ## The scope rule
 
-`project` is required — fail closed, never defaulted — on the four enumerating calls: `create_task` (always), `list_queue` (always), `list_tasks` (unless `ids` is non-empty) and `claim_task`'s auto-pick (unless `task_id`/`id` is given). The by-id tools (`get_task`, `update_status`, `add_comment`, `get_timeline`, `get_template`) do not take the argument at all and stay unscoped: ids are global and sequential. `claim_task` is the one tool that declares `project` on both branches — a single input shape serves auto-pick and by-id — and on the by-id branch the value is ignored and never validated: a bogus slug there is not an error.
+`project` is required — fail closed, never defaulted — on the four enumerating calls: `create_task` (always), `list_queue` (always), `list_tasks` (unless `ids` is non-empty) and `claim_task`'s auto-pick (unless `task_id` is given). The by-id tools (`get_task`, `update_status`, `add_comment`, `get_timeline`) do not take the argument at all and stay unscoped: ids are global and sequential. `get_template` takes no project either — it names a template, not a task. `claim_task` is the one tool that declares `project` on both branches — a single input shape serves auto-pick and by-id — and on the by-id branch the value is ignored and never validated: a bogus slug there is not an error.
 
 There is **no default project and no all-projects mode**: a missing slug is `INVALID: project required`, an unknown one lists the known slugs so a typo is one round trip, and `project: "*"` (like `""`) is just another unknown slug — a cross-project read is one call per project, never a server-side widening.
 
@@ -40,7 +40,7 @@ The full table plus every refusal string: [MCP tools → Projects and scope](mcp
 
 ## `legacy`
 
-`legacy` holds every row that predates v5 — the migration parks the existing backlog there in one step. It is a **parking lot, not a working scope**: `create_task` in it is refused (`INVALID: create_task is refused in the reserved project 'legacy'`) and the slug can be neither registered nor renamed into (`INVALID: 'legacy' is a reserved project slug`). Its tasks stay readable and claimable like any other project's, and the project itself can be deleted once it holds no tasks.
+`legacy` holds every row that predates v5 — the migration parks the existing backlog there in one step. It is a **parking lot, not a working scope**: `create_task` in it is refused (`INVALID: create_task is refused in the reserved project 'legacy'`) and the slug cannot be registered (`INVALID: 'legacy' is a reserved project slug`). Its tasks stay readable and claimable like any other project's, and the project itself can be deleted once it holds no tasks.
 
 ## The four project tools
 
