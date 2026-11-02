@@ -8,6 +8,13 @@ export function parseDeps(raw: string): number[] {
   return []
 }
 
+// Collapses duplicate ids, keeping the first occurrence in input order. Pure: the argument is never
+// rewritten, so a guard that calls it stays side-effect free and the caller normalizes its own copy
+// (the one it then stores and checks for cycles).
+export function collapseDeps(deps: number[]): number[] {
+  return [...new Set(deps)]
+}
+
 export function createsCycle(depsOf: (id: number) => string | null, taskId: number, dependsOn: number[]): boolean {
   if (dependsOn.length === 0) return false
   const visited = new Set<number>()

@@ -182,9 +182,15 @@ describe('loadSettings env overrides', () => {
     ])
   })
 
-  test('a parsed but out-of-range int env value is refused, not warned and skipped', () => {
-    expect(() => loadSettings({ env: { ZIPTASK_PORT: '-1' }, argv: [] }))
-      .toThrow(/Invalid configuration after env overrides: port: /)
+  test('a negative int env value is ignored like any other non-decimal, not applied', () => {
+    const warnings: string[] = []
+    const s = loadSettings({
+      env: { ZIPTASK_PORT: '-1' },
+      argv: [],
+      warn: (message) => warnings.push(message)
+    })
+    expect(s.port).toBe(DEFAULTS.port)
+    expect(warnings).toEqual(['ignoring invalid ZIPTASK_PORT value'])
   })
 
   test('every non-positive int env var is refused and named', () => {
@@ -214,8 +220,8 @@ describe('loadSettings env overrides', () => {
 
   test('an env override above settings.json is still validated against the schema', () => {
     const settingsPath = writeSettingsJson(testDir, { port: 7000, defaults: { priority: 'p1' } })
-    expect(() => loadSettings({ path: settingsPath, env: { ZIPTASK_PORT: '-1' }, argv: [] }))
-      .toThrow(/Invalid configuration after env overrides: port: /)
+    expect(() => loadSettings({ path: settingsPath, env: { ZIPTASK_HTTP_MAX_SESSIONS: '0' }, argv: [] }))
+      .toThrow(/Invalid configuration after env overrides: http\.maxSessions: /)
     expect(() => loadSettings({ path: settingsPath, env: { ZIPTASK_DEFAULTS_PRIORITY: 'p9' }, argv: [] }))
       .toThrow(/Invalid configuration after env overrides: defaults\.priority: /)
     // the same file without a bad override still loads
@@ -295,6 +301,99 @@ describe('loadSettings env overrides', () => {
   })
 })
 
+describe('strict env int parsing', () => {
+  test('a decimal int with trailing junk is ignored, warned about, and the lower layer survives', () => {
+    // parseInt would stop at the first non-digit and read 3005: the strict pattern must refuse
+    // the whole value instead of silently reinterpreting a typo.
+    const settingsPath = writeSettingsJson(testDir, { port: 7000 })
+    const warnings: Array<{ message: string; fields: Record<string, unknown> }> = []
+    const s = loadSettings({
+      path: settingsPath,
+      env: { ZIPTASK_PORT: '3005abc' },
+      argv: [],
+      warn: (message, fields) => warnings.push({ message, fields })
+    })
+    expect(s.port).toBe(7000)
+    expect(warnings).toEqual([
+      { message: 'ignoring invalid ZIPTASK_PORT value', fields: { value: '3005abc' } }
+    ])
+  })
+
+  test('padded, fractional and letter-O values are ignored and only warned about', () => {
+    const settingsPath = writeSettingsJson(testDir, { port: 7000 })
+    for (const value of [' 42 ', '1.9', '1O0']) {
+      const warnings: string[] = []
+      const s = loadSettings({
+        path: settingsPath,
+        env: { ZIPTASK_PORT: value },
+        argv: [],
+        warn: (message) => warnings.push(message)
+      })
+      expect(s.port).toBe(7000)
+      expect(warnings).toEqual(['ignoring invalid ZIPTASK_PORT value'])
+    }
+  })
+
+  test('a plain integer and zero are accepted without a warning', () => {
+    const warnings: string[] = []
+    const env = { ZIPTASK_PORT: '0', ZIPTASK_MAX_ATTEMPTS: '42', ZIPTASK_REAP_COOLDOWN_SEC: '007' }
+    const s = loadSettings({ env, argv: [], warn: (message) => warnings.push(message) })
+    expect(s.port).toBe(0)
+    expect(s.maxAttempts).toBe(42)
+    expect(s.reapCooldownSec).toBe(7)
+    expect(warnings).toEqual([])
+  })
+})
+
+describe('strict env bool parsing', () => {
+  test('true and false are accepted in any case', () => {
+    for (const [raw, expected] of [
+      ['true', true], ['TRUE', true], ['True', true],
+      ['false', false], ['FALSE', false], ['False', false]
+    ] as const) {
+      const warnings: string[] = []
+      const s = loadSettings({
+        env: { ZIPTASK_AUDIT_LOG: raw },
+        argv: [],
+        warn: (message) => warnings.push(message)
+      })
+      expect(s.auditLog).toBe(expected)
+      expect(warnings).toEqual([])
+    }
+  })
+
+  test('ZIPTASK_AUDIT_LOG=TRUE parses, so audit stays on even over a false settings.json value', () => {
+    // a skipped override would let the file's false survive: audit staying on proves the parse
+    const settingsPath = writeSettingsJson(testDir, { auditLog: false })
+    const warnings: string[] = []
+    const s = loadSettings({
+      path: settingsPath,
+      env: { ZIPTASK_AUDIT_LOG: 'TRUE' },
+      argv: [],
+      warn: (message) => warnings.push(message)
+    })
+    expect(s.auditLog).toBe(true)
+    expect(warnings).toEqual([])
+  })
+
+  test('1, yes and empty are ignored with a warning, keeping the lower layer', () => {
+    const settingsPath = writeSettingsJson(testDir, { auditLog: false })
+    for (const value of ['1', 'yes', '']) {
+      const warnings: Array<{ message: string; fields: Record<string, unknown> }> = []
+      const s = loadSettings({
+        path: settingsPath,
+        env: { ZIPTASK_AUDIT_LOG: value },
+        argv: [],
+        warn: (message, fields) => warnings.push({ message, fields })
+      })
+      expect(s.auditLog).toBe(false)
+      expect(warnings).toEqual([
+        { message: 'ignoring invalid ZIPTASK_AUDIT_LOG value', fields: { value } }
+      ])
+    }
+  })
+})
+
 describe('ZIPTASK_LOG_LEVEL hand-off to the logger', () => {
   test('the raw invalid value reaches createLogger, which warns once and then gates at info', () => {
     const chunks: string[] = []
@@ -371,6 +470,27 @@ describe('loadSettings CLI flag', () => {
     expect(loadSettings({ env: {}, argv: ['node', '--settings', cliPath] }).port).toBe(4321)
   })
 
+  test('--settings=PATH has the same effect as the space-separated form', () => {
+    const cliPath = writeSettingsJson(testDir, { port: 4321 })
+    expect(loadSettings({ env: {}, argv: ['node', `--settings=${cliPath}`] }).port).toBe(4321)
+    expect(loadSettings({ env: {}, argv: ['node', '--settings', cliPath] }).port).toBe(4321)
+  })
+
+  test('--settings=PATH overrides env ZIPTASK_SETTINGS', () => {
+    const cliPath = writeSettingsJson(testDir, { dbPath: '/tmp/cli-equals.db' })
+    const envFile = join(testDir, 'env-equals-settings.json')
+    writeFileSync(envFile, JSON.stringify({ dbPath: '/tmp/env-equals.db' }))
+    const s = loadSettings({ env: { ZIPTASK_SETTINGS: envFile }, argv: ['node', `--settings=${cliPath}`] })
+    expect(s.dbPath).toBe('/tmp/cli-equals.db')
+  })
+
+  test('an empty or flag-like --settings= value throws instead of falling back', () => {
+    expect(() => loadSettings({ env: {}, argv: ['node', '--settings='] }))
+      .toThrow(/Missing path for --settings/)
+    expect(() => loadSettings({ env: {}, argv: ['node', '--settings=--stdio'] }))
+      .toThrow(/Missing path for --settings \(got '--stdio'\)/)
+  })
+
   test('a missing --settings path is not masked by opts.path', () => {
     const envFile = join(testDir, 'env-settings.json')
     writeFileSync(envFile, JSON.stringify({ port: 6666 }))
@@ -413,6 +533,39 @@ describe('loadSettings error cases', () => {
       expect(() => loadSettings({ path: badPath, env: {}, argv: [] }))
         .toThrow(/Invalid settings.json/)
     }
+  })
+})
+
+describe('leaseTtlMin cap', () => {
+  test('1440 in settings.json is accepted', () => {
+    const settingsPath = writeSettingsJson(testDir, { leaseTtlMin: 1440 })
+    expect(loadSettings({ path: settingsPath, env: {}, argv: [] }).leaseTtlMin).toBe(1440)
+  })
+
+  test('a settings.json leaseTtlMin above 1440 fails validation', () => {
+    const settingsPath = writeSettingsJson(testDir, { leaseTtlMin: 1441 })
+    const message = (() => {
+      try { loadSettings({ path: settingsPath, env: {}, argv: [] }); return '' } catch (e) { return (e as Error).message }
+    })()
+    expect(message).toContain('Invalid settings.json')
+    expect(message).toContain('leaseTtlMin')
+    expect(message).toContain('<=1440')
+  })
+
+  test('1440 from env is accepted', () => {
+    expect(loadSettings({ env: { ZIPTASK_LEASE_TTL_MIN: '1440' }, argv: [] }).leaseTtlMin).toBe(1440)
+  })
+
+  test('an env leaseTtlMin above 1440 fails the post-merge validation and names the key', () => {
+    expect(() => loadSettings({ env: { ZIPTASK_LEASE_TTL_MIN: '1441' }, argv: [] }))
+      .toThrow(/Invalid configuration after env overrides: leaseTtlMin: /)
+  })
+
+  test('the env cap applies on top of a valid settings.json value', () => {
+    const settingsPath = writeSettingsJson(testDir, { leaseTtlMin: 30 })
+    expect(loadSettings({ path: settingsPath, env: {}, argv: [] }).leaseTtlMin).toBe(30)
+    expect(() => loadSettings({ path: settingsPath, env: { ZIPTASK_LEASE_TTL_MIN: '1441' }, argv: [] }))
+      .toThrow(/Invalid configuration after env overrides: leaseTtlMin: /)
   })
 })
 

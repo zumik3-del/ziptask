@@ -4,7 +4,7 @@ Layered: built-in defaults → `settings.json` → environment variables (env wi
 
 ## `settings.json`
 
-An optional JSON file; `settings.example.json` shows the full shape. Every key is optional and merged over the defaults, so a partial file is valid. The framework installer seeds **`/var/lib/ziptask/settings.json`** from that example (only when the file is absent) and passes `--settings` in the systemd unit, so the service always reads it. A stdio client must pass the same path itself (the canonical one is `/var/lib/ziptask/settings.json`). That path is `DATA_DIR` — the app's config home, beside its database (ADR addendum R1, epic #1105) — not `~/.ziptask`, which is the deploy framework's own state directory. Select a file with `--settings <path>` or the `ZIPTASK_SETTINGS` env var (`--settings` wins). The shipped example sets `dbPath` to an absolute path (`/var/lib/ziptask/ziptask.db`) so stdio clients don't create the DB under their own cwd. Keys mirror the environment variables below: `dbPath`, `host`, `port`, `leaseTtlMin`, `maxAttempts`, `reapCooldownSec`, `autoClaimCeiling`, `http.maxSessions`, `http.sessionTtlMs`, `defaults.priority`, `defaults.reporter`, `defaults.listLimit`, `defaults.timelineLimit`, `defaults.queueLimit`, `logging.level`, `auditLog`.
+An optional JSON file; `settings.example.json` shows the full shape. Every key is optional and merged over the defaults, so a partial file is valid. The framework installer seeds **`/var/lib/ziptask/settings.json`** from that example (only when the file is absent), rewrites the seeded `port` and `dbPath` to the values the install resolved (`PORT` — or `--port N` — and `DATA_DIR`), and passes `--settings` in the systemd unit, so the service always reads it. An existing file is never rewritten, and it is also where the health gate reads the port from. `--dir D` moves that home to `D/data/settings.json`. Both `--port N` and `--dir D` are also persisted into the installed `~/.ziptask/scripts/app.env` (`INSTALL_DIR`, `DATA_DIR`, `EXEC_START`, `CONFIG_FILE`, `PORT`) — the file `updater.sh`/`update.sh` load on later runs — so the host keeps updating `D` and polling `N` instead of falling back to the canonical `/opt/ziptask`, `/var/lib/ziptask` and `3005`. A stdio client must pass the same path itself (the canonical one is `/var/lib/ziptask/settings.json`). That path is `DATA_DIR` — the app's config home, beside its database (ADR addendum R1, epic #1105) — not `~/.ziptask`, which is the deploy framework's own state directory. Select a file with `--settings <path>` (the `--settings=<path>` form is equivalent) or the `ZIPTASK_SETTINGS` env var (`--settings` wins). The shipped example sets `dbPath` to an absolute path (`/var/lib/ziptask/ziptask.db`) so stdio clients don't create the DB under their own cwd. Keys mirror the environment variables below: `dbPath`, `host`, `port`, `leaseTtlMin`, `maxAttempts`, `reapCooldownSec`, `autoClaimCeiling`, `http.maxSessions`, `http.sessionTtlMs`, `defaults.priority`, `defaults.reporter`, `defaults.listLimit`, `defaults.timelineLimit`, `defaults.queueLimit`, `logging.level`, `auditLog`.
 
 > **Note:** `settings.example.json` is the installer's *seeded* configuration and its values are not the built-in defaults — e.g. `port: 3005` (built-in `0` = random) and `leaseTtlMin: 45` (built-in `15`). The built-in defaults are the **Default** column of the environment table below. A partial `settings.json` is still valid and merges over those built-in defaults.
 
@@ -15,7 +15,7 @@ An optional JSON file; `settings.example.json` shows the full shape. Every key i
 | `ZIPTASK_DB` | `./data/ziptask.db` | SQLite path (directory auto-created) |
 | `ZIPTASK_HOST` | `127.0.0.1` | HTTP listen host. Binding to a non-loopback host logs a startup warning: the HTTP surface has no authentication by design, so expose it through an authenticating reverse proxy. |
 | `ZIPTASK_PORT` | `0` (random) | HTTP listen port |
-| `ZIPTASK_LEASE_TTL_MIN` | `15` | Claim lease length in minutes |
+| `ZIPTASK_LEASE_TTL_MIN` | `15` | Claim lease length in minutes, capped at `1440` (a larger value fails validation — see below) |
 | `ZIPTASK_MAX_ATTEMPTS` | `3` | Attempts before a reaped task is failed (needs human) |
 | `ZIPTASK_REAP_COOLDOWN_SEC` | `60` | Minimum seconds between lease-reap sweeps on read paths |
 | `ZIPTASK_AUTO_CLAIM_CEILING` | `10000` | Max candidate rows scanned by auto-claim |
@@ -32,7 +32,9 @@ An optional JSON file; `settings.example.json` shows the full shape. Every key i
 
 > **Legacy env var:** `ZIPTASK_LOGGING_LEVEL` is **ignored** — only `ZIPTASK_LOG_LEVEL` is read. Use `ZIPTASK_LOG_LEVEL`.
 
-After the env layer is applied, the merged result is re-validated before it is returned (`MergedSettingsSchema` and the final `safeParse`, `loadSettings`, `src/config.ts`). That splits an env mistake in two. A value that does not parse as an integer at all is ignored: the lower layer's value stays, and the caller is warned (`ignoring invalid ZIPTASK_PORT value`) — `src/index.ts` buffers those warnings until the logger exists and replays them then. A value that parses but breaks its bound (`ZIPTASK_LEASE_TTL_MIN=0`, a negative `ZIPTASK_PORT`) aborts startup with `Invalid configuration after env overrides: …`. `logging.level` stays a bare `string` in that merged schema, so a bad level still reaches the logger rather than aborting here.
+After the env layer is applied, the merged result is re-validated before it is returned (`MergedSettingsSchema` and the final `safeParse`, `loadSettings`, `src/config.ts`). Parsing is strict on purpose, so a typo cannot be reinterpreted: an `int` variable must match `^\d+$` **on the raw value** (no sign, decimal point or surrounding whitespace), and a `bool` variable accepts exactly `true`/`false` in any case — `1`, `yes` and the empty string are refused rather than guessed. A value that fails its type is ignored: the lower layer's value stays, and the caller is warned (`ignoring invalid ZIPTASK_PORT value`, with the offending value in the record) — `src/index.ts` buffers those warnings until the logger exists and replays them then. A value that parses but breaks its bound (`ZIPTASK_LEASE_TTL_MIN=0`, a `leaseTtlMin` above its cap) aborts startup with `Invalid configuration after env overrides: …`; a value that never parses is only warned about and dropped, so a signed or decimal `ZIPTASK_PORT` (`-1`, `1.5`) leaves the lower layer's port in place instead of aborting. The same bad number in `settings.json` does abort — that layer is a schema, so a negative `port` there throws `Invalid settings.json: …`. `logging.level` stays a bare `string` in that merged schema, so a bad level still reaches the logger rather than aborting here.
+
+`leaseTtlMin` — in `settings.json`, in `ZIPTASK_LEASE_TTL_MIN` and as the `claim_task` `lease_ttl_min` argument — is capped at **1440 minutes** (`MAX_LEASE_TTL_MIN`). A larger value is refused, never clamped: the settings layers fail validation (`Invalid settings.json: …` / `Invalid configuration after env overrides: leaseTtlMin: Too big: expected number to be <=1440`), and an explicit `lease_ttl_min` on a claim is refused with `INVALID: lease_ttl_min too large`. The cap covers the configured default too: the settings layers refuse an over-cap value before a service exists (so the process exits at startup, see above), and `resolveOptions` (`src/core/service.ts`) refuses it again when `TaskService` is constructed. Every lease the server hands out without an explicit TTL — the claim default and each `update_status` renewal alike — is computed from that validated value, so no renewal can outlive the cap.
 
 **There is deliberately no project key in either layer**: no `project` in `settings.json` and no `ZIPTASK_PROJECT`. The project slug is a required per-call argument on the enumerating tools ([Projects and scope](mcp-tools.md#projects-and-scope)), so an install cannot silently widen or narrow every call from config — the failure is a loud `INVALID: project required`.
 
@@ -68,18 +70,26 @@ bash ~/.ziptask/scripts/updater.sh
 bash ~/.ziptask/scripts/updater.sh --version v0.5.4
 ```
 
+`~/.ziptask/scripts/` is root-owned (`app.env` is `0640 root:<service-group>`, helpers and hooks `0750`): the service account and the operator can read and execute it, only root can change it — edit `app.env` with `sudoedit`. The service account must be a member of the service group, or the pre-update hook cannot read `app.env`.
+
 `update.sh` (staged by the updater, also usable directly) downloads the release tarball, verifies it, keeps the previous payload as `<file>.prev` for a no-git rollback, swaps it in, re-renders the systemd unit and waits for `/health`. **Before the swap, the `pre-update` hook creates an online SQLite backup** of the database named by `settings.json` `dbPath` via `sqlite3 .backup`, next to the database in `<db>.backup/`; an existing database that cannot be backed up aborts the update, so code is never swapped without a copy. The printed backup path is the restore point. On a health-check failure the update prints the exact `.prev` move-back and `sqlite3` restore commands — restoring the database is mandatory, because migrations are append-only. A health check that never gets an answer is reported UNVERIFIED rather than failed, and nothing is rolled back for a silence.
 
 The hook finds `settings.json` at `${DATA_DIR}/settings.json` first — the same path `EXEC_START` passes to `--settings`, so the file the service reads and the file the hook reads `dbPath` from are one path. `~/.ziptask/scripts/` and `/opt/ziptask/` are still searched after it, so an install that has not moved its config yet keeps working.
 
 ### Rollback: moving `settings.json` back out of `DATA_DIR`
 
-Nothing under `DATA_DIR` is touched by a payload swap, so reverting the config move is a `cp` and a re-render — no database restore is involved, and no code change:
+Nothing under `DATA_DIR` is touched by a payload swap, so reverting the config move is a copy into `~/.ziptask/scripts/` and a re-render — no database restore is involved, and no code change. The destination is root-owned, so the copy needs `sudo` (as does any other write into `~/.ziptask/scripts/`):
 
 ```bash
 sudo systemctl stop ziptask
-cp -p /var/lib/ziptask/settings.json ~/.ziptask/scripts/settings.json
-# set EXEC_START in ~/.ziptask/scripts/app.env back to
+# `install`, not `cp -p`: `-p` preserves the source owner and mode, and this copy
+# must be root-owned — the pre-update hook runs as root and reads `dbPath` from
+# it, so a service-owned copy would let the service account steer a root-run
+# `sqlite3 .backup` at a path of its choosing.
+sudo install -m 0640 -o root -g <service-group> \
+  /var/lib/ziptask/settings.json ~/.ziptask/scripts/settings.json
+# edit EXEC_START in ~/.ziptask/scripts/app.env back to (root-owned 0640, so
+# use sudoedit):
 #   /opt/ziptask/ziptask --settings /home/opencode/.ziptask/scripts/settings.json
 sudo systemctl daemon-reload && sudo systemctl start ziptask
 curl -s http://127.0.0.1:3005/health   # {"ok":true}

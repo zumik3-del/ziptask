@@ -273,6 +273,10 @@ describe('MCP schema guards (#431)', () => {
   const taskCount = (): number =>
     (srv.db.query('SELECT COUNT(*) AS n FROM tasks').get() as { n: number }).n
 
+  // A dependency must exist, so a boundary list of ids is seeded with real rows.
+  const seedDeps = (count: number): number[] =>
+    Array.from({ length: count }, (_, i) => getId(srv.svc.createTask({ title: `Dep ${i}`, reporter: 'dev' })))
+
   test('updated_since out of zod range is rejected by MCP layer', async () => {
     const tooHigh = await client.callTool({
       name: 'list_tasks',
@@ -322,7 +326,7 @@ describe('MCP schema guards (#431)', () => {
 
     const good = await client.callTool({
       name: 'create_task',
-      arguments: { title: 'Valid dep', reporter: 'dev', depends_on: [999], project: 'test' }
+      arguments: { title: 'Valid dep', reporter: 'dev', depends_on: [getId(srv.svc.createTask({ title: 'Dep', reporter: 'dev' }))], project: 'test' }
     })
     expect(good.isError).toBeUndefined()
   })
@@ -338,6 +342,33 @@ describe('MCP schema guards (#431)', () => {
     // (" at description"), so the assertion pins the documented part, not the SDK suffix.
     expect(textOf(res)).toContain('Invalid arguments for tool create_task: INVALID: description too long')
     expect(taskCount()).toBe(before)
+  })
+
+  test('claim_task refuses a lease_ttl_min above 1440 on the wire and accepts 1440 (#2243)', async () => {
+    const id = getId(srv.svc.createTask({ title: 'Lease cap', reporter: 'dev' }))
+    const tooHigh: any = await client.callTool({
+      name: 'claim_task',
+      arguments: { agent: 'tester', task_id: id, lease_ttl_min: 1441 }
+    })
+    expect(tooHigh.isError).toBe(true)
+    expect(textOf(tooHigh)).toContain('Invalid arguments for tool claim_task: INVALID: lease_ttl_min too large')
+    // Refused at the schema, so the row is untouched.
+    const row = srv.db.query('SELECT status, assignee FROM tasks WHERE id = ?').get(id) as any
+    expect(row).toMatchObject({ status: 'queued', assignee: null })
+
+    const huge: any = await client.callTool({
+      name: 'claim_task',
+      arguments: { agent: 'tester', task_id: id, lease_ttl_min: Number.MAX_SAFE_INTEGER }
+    })
+    expect(huge.isError).toBe(true)
+    expect(textOf(huge)).toContain('Invalid arguments for tool claim_task: INVALID: lease_ttl_min too large')
+
+    const atCap: any = await client.callTool({
+      name: 'claim_task',
+      arguments: { agent: 'tester', task_id: id, lease_ttl_min: 1440 }
+    })
+    expect(atCap.isError).toBeUndefined()
+    expect(JSON.parse(textOf(atCap))).toMatchObject({ id, lease_ttl_min: 1440 })
   })
 
   test('create_task accepts a description exactly at the limit on the wire (#1857)', async () => {
@@ -368,7 +399,7 @@ describe('MCP schema guards (#431)', () => {
   })
 
   test('create_task accepts a depends_on array exactly at the limit on the wire (#1857)', async () => {
-    const deps = Array.from({ length: MAX_DEPENDS_ON }, (_, i) => 9000 + i)
+    const deps = seedDeps(MAX_DEPENDS_ON)
     const res: any = await client.callTool({
       name: 'create_task',
       arguments: { title: 'Max deps', reporter: 'dev', depends_on: deps, project: 'test' }

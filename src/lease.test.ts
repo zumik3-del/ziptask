@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { isValidTransition, monotonicNowMs } from './core/tasks'
+import { isValidTransition, monotonicNowMs, MAX_LEASE_TTL_MIN } from './core/tasks'
+import { DEFAULT_LEASE_TTL_MIN } from './defaults'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { formatError } from './core/result'
@@ -1017,5 +1018,103 @@ describe('review → in_progress: work sent back takes the lease', () => {
     const queued = createDepTask('StillQueued', [dep])
     expect(text(handleUpdateStatus(svc, { id: queued, agent: 'reviewer', status: 'in_progress', version: versionOf(queued) })))
       .toBe('BLOCKED: dependencies not satisfied')
+  })
+})
+
+describe('lease TTL cap (#2243)', () => {
+  test('the service refuses a TTL above 1440 minutes and writes nothing', () => {
+    const id = createTaskRow('TooLong')
+    const res = svc.claimTask({ agent: HOLDER, taskId: id, leaseTtlMin: 1441 })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(formatError(res.error)).toBe('INVALID: lease_ttl_min too large')
+    expect(row(id).status).toBe('queued')
+    expect(row(id).assignee).toBeNull()
+    expect(row(id).lease_expires_at).toBeNull()
+  })
+
+  test('1440 minutes is the cap and is accepted', () => {
+    const id = createTaskRow('AtCap')
+    const res = svc.claimTask({ agent: HOLDER, taskId: id, leaseTtlMin: 1440 })
+    if (!res.ok) throw new Error(formatError(res.error))
+    expect(res.data.leaseTtlMin).toBe(1440)
+    expect(row(id).status).toBe('in_progress')
+    expect(row(id).assignee).toBe(HOLDER)
+    const remainingMin = (leaseMs(id) - monotonicNowMs()) / 60_000
+    expect(remainingMin).toBeGreaterThan(1439)
+    expect(remainingMin).toBeLessThanOrEqual(1440)
+  })
+
+  test('a huge TTL is refused instead of throwing RangeError', () => {
+    const id = createTaskRow('Huge')
+    // Before the cap, now + ttl was an invalid Date, so claimTask threw RangeError instead of failing.
+    expect(() => svc.claimTask({ agent: HOLDER, taskId: id, leaseTtlMin: Number.MAX_SAFE_INTEGER })).not.toThrow()
+    const res = svc.claimTask({ agent: HOLDER, taskId: id, leaseTtlMin: Number.MAX_SAFE_INTEGER })
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(formatError(res.error)).toBe('INVALID: lease_ttl_min too large')
+    expect(row(id).status).toBe('queued')
+    expect(row(id).lease_expires_at).toBeNull()
+  })
+})
+
+describe('construction-time lease cap (#2257)', () => {
+  test('a configured TTL above the cap throws at construction and names the cap', () => {
+    expect(() => new TaskService(repo, { leaseTtlMin: MAX_LEASE_TTL_MIN + 1, scope: 'test' }))
+      .toThrow(`MAX_LEASE_TTL_MIN (${MAX_LEASE_TTL_MIN})`)
+  })
+
+  test('the cap itself constructs and its claims use the configured TTL', () => {
+    const atCap = new TaskService(repo, { leaseTtlMin: MAX_LEASE_TTL_MIN, scope: 'test' })
+    const id = createTaskRow('AtCapCtor')
+    const res = atCap.claimTask({ agent: HOLDER, taskId: id })
+    if (!res.ok) throw new Error(formatError(res.error))
+    expect(res.data.leaseTtlMin).toBe(MAX_LEASE_TTL_MIN)
+  })
+
+  test('the default TTL constructs and its claims use the default', () => {
+    const defaults = new TaskService(repo, { scope: 'test' })
+    const id = createTaskRow('DefaultCtor')
+    const res = defaults.claimTask({ agent: HOLDER, taskId: id })
+    if (!res.ok) throw new Error(formatError(res.error))
+    expect(res.data.leaseTtlMin).toBe(DEFAULT_LEASE_TTL_MIN)
+  })
+})
+
+describe('renewal lease under an injected clock (#2257)', () => {
+  const MINUTE = 60_000
+  const INJECTED_MS = Date.parse('2020-01-01T00:00:00.000Z')
+
+  // A clock the test moves by hand, so the renewal window is observed exactly instead of within a
+  // tolerance: a service reading the wall clock here would land years off the injected deadline.
+  const renewable = (leaseTtlMin: number) => {
+    let now = INJECTED_MS
+    const clocked = new TaskService(repo, { leaseTtlMin, scope: 'test', clock: { nowMs: () => now } })
+    const id = createTaskRow(`Renewable${leaseTtlMin}`)
+    const claimed = clocked.claimTask({ agent: HOLDER, taskId: id })
+    if (!claimed.ok) throw new Error(formatError(claimed.error))
+    return { svc: clocked, id, advance: (ms: number) => { now += ms }, nowMs: () => now }
+  }
+
+  test('a renewal recomputes lease_expires_at from the injected now + the configured TTL', () => {
+    const r = renewable(30)
+    r.advance(5 * MINUTE)
+    const before = row(r.id)
+    expect(before.status).toBe('in_progress')
+
+    const res = handleUpdateStatus(r.svc, { id: r.id, agent: HOLDER, status: 'in_progress', renew: true, version: before.version })
+    expect(res.isError).toBeUndefined()
+    expect(row(r.id).lease_expires_at).toBe(new Date(r.nowMs() + 30 * MINUTE).toISOString())
+  })
+
+  test('a renewal at the cap lands exactly on now + MAX_LEASE_TTL_MIN, never beyond', () => {
+    const r = renewable(MAX_LEASE_TTL_MIN)
+    r.advance(5 * MINUTE)
+    const before = row(r.id)
+
+    const res = handleUpdateStatus(r.svc, { id: r.id, agent: HOLDER, status: 'in_progress', renew: true, version: before.version })
+    expect(res.isError).toBeUndefined()
+    const lease = leaseMs(r.id)
+    expect(lease).toBe(r.nowMs() + MAX_LEASE_TTL_MIN * MINUTE)
+    expect(lease).toBeLessThanOrEqual(r.nowMs() + MAX_LEASE_TTL_MIN * MINUTE)
   })
 })

@@ -28,9 +28,26 @@ sudo bash deploy/install.sh --version v0.5.4
 
 Canonical layout: binary in `/opt/ziptask`, database **and** `settings.json` in
 `/var/lib/ziptask/`, deploy state (helpers, hooks, `app.env`) in `~/.ziptask/`.
-Override with `--dir`, `--port`, `--version` and `--no-service`;
-`bash deploy/install.sh --help` lists them all. `updater.sh` and
-`uninstall.sh` are installed into `~/.ziptask/scripts/`.
+`--port N` seeds a fresh `settings.json` with `port: N` and points the health
+check at it (an existing file is never rewritten); `--dir D` moves the payload,
+the config and the database under `D` (config at `D/data/settings.json`) while
+the deploy state stays in `~/.ziptask/`; `--version` pins a release and
+`--no-service` skips systemd — `bash deploy/install.sh --help` lists them all.
+Both `--dir` and `--port` are also persisted into the installed
+`~/.ziptask/scripts/app.env` (`INSTALL_DIR`, `DATA_DIR`, `EXEC_START`,
+`CONFIG_FILE`, `PORT`) — the file `updater.sh` and `update.sh` reload — so later
+updates keep using `D` and `N` instead of the canonical `/opt/ziptask` and
+`3005`. A repeat install with the same flags rewrites nothing.
+
+The deploy state is root-owned (`app.env` is `0640 root:<service-group>`,
+directories and helper scripts `0750`), so the service account and the account
+that runs the update must be in that group. `updater.sh` and `uninstall.sh` are
+installed into `~/.ziptask/scripts/`. Every entry point — `install.sh`,
+`update.sh`, `uninstall.sh` and `updater.sh` — screens `~/.ziptask`, `scripts/`,
+`hooks/` and `scripts/app.env` and aborts before changing anything if one of them
+is a symlink (dangling included): `cp`, `chown`, `chmod`, `source` and `bash` all
+dereference, so a planted link would retarget the work at an arbitrary path.
+Inspect the link, remove it, re-run.
 
 The layout, the unit policy and the per-app `app.env` keys are shared with
 synaptomind and subagentix and documented once, in
@@ -43,9 +60,17 @@ Prebuilt release binaries target Linux x86_64 only. On other platforms (macOS, a
 When systemd is detected and running, the installer renders
 `/etc/systemd/system/ziptask.service` from the framework's unit template
 (`Restart=always`, a bounded `TimeoutStopSec`, and the usual hardening) and
-starts it. The unit runs as `opencode` — the `SERVICE_USER` in
-[`deploy/app.env`](deploy/app.env), which wins over `SUDO_USER`; edit that file
-before installing to run under another account. Manage it with:
+starts it. The unit runs as the invoking account — `SUDO_USER` when the install
+went through `sudo` — unless `SERVICE_USER` in
+[`deploy/app.env`](deploy/app.env) names another one: it wins over `SUDO_USER`,
+and a name that does not exist on the host aborts the install before anything is
+written. A shell that is root without `SUDO_USER` (a container, `su -`,
+`docker exec -u root`) has no invoking account to inherit: the installer warns,
+names `SERVICE_USER`, and continues with a root-run unit — set `SERVICE_USER`
+(or install through `sudo` from that account) to keep the service unprivileged;
+`SERVICE_USER=root` is the explicit way to say root is intended. Set it (plus
+`SERVICE_GROUP` when the group is not the account's own) to run under a
+dedicated account. Manage it with:
 
 ```bash
 sudo systemctl start ziptask
@@ -125,16 +150,9 @@ bun test               # unit tests (per-test temp DBs)
 bunx tsc --noEmit      # type check
 bun run lint           # biome check src/ scripts/
 bun run src/smoke.ts   # MCP end-to-end over HTTP (ephemeral port + temp DB)
-bun run changelog      # rebuild CHANGELOG.md from git tags (maintainers; clean tree required; prints next steps to commit/push manually)
 ```
 
-The changelog script only regenerates `CHANGELOG.md`; it does not commit or push. After running it, commit and push manually:
-
-```bash
-git add CHANGELOG.md
-git commit -m "docs: update CHANGELOG.md"
-git push
-```
+`CHANGELOG.md` is a short pointer to the current release, updated by hand at release time; the per-release notes are generated on GitHub from the merge commits. There is no changelog script — `release.yml` creates the tag and the Release on `main`.
 
 ## Documentation
 

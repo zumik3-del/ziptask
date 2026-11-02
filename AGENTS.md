@@ -41,7 +41,7 @@ Sources of truth: the wire protocol in `src/mcp/instructions.md`, the domain rul
 ## 8. Known pitfalls
 - Do not reintroduce webhooks/Redis/Hono — rejected (pull model, MCP-only).
 - Old v1 DBs are schema-incompatible — delete, do not migrate.
-- Re-parenting between epics has no API tool (`epic_id` is immutable): use the SQL recipe in `docs/epics.md`; verify the target is a non-terminal, non-sub-task epic and leave `version` untouched.
+- Re-parenting between epics has no API tool (`epic_id` is immutable): use the SQL recipe in `docs/epics.md`; verify the target is a non-terminal, non-sub-task epic and bump `version = version + 1` in the same statement, so a stale client version cannot match a row whose `epic_id` moved.
 
 ## 9. Delegation map
 Roles and handoff rules live in the global `AGENTS.md` (`~/.config/opencode/AGENTS.md`); the only project-specific part is §3 — the canonical commands each role verifies against.

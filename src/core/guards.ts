@@ -1,7 +1,7 @@
 import type { Task, TaskStatus } from './tasks'
 import { isValidTransition, TERMINAL_STATUSES, EDITABLE_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_CONTENT_LENGTH, MAX_DEPENDS_ON, normalizePriority, PRIORITY_INVALID_MESSAGE } from './tasks'
 import type { TaskStore, SvcError } from './types'
-import { parseDeps, depsSatisfied } from './deps'
+import { parseDeps, depsSatisfied, collapseDeps } from './deps'
 import { requiredError, tooLongError, optionalFieldError, epicError } from './validation'
 import { RESERVED_PROJECT_SLUG } from './project-slug'
 
@@ -104,7 +104,12 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   if (assigneeErr) return assigneeErr
   const descriptionErr = optionalFieldError(args.description, MAX_DESCRIPTION_LENGTH, 'description')
   if (descriptionErr) return descriptionErr
-  const deps = args.depends_on ?? []
+  if (args.depends_on !== undefined && !Array.isArray(args.depends_on)) {
+    return { code: 'INVALID', message: 'invalid depends_on' }
+  }
+  // Duplicates collapse before every check, so the limit counts distinct ids. The guard only reads
+  // this local: the stored list is the service's own normalized copy.
+  const deps = args.depends_on === undefined ? [] : collapseDeps(args.depends_on)
   if (deps.length > MAX_DEPENDS_ON) return { code: 'INVALID', message: 'depends_on too long' }
   if (args.epic && args.epic_id !== undefined) return { code: 'INVALID', message: 'epic cannot have a parent epic' }
   if (args.epic && deps.length > 0) return { code: 'INVALID', message: 'epic cannot have depends_on' }
@@ -130,9 +135,11 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   if (args.projectArchived) return { code: 'INVALID', message: `project '${args.project}' is archived` }
   if (deps.length > 0) {
     const batch = store.batchTasks(deps)
-    for (const [d, t] of batch) {
-      if (t?.is_epic) return { code: 'INVALID', message: `dependencies on epic tasks not allowed (#${d})` }
-      if (t && t.project !== args.project) {
+    for (const d of deps) {
+      const t = batch.get(d)
+      if (!t) return { code: 'INVALID', message: `dependency #${d} not found` }
+      if (t.is_epic) return { code: 'INVALID', message: `dependencies on epic tasks not allowed (#${d})` }
+      if (t.project !== args.project) {
         return { code: 'INVALID', message: `dependency #${d} belongs to project '${t.project ?? ''}'` }
       }
     }
@@ -268,13 +275,20 @@ export function updateTaskGuard(args: UpdateTaskInput, task: Task, store: GuardS
     }
   }
   if (args.depends_on !== undefined) {
-    if (!Array.isArray(args.depends_on)) return { code: 'INVALID', message: 'depends_on too long' }
-    if (args.depends_on.length > MAX_DEPENDS_ON) return { code: 'INVALID', message: 'depends_on too long' }
-    if (task.is_epic) return { code: 'INVALID', message: 'an epic cannot have depends_on' }
-    const batch = store.batchTasks(args.depends_on)
-    for (const [d, t] of batch) {
-      if (t?.is_epic) return { code: 'INVALID', message: `dependencies on epic tasks not allowed (#${d})` }
-      if (t && t.project !== task.project) {
+    if (!Array.isArray(args.depends_on)) return { code: 'INVALID', message: 'invalid depends_on' }
+    const deps = collapseDeps(args.depends_on)
+    if (deps.length > MAX_DEPENDS_ON) return { code: 'INVALID', message: 'depends_on too long' }
+    // An epic's stored list is always empty, so a caller who sends the same empty list changes
+    // nothing and is answered with the ordinary no-op rather than a refusal.
+    if (task.is_epic && (deps.length > 0 || parseDeps(task.depends_on).length > 0)) {
+      return { code: 'INVALID', message: 'an epic cannot have depends_on' }
+    }
+    const batch = store.batchTasks(deps)
+    for (const d of deps) {
+      const t = batch.get(d)
+      if (!t) return { code: 'INVALID', message: `dependency #${d} not found` }
+      if (t.is_epic) return { code: 'INVALID', message: `dependencies on epic tasks not allowed (#${d})` }
+      if (t.project !== task.project) {
         return { code: 'INVALID', message: `dependency #${d} belongs to project '${t.project ?? ''}'` }
       }
     }

@@ -1,8 +1,8 @@
 import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, Clock } from './tasks'
 import { createHash } from 'node:crypto'
-import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, asClock, normalizePriority, PRIORITY_INVALID_MESSAGE, codePointLength } from './tasks'
+import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, MAX_LEASE_TTL_MIN, LEASE_TTL_TOO_LARGE_MESSAGE, asClock, normalizePriority, PRIORITY_INVALID_MESSAGE, codePointLength } from './tasks'
 import type { CommentRow, LifecycleStore, ProjectListItem, ProjectRow, ProjectStore, QueryStore, TaskServiceStore, TimelineRow, SvcResult, SvcError, UpdateStatusData, UpdateTaskData } from './types'
-import { parseDeps, createsCycle, blockingDeps } from './deps'
+import { parseDeps, createsCycle, blockingDeps, collapseDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
 import { LeaseReaper } from './reaper'
@@ -52,8 +52,15 @@ export type TaskServiceOptions = {
 type ResolvedOptions = Required<Omit<TaskServiceOptions, 'scope' | 'clock'>> & Pick<TaskServiceOptions, 'scope'> & { clock: Clock | null }
 
 function resolveOptions(opts: TaskServiceOptions): ResolvedOptions {
+  // The lease cap is enforced once, at construction: every lease this service hands out without an
+  // explicit TTL — the claim default and every update_status lease/renewal — is then provably within
+  // the cap, so the renewal path cannot outlive it.
+  const leaseTtlMin = opts.leaseTtlMin ?? DEFAULT_LEASE_TTL_MIN
+  if (leaseTtlMin > MAX_LEASE_TTL_MIN) {
+    throw new Error(`leaseTtlMin ${leaseTtlMin} exceeds MAX_LEASE_TTL_MIN (${MAX_LEASE_TTL_MIN})`)
+  }
   return {
-    leaseTtlMin: opts.leaseTtlMin ?? DEFAULT_LEASE_TTL_MIN,
+    leaseTtlMin,
     maxAttempts: opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
     auditLog: opts.auditLog ?? DEFAULT_AUDIT_LOG,
     reapCooldownSec: opts.reapCooldownSec ?? DEFAULT_REAP_COOLDOWN_SEC,
@@ -145,7 +152,11 @@ export class TaskLifecycleService {
   createTask(args: CreateTaskArgs): SvcResult<{ id: number; status: CreatedTaskStatus }> {
     const project = this.projects.resolve(args.project)
     if (!project.ok) return fail(project.error)
-    const guard = this._createTaskGuard(args, project.data)
+    // Normalize before the guard: the guard refuses malformed input but never rewrites the caller's
+    // array, so this local is both the list the guard validates and the list the row stores. A
+    // non-array is handed over untouched — the guard owns that refusal.
+    const dependsOn = Array.isArray(args.depends_on) ? collapseDeps(args.depends_on) : args.depends_on
+    const guard = this._createTaskGuard({ ...args, depends_on: dependsOn }, project.data)
     if (guard) return fail(guard)
     // The priority is normalized here, not at the schema: the row carries the canonical "pN"
     // string, and the queue order is a lexicographic sort of that column. A value outside the
@@ -153,7 +164,7 @@ export class TaskLifecycleService {
     // absent priority takes the default — a null or any other unusable value is refused.
     const priority = normalizePriority(args.priority === undefined ? this.opts.defaultPriority : args.priority)
     if (priority === null) return fail({ code: 'INVALID', message: PRIORITY_INVALID_MESSAGE })
-    const deps = args.depends_on ?? []
+    const deps = dependsOn ?? []
     const reporter = args.reporter ?? this.opts.defaultReporter
     const now = this._nowIso()
     const epicId = args.epic_id ?? null
@@ -214,6 +225,11 @@ export class TaskLifecycleService {
   claimTask(args: ClaimTaskArgs): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> {
     const agentErr = agentError(args.agent)
     if (agentErr) return fail(agentErr)
+    // A per-claim TTL never passes through resolveOptions, so it is checked here; the configured
+    // default was validated at construction. The cap refuses instead of clamping, so a caller never
+    // believes it holds a lease the server shortened.
+    const leaseTtlMin = args.leaseTtlMin ?? this.opts.leaseTtlMin
+    if (leaseTtlMin > MAX_LEASE_TTL_MIN) return fail('INVALID', LEASE_TTL_TOO_LARGE_MESSAGE)
     let projectId: number | undefined
     if (args.taskId === undefined) {
       const project = this.projects.resolve(args.project)
@@ -242,7 +258,6 @@ export class TaskLifecycleService {
     const claimedTask = task
 
     const now = this._nowIso()
-    const leaseTtlMin = args.leaseTtlMin ?? this.opts.leaseTtlMin
     const leaseUntil = this._leaseUntil(leaseTtlMin)
     return this.store.transaction((): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> => {
       const changes = this.store.markClaimed(claimedTask.id, claimedTask.version, args.agent, leaseUntil, now)
@@ -284,7 +299,11 @@ export class TaskLifecycleService {
     }
     const task = this.store.getTaskRow(args.id)
     if (!task) return fail('NOT_FOUND')
-    const guard = updateTaskGuard(args, task, this.store)
+    // Normalize before the guard (which validates but never rewrites the caller's array), so the
+    // stored JSON, the change test and the cycle check all see the same deduped list. A non-array is
+    // handed over untouched — the guard owns that refusal.
+    const dependsOn = Array.isArray(args.depends_on) ? collapseDeps(args.depends_on) : args.depends_on
+    const guard = updateTaskGuard({ ...args, depends_on: dependsOn }, task, this.store)
     if (guard) return fail(guard)
 
     // Normalize the patch and compute the effective (changed) subset.
@@ -307,8 +326,8 @@ export class TaskLifecycleService {
         newPriority = np
       }
     }
-    if (args.depends_on !== undefined) {
-      const newDeps = JSON.stringify(args.depends_on)
+    if (dependsOn !== undefined) {
+      const newDeps = JSON.stringify(dependsOn)
       if (newDeps !== task.depends_on) {
         changed.push('depends_on')
         patch.dependsOn = newDeps
@@ -324,8 +343,8 @@ export class TaskLifecycleService {
 
     const now = this._nowIso()
     return this.store.transaction((): SvcResult<UpdateTaskData> => {
-      if (changed.includes('depends_on') && args.depends_on !== undefined) {
-        if (createsCycle((depId) => this.store.depsOf(depId), args.id, args.depends_on)) {
+      if (changed.includes('depends_on') && dependsOn !== undefined) {
+        if (createsCycle((depId) => this.store.depsOf(depId), args.id, dependsOn)) {
           return fail('CYCLE', 'dependency graph contains a cycle')
         }
       }
@@ -347,7 +366,7 @@ export class TaskLifecycleService {
           } else if (field === 'priority') {
             this.store.auditAppend(args.id, args.agent, 'update_task:priority', task.priority, newPriority)
           } else if (field === 'depends_on') {
-            this.store.auditAppend(args.id, args.agent, 'update_task:depends_on', task.depends_on, JSON.stringify(args.depends_on))
+            this.store.auditAppend(args.id, args.agent, 'update_task:depends_on', task.depends_on, JSON.stringify(dependsOn))
           } else if (field === 'description') {
             this.store.auditAppend(args.id, args.agent, 'update_task:description', this._digestDescription(task.description), this._digestDescription(args.description ?? null))
           }
