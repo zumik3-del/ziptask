@@ -8,7 +8,7 @@ import {
   DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT, DEFAULT_LOG_LEVEL, DEFAULT_AUDIT_LOG,
   LEVELS
 } from './defaults'
-import { isTaskPriorityInput, normalizePriority, PRIORITY_INVALID_MESSAGE } from './core/tasks'
+import { isTaskPriorityInput, normalizePriority, PRIORITY_INVALID_MESSAGE, MAX_LEASE_TTL_MIN } from './core/tasks'
 
 // The configured default accepts the same shapes as create_task (the canonical "pN", the number N
 // and the digit string "N"): the normalizer in src/core/tasks.ts is the one mapping, and the
@@ -46,7 +46,7 @@ const boundaries = {
   dbPath: z.string(),
   host: z.string(),
   port: z.number().int().nonnegative(),
-  leaseTtlMin: z.number().int().positive(),
+  leaseTtlMin: z.number().int().positive().max(MAX_LEASE_TTL_MIN),
   maxAttempts: z.number().int().positive(),
   reapCooldownSec: z.number().int().positive(),
   autoClaimCeiling: z.number().int().positive(),
@@ -119,11 +119,20 @@ export const ENV_MAPPINGS: EnvMapping[] = [
   { env: 'ZIPTASK_AUDIT_LOG', path: 'auditLog', type: 'bool' },
 ]
 
-function parseValue(raw: string, type: EnvType): string | number | boolean {
+// Strict on purpose: a value of the wrong shape is a typo, and reinterpreting it would change
+// behaviour silently (parseInt stops at the first non-digit, a bare boolean test turns every other
+// string into false). The caller warns and drops the override instead.
+const INT_VALUE_PATTERN = /^\d+$/
+
+function parseValue(raw: string, type: EnvType): string | number | boolean | undefined {
   switch (type) {
     case 'string': return raw
-    case 'int': return parseInt(raw, 10)
-    case 'bool': return raw === 'true'
+    case 'int': return INT_VALUE_PATTERN.test(raw) ? parseInt(raw, 10) : undefined
+    // true/false are the same words in any case; `1`/`yes`/empty stay invalid instead of being guessed.
+    case 'bool': {
+      const value = raw.toLowerCase()
+      return value === 'true' ? true : value === 'false' ? false : undefined
+    }
   }
 }
 
@@ -133,16 +142,31 @@ function formatIssues(error: z.ZodError): string {
     .join('; ')
 }
 
-// A bare `--settings` (no next argv, or a flag-like next argv) is a user mistake: returning
-// undefined here would silently fall back to ZIPTASK_SETTINGS/defaults.
+// A bare `--settings` (no next argv, or a flag-like next argv) and the equals form with an empty
+// or flag-like value are user mistakes: returning undefined here would silently fall back to
+// ZIPTASK_SETTINGS/defaults.
+const SETTINGS_FLAG = '--settings'
+const SETTINGS_FLAG_PREFIX = `${SETTINGS_FLAG}=`
+
+function missingSettingsPath(value: string | undefined): Error {
+  return new Error(`Missing path for --settings${value ? ` (got '${value}')` : ''}`)
+}
+
 function settingsPathFromArgv(argv: string[]): string | undefined {
-  const i = argv.indexOf('--settings')
-  if (i === -1) return undefined
-  const value = argv[i + 1]
-  if (!value || value.startsWith('-')) {
-    throw new Error(`Missing path for --settings${value ? ` (got '${value}')` : ''}`)
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    let value: string | undefined
+    if (arg === SETTINGS_FLAG) {
+      value = argv[i + 1]
+    } else if (arg.startsWith(SETTINGS_FLAG_PREFIX)) {
+      value = arg.slice(SETTINGS_FLAG_PREFIX.length)
+    } else {
+      continue
+    }
+    if (!value || value.startsWith('-')) throw missingSettingsPath(value)
+    return value
   }
-  return value
+  return undefined
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -252,8 +276,8 @@ export function loadSettings(opts?: {
     const raw = env[envName]
     if (raw === undefined) continue
     const value = parseValue(raw, type)
-    if (typeof value === 'number' && Number.isNaN(value)) {
-      // A typo in an int env var must not silently vanish: keep the previous value
+    if (value === undefined) {
+      // A typo in an env var must not silently vanish: keep the previous value
       // (settings.json or default) but surface the ignored override to the caller's logger.
       opts?.warn?.(`ignoring invalid ${envName} value`, { value: raw })
       continue

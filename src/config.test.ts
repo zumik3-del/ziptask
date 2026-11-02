@@ -182,9 +182,15 @@ describe('loadSettings env overrides', () => {
     ])
   })
 
-  test('a parsed but out-of-range int env value is refused, not warned and skipped', () => {
-    expect(() => loadSettings({ env: { ZIPTASK_PORT: '-1' }, argv: [] }))
-      .toThrow(/Invalid configuration after env overrides: port: /)
+  test('a negative int env value is ignored like any other non-decimal, not applied', () => {
+    const warnings: string[] = []
+    const s = loadSettings({
+      env: { ZIPTASK_PORT: '-1' },
+      argv: [],
+      warn: (message) => warnings.push(message)
+    })
+    expect(s.port).toBe(DEFAULTS.port)
+    expect(warnings).toEqual(['ignoring invalid ZIPTASK_PORT value'])
   })
 
   test('every non-positive int env var is refused and named', () => {
@@ -214,8 +220,8 @@ describe('loadSettings env overrides', () => {
 
   test('an env override above settings.json is still validated against the schema', () => {
     const settingsPath = writeSettingsJson(testDir, { port: 7000, defaults: { priority: 'p1' } })
-    expect(() => loadSettings({ path: settingsPath, env: { ZIPTASK_PORT: '-1' }, argv: [] }))
-      .toThrow(/Invalid configuration after env overrides: port: /)
+    expect(() => loadSettings({ path: settingsPath, env: { ZIPTASK_HTTP_MAX_SESSIONS: '0' }, argv: [] }))
+      .toThrow(/Invalid configuration after env overrides: http\.maxSessions: /)
     expect(() => loadSettings({ path: settingsPath, env: { ZIPTASK_DEFAULTS_PRIORITY: 'p9' }, argv: [] }))
       .toThrow(/Invalid configuration after env overrides: defaults\.priority: /)
     // the same file without a bad override still loads
