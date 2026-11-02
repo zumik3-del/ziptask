@@ -31,14 +31,16 @@ describe('create_task', () => {
   })
 
   test('creates queued even with unsatisfied deps (v2)', () => {
-    const res = json(handleCreateTask(svc, { title: 'Dependent', reporter: 'dev', depends_on: [999] }))
+    const dep = json(handleCreateTask(svc, { title: 'Dep', reporter: 'dev' })).id
+    const res = json(handleCreateTask(svc, { title: 'Dependent', reporter: 'dev', depends_on: [dep] }))
     expect(res.status).toBe('queued')
     const task = getTaskRow(db, res.id)
     expect(task.status).toBe('queued')
   })
 
   test('rejects forward-reference cycle pair', () => {
-    const a = json(handleCreateTask(svc, { title: 'A', reporter: 'dev', depends_on: [2] })).id
+    // The forward reference can no longer be written through the service, so the row is seeded.
+    const a = createTaskRow({ title: 'A', reporter: 'dev', depends_on: [2] })
     const cycle = handleCreateTask(svc, { title: 'B', reporter: 'dev', depends_on: [a] })
     expect(text(cycle)).toContain('CYCLE')
     expect(getTaskRow(db, a).title).toBe('A')
@@ -46,7 +48,7 @@ describe('create_task', () => {
   })
 
   test('cycle rejection leaks no audit or comment rows', () => {
-    handleCreateTask(svc, { title: 'A', reporter: 'dev', depends_on: [2] })
+    createTaskRow({ title: 'A', reporter: 'dev', depends_on: [2] })
     handleCreateTask(svc, { title: 'B', reporter: 'dev', depends_on: [1], description: 'leak check' })
     const audit = db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = 2').get() as { n: number }
     const comments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = 2').get() as { n: number }

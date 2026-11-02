@@ -82,8 +82,9 @@ describe('update_task: successful writes', () => {
   })
 
   test('multi-field update changed in stable order', () => {
+    const dep = createTaskRow({ title: 'Dep' })
     const id = json(handleCreateTask(svc, { title: 'M', reporter: 'dev', priority: 'p2' })).id as number
-    const res = handleUpdateTask(svc, { id, agent: 'dev', depends_on: [999], title: 'M2', priority: 'p1' })
+    const res = handleUpdateTask(svc, { id, agent: 'dev', depends_on: [dep], title: 'M2', priority: 'p1' })
     expect(res.isError).toBeUndefined()
     expect(json(res).changed).toEqual(['title', 'priority', 'depends_on'])
   })
@@ -295,12 +296,13 @@ describe('update_task: validation', () => {
     expect(text(res)).toBe('INVALID: depends_on too long')
     res = handleUpdateTask(svc, { id, agent: 'dev', depends_on: 'x' as any })
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: depends_on too long')
+    expect(text(res)).toBe('INVALID: invalid depends_on')
   })
 
   test('epic cannot have depends_on', () => {
+    const dep = createTaskRow({ title: 'Dep' })
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
-    const res = handleUpdateTask(svc, { id: epicId, agent: 'dev', depends_on: [] })
+    const res = handleUpdateTask(svc, { id: epicId, agent: 'dev', depends_on: [dep] })
     expect(res.isError).toBe(true)
     expect(text(res)).toBe('INVALID: an epic cannot have depends_on')
   })

@@ -26,6 +26,12 @@ beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskS
 afterEach(() => { closeTestDb(db) })
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
+// The boundary list for depends_on: every dependency must exist, so the ids come from seeded rows
+// rather than from fabricated numbers.
+function existingDeps(count: number): number[] {
+  return repo.transaction(() => Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' })))
+}
+
 // The row counts a refusal must not move: a refused call writes no task row, no audit row and no
 // comment, so the three counts are the evidence that nothing was written.
 function storeCounts(): { tasks: number; audit: number; comments: number } {
@@ -335,9 +341,10 @@ describe('service defaults from config (#6)', () => {
 
 describe('atomicity: createTask cycle path (#767)', () => {
   test('cycle rejection leaves no partial row or audit for the failed task', () => {
-    const createResult = handleCreateTask(svc, { title: 'A', reporter: 'dev', depends_on: [2] })
-    const parsed = json(createResult)
-    const a = parsed.id
+    // The forward reference can no longer be written through the service, so the row is seeded —
+    // with the create audit row a real creation would have left.
+    const a = createTaskRow({ title: 'A', reporter: 'dev', depends_on: [2] })
+    repo.auditAppend(a, 'dev', 'create', undefined, 'queued')
     handleCreateTask(svc, { title: 'B', reporter: 'dev', depends_on: [a] })
     // Task B (id=2) should not exist (cycle rejected)
     expect(getTaskRow(db, 2)).toBeNull()
@@ -675,7 +682,6 @@ describe('create_task input bounds (#1857)', () => {
   const LONG_DESCRIPTION = 'd'.repeat(MAX_DESCRIPTION_LENGTH + 1)
   const OK_DESCRIPTION = 'd'.repeat(MAX_DESCRIPTION_LENGTH)
   const TOO_MANY_DEPS = Array.from({ length: MAX_DEPENDS_ON + 1 }, (_, i) => 9000 + i)
-  const MAX_DEPS = Array.from({ length: MAX_DEPENDS_ON }, (_, i) => 9000 + i)
 
   test('createTask refuses a description over the limit with the documented INVALID string', () => {
     const res = handleCreateTask(svc, { title: 'LongDescription', reporter: 'dev', description: LONG_DESCRIPTION })
@@ -707,8 +713,9 @@ describe('create_task input bounds (#1857)', () => {
   })
 
   test('createTask accepts a depends_on array exactly at the limit and stores every id', () => {
-    const id = json(handleCreateTask(svc, { title: 'MaxDeps', reporter: 'dev', depends_on: MAX_DEPS })).id
-    expect(JSON.parse(getTaskRow(db, id).depends_on)).toEqual(MAX_DEPS)
+    const deps = existingDeps(MAX_DEPENDS_ON)
+    const id = json(handleCreateTask(svc, { title: 'MaxDeps', reporter: 'dev', depends_on: deps })).id
+    expect(JSON.parse(getTaskRow(db, id).depends_on)).toEqual(deps)
   })
 })
 
@@ -873,7 +880,7 @@ describe('the create_task string bounds count code points (#1874)', () => {
     })
 
     test('depends_on is counted as ids in both layers', () => {
-      const maxDeps = Array.from({ length: MAX_DEPENDS_ON }, (_, i) => 9000 + i)
+      const maxDeps = existingDeps(MAX_DEPENDS_ON)
       const tooManyDeps = Array.from({ length: MAX_DEPENDS_ON + 1 }, (_, i) => 9000 + i)
       const shape = createTaskShape()
       expect(shape.safeParse({ title: 'MaxDeps', depends_on: maxDeps }).success).toBe(true)
