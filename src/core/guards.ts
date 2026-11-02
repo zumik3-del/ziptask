@@ -107,8 +107,8 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   if (args.depends_on !== undefined && !Array.isArray(args.depends_on)) {
     return { code: 'INVALID', message: 'invalid depends_on' }
   }
-  // Duplicates collapse before every check, so the limit counts distinct ids and the stored JSON
-  // carries each one once.
+  // Duplicates collapse before every check, so the limit counts distinct ids. The guard only reads
+  // this local: the stored list is the service's own normalized copy.
   const deps = args.depends_on === undefined ? [] : collapseDeps(args.depends_on)
   if (deps.length > MAX_DEPENDS_ON) return { code: 'INVALID', message: 'depends_on too long' }
   if (args.epic && args.epic_id !== undefined) return { code: 'INVALID', message: 'epic cannot have a parent epic' }
