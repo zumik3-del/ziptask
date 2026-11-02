@@ -28,8 +28,10 @@ Open an issue with the `feature` label. Describe the problem you want to solve a
 3. Run `bun test` to make sure tests pass.
 4. Run `bunx biome check src/ scripts/` for lint.
 5. Run `bunx tsc --noEmit` for type checking.
-6. Open a pull request `dev` → `main` with a **Conventional Commit title** (see below).
-7. PRs are merged with a **merge commit** (never squash) — the PR title becomes the merge-commit subject on `main`.
+6. Open a pull request **against `dev`** with a **Conventional Commit title** (see below).
+7. PRs are merged with a **merge commit** (never squash) — the PR title becomes the merge-commit subject on `dev`.
+
+`dev` → `main` is the maintainer's release PR, opened when a release is cut and never part of a contributor's change.
 
 ## Commit convention
 

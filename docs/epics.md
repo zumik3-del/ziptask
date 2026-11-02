@@ -82,12 +82,12 @@ There is no tool for re-parenting: `epic_id` is immutable through the API. When 
 
 ```sql
 -- move to another epic
-UPDATE tasks SET epic_id = <new-epic-id>, updated_at = <iso-now> WHERE id = <task-id>;
+UPDATE tasks SET epic_id = <new-epic-id>, updated_at = <iso-now>, version = version + 1 WHERE id = <task-id>;
 -- detach to top level
-UPDATE tasks SET epic_id = NULL, updated_at = <iso-now> WHERE id = <task-id>;
+UPDATE tasks SET epic_id = NULL, updated_at = <iso-now>, version = version + 1 WHERE id = <task-id>;
 ```
 
-The target epic's roll-up is derived on read, so no counter recalculation is needed. Raw SQL bypasses the API guards — verify first that the target exists, is not `done`/`failed`/`canceled`, is not itself a sub-task, and is not the task itself. Leave `version` untouched (no client optimistic-lock is racing a manual edit). Detaching may leave the old epic empty.
+The target epic's roll-up is derived on read, so no counter recalculation is needed. Raw SQL bypasses the API guards — verify first that the target exists, is not `done`/`failed`/`canceled`, is not itself a sub-task, and is not the task itself. Bump `version` in the same statement: an optimistic lock compares against the version the client last read, so a stale value must not match a row whose `epic_id` moved — the manual edit is a row write like any other. Detaching may leave the old epic empty.
 
 ## Notes
 
