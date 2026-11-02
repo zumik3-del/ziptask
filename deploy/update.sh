@@ -937,6 +937,19 @@ main() {
   # file whose ownership changes under it.
   apply_ownership
 
+  # The RUN_DIR boundary, healed on the path an EXISTING host actually takes
+  # (task #2245). install.sh applies it, but a host that has not re-installed
+  # keeps whatever the old install left: RUN_DIR, scripts/ and hooks/ owned by
+  # the service user — i.e. the files this very update, and the next `sudo bash
+  # ${RUN_DIR}/scripts/update.sh`, execute. An update is the only chance to
+  # tighten a tree that is already on disk, so it does here what the install
+  # does, through the same function (root:<service-group>, 0750 dirs and
+  # scripts, 0640 app.env; one level, never app state). Ordered after the swap
+  # for the same reason as apply_ownership, and before the post-update hook so
+  # the hook and the service see one consistent tree. Non-fatal by construction:
+  # a run without root and without sudo warns once and continues.
+  apply_run_dir_ownership
+
   # DELIBERATE DECISION (task #1102): a failed post-update hook does NOT abort
   # mid-flight. By the time it runs the payload is already swapped, so aborting
   # here would leave the host WORSE off than continuing: the unit would not be

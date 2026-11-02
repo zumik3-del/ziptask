@@ -16,17 +16,17 @@
 #      DEPLOY_RAW_URL=https://HOST/deploy curl -fsSL https://HOST/deploy/install.sh | bash
 #
 #  Options:
-#      --dir DIR       Install directory        (default: INSTALL_DIR in app.env)
+#      --dir DIR       Install root: the payload, DATA_DIR (= DIR/data unless
+#                      app.env names its own) and the unit move under DIR
 #      --port PORT     Port for the seeded config + health check (default: PORT)
 #      --version TAG   Pin a version instead of resolving the latest
 #      --force         Reinstall even when the same version is already present
 #      --no-service    Skip systemd unit installation and start
 #      --help, -h      Show this help
 #
-#  Seeded ports: a FRESH config.json gets server.port = PORT and
-#  mcp.httpPort = MCP_PORT (app.env, optional — defaults to PORT + 1). An
-#  existing config.json is preserved verbatim, so an installed host keeps its
-#  own MCP port. See resolve_mcp_port() in lib/common.sh.
+#  Seeded ports: a FRESH config.json gets server.port = PORT and mcp.httpPort =
+#  MCP_PORT (optional, defaults to PORT + 1); a fresh settings.json gets port =
+#  PORT. An existing config is preserved verbatim. See resolve_mcp_port().
 #
 #  Pipeline (see the phase banners in main):
 #      config -> platform + OS deps -> fetch code/binary -> data dir + symlink
@@ -122,8 +122,54 @@ parse_args() {
 }
 
 # ── Config finalization ────────────────────────────────────────────────────
+# Applies the CLI overrides on top of the values app.env just loaded.
+#
+# --dir RE-HOMES EVERYTHING THE INSTALL OWNS, not only the payload. Two parts:
+#
+#   1. DATA_DIR follows the install root while it still holds the canonical
+#      /var/lib/<app> default. Without that, `--dir D` installs a payload under
+#      D whose config and database still live in a root-owned /var/lib tree —
+#      i.e. it is not the self-contained install the flag promises, and an
+#      unprivileged `--dir ~/x` run cannot write the data it seeds. A host whose
+#      app.env names its OWN data directory keeps it: the canonical default is
+#      the only value the flag may move, and a non-default DATA_DIR was an
+#      explicit choice.
+#
+#   2. The two strings DERIVED from those roots — EXEC_START and CONFIG_FILE —
+#      are rewritten from the OLD roots to the new ones. Recomputation is not an
+#      option: their shape is the app's (the binary path, `--settings <path>`,
+#      any extra argument), and the framework must not know it. What the
+#      framework does know is which two roots they were built from, so a literal
+#      substitution carries every other character the operator wrote untouched.
+#      INSTALL_DIR is replaced BEFORE DATA_DIR: the new DATA_DIR lives under the
+#      new INSTALL_DIR, so the reverse order would leave a half-rewritten path.
+#      A string that names neither root is left exactly as it was.
 apply_overrides() {
-  if [ -n "$ARG_DIR" ];  then INSTALL_DIR="$ARG_DIR"; fi
+  local old_install="${INSTALL_DIR:-}" old_data="${DATA_DIR:-}"
+  # app.env may omit either key entirely; `set -u` would abort on the
+  # substitution below rather than on anything the operator wrote.
+  EXEC_START="${EXEC_START:-}"
+  CONFIG_FILE="${CONFIG_FILE:-}"
+  if [ -n "$ARG_DIR" ]; then
+    INSTALL_DIR="$ARG_DIR"
+    # A --dir that names the canonical root already in app.env moves nothing:
+    # taking it as an instruction to relocate DATA_DIR would be surprising (the
+    # operator asked for the code directory, and the data home is a different
+    # decision).
+    if [ "$INSTALL_DIR" != "$old_install" ]; then
+      if [ -z "$old_data" ] || [ "$old_data" = "/var/lib/${APP_NAME}" ]; then
+        DATA_DIR="${ARG_DIR}/data"
+      fi
+      if [ -n "$old_install" ]; then
+        EXEC_START="${EXEC_START//"$old_install"/"$INSTALL_DIR"}"
+        CONFIG_FILE="${CONFIG_FILE//"$old_install"/"$INSTALL_DIR"}"
+      fi
+      if [ -n "$old_data" ] && [ "$old_data" != "$DATA_DIR" ]; then
+        EXEC_START="${EXEC_START//"$old_data"/"$DATA_DIR"}"
+        CONFIG_FILE="${CONFIG_FILE//"$old_data"/"$DATA_DIR"}"
+      fi
+    fi
+  fi
   if [ -n "$ARG_PORT" ]; then PORT="$ARG_PORT"; fi
   if [ -n "$ARG_VERSION" ]; then ARG_VERSION="$(normalize_v "$ARG_VERSION")"; fi
 }
@@ -301,6 +347,23 @@ align_config_port() {
   sed -i "s/${key}[[:space:]]*:[[:space:]]*[0-9][0-9]*/${key}: ${value}/" "$file"
 }
 
+# align_config_path FILE KEY VALUE — rewrite `"KEY": "<anything>"` in FILE to
+# `"KEY": "VALUE"`. The path counterpart of align_config_port, with the same two
+# contracts: KEY is matched literally INCLUDING its quotes (so '"dbPath"' cannot
+# touch a key that merely contains it), and a missing key is a no-op.
+#
+# The delimiter is `|`, and `&`, `\` and `|` are escaped in VALUE because all
+# three are sed syntax in a replacement: an unescaped `&` reproduces the matched
+# text instead of the value, and DATA_DIR is operator content from app.env.
+align_config_path() {
+  local file="$1" key="$2" value="$3" esc
+  [ -f "$file" ] || return 0
+  esc="${value//\\/\\\\}"
+  esc="${esc//&/\\&}"
+  esc="${esc//|/\\|}"
+  sed -i "s|${key}[[:space:]]*:[[:space:]]*\"[^\"]*\"|${key}: \"${esc}\"|" "$file"
+}
+
 # seed_copy SRC DST BASE — copy one example into place as DST.
 #
 # BASE is DST's basename, passed in by the caller so the same value can drive the
@@ -343,6 +406,17 @@ seed_files() {
     if [ "$base" = "config.json" ]; then
       align_config_port "${INSTALL_DIR}/${dest}" '"port"' "$PORT"
       align_config_port "${INSTALL_DIR}/${dest}" '"httpPort"' "$MCP_PORT"
+    fi
+    # settings.json — the config home shape (ADR addendum R1). Same rule, for the
+    # ONE listener that file carries: ziptask's /mcp and /health are one HTTP
+    # server (src/server.ts), so there is no second port to align. Without this
+    # pass `--port N` seeded a settings.json still saying 3005 while the health
+    # gate polled N, i.e. an install that could never pass its own gate (#2245).
+    if [ "$base" = "settings.json" ]; then
+      align_config_port "${INSTALL_DIR}/${dest}" '"port"' "$PORT"
+      if [ -n "${DATA_DIR:-}" ]; then
+        align_config_path "${INSTALL_DIR}/${dest}" '"dbPath"' "${DATA_DIR}/${APP_NAME}.db"
+      fi
     fi
     if [ -n "${GENERATE_SECRET_IN:-}" ] && [ "$dest" = "$GENERATE_SECRET_IN" ]; then
       SEEDED_SECRET_FILE=true
@@ -408,6 +482,16 @@ seed_files_data() {
     if [ "$base" = "config.json" ]; then
       align_config_port "${DATA_DIR}/${dest}" '"port"' "$PORT"
       align_config_port "${DATA_DIR}/${dest}" '"httpPort"' "$MCP_PORT"
+    fi
+    # settings.json: the listener AND the database path. The dbPath matters here
+    # because the shipped example carries the canonical absolute
+    # /var/lib/<app>/<app>.db — a `--dir` install moves DATA_DIR (apply_overrides)
+    # and would otherwise seed a config pointing its database back into the tree
+    # the flag exists to leave. On the canonical layout this rewrites nothing:
+    # ${DATA_DIR}/${APP_NAME}.db IS the shipped value.
+    if [ "$base" = "settings.json" ]; then
+      align_config_port "${DATA_DIR}/${dest}" '"port"' "$PORT"
+      align_config_path "${DATA_DIR}/${dest}" '"dbPath"' "${DATA_DIR}/${APP_NAME}.db"
     fi
     info "Seeded ${DATA_DIR}/${dest} from ${src}"
   done
@@ -543,6 +627,15 @@ setup_config_link() {
 # ── Phase: helper scripts in RUN_DIR/scripts ───────────────────────────────
 # update.sh / updater.sh / uninstall.sh / common.sh / app.env are installed together so the
 # app can be managed later without the original deploy/ directory.
+#
+# MODES ARE THE OWNERSHIP BOUNDARY, not decoration (task #2245). app.env is only
+# ever READ (by updater.sh and by the pre-update hook, as the service group), and
+# the scripts are EXECUTED by a later privileged update under a root-owned tree,
+# so the group gets read+execute and never write: 0640 for app.env, 0750 for the
+# scripts. apply_run_dir_ownership() then hands all of them to root:<service
+# group>; the mode is set HERE as well because `cp -f` keeps the DESTINATION's
+# existing mode, so an older install's 0600/0755 would otherwise survive the
+# re-install that was meant to tighten it.
 install_helper_scripts() {
   local dest="${RUN_DIR}/scripts" base f src cand
   mkdir -p "$dest"
@@ -565,7 +658,7 @@ install_helper_scripts() {
       warn "could not install helper: ${f}"
       continue
     fi
-    if [ "$f" = "app.env" ]; then chmod 600 "${dest}/${f}"; else chmod +x "${dest}/${f}"; fi
+    if [ "$f" = "app.env" ]; then chmod 0640 "${dest}/${f}"; else chmod 0750 "${dest}/${f}"; fi
   done
   info "Helpers installed in ${dest}"
 }
@@ -575,7 +668,10 @@ install_helper_scripts() {
 # helper scripts so update.sh finds them via its default HOOKS_DIR
 # (${RUN_DIR}/hooks).  update.sh calls run_hook {pre,post}-update before and
 # after the code swap; the hooks are executable scripts sourced from this
-# directory.  See deploy/update.sh:run_hook for the contract.
+# directory.  See deploy/update.sh:run_hook for the contract.  The mode is 0750
+# for the same reason the helpers get it (task #2245): the pre-update hook runs
+# inside a privileged update, so the service group may execute it, never rewrite
+# it.
 install_hook_scripts() {
   local dest="${RUN_DIR}/hooks" base f src cand
   mkdir -p "$dest"
@@ -595,7 +691,7 @@ install_hook_scripts() {
       warn "could not install hook: ${f}"
       continue
     fi
-    chmod +x "${dest}/${f}"
+    chmod 0750 "${dest}/${f}"
   done
   info "Hooks installed in ${dest}"
 }
@@ -855,9 +951,9 @@ main() {
   install_helper_scripts
   install_hook_scripts
   # LAST of the ownership work: install_helper_scripts()/install_hook_scripts()
-  # write RUN_DIR as root, and RUN_DIR is read as TARGET_USER by update.sh,
-  # updater.sh and the pre-update hook (app.env is mode 600). Chowning it before
-  # them would chown nothing.
+  # write RUN_DIR as root, and RUN_DIR is READ (and executed) as the service
+  # GROUP by update.sh, updater.sh and the pre-update hook (app.env is 0640).
+  # Running it before them would own nothing but an empty directory.
   apply_run_dir_ownership
 
   # -- service --

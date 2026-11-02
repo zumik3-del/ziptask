@@ -113,9 +113,15 @@ main() {
   fi
 
   # -- helper scripts (state dir itself is kept) --
+  # RUN_DIR is installed ROOT-OWNED (dirs and scripts 0750 root:<service-group>,
+  # app.env 0640 — task #2245), precisely so the service account cannot rewrite
+  # the scripts a privileged update executes. That also means an operator in the
+  # group cannot unlink inside it, so removal needs root; a --dir install under
+  # your own home (no privileged updater) is still owned by you, hence the plain
+  # attempt first and run_root only when it is refused.
   if [ -d "${RUN_DIR}/scripts" ]; then
     info "Removing helper scripts: ${RUN_DIR}/scripts"
-    rm -rf "${RUN_DIR}/scripts"
+    rm -rf "${RUN_DIR}/scripts" 2>/dev/null || run_root rm -rf "${RUN_DIR}/scripts"
   fi
 
   # -- code & data (only with --purge) --
