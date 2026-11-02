@@ -8,16 +8,11 @@ export function parseDeps(raw: string): number[] {
   return []
 }
 
-// Collapses duplicate ids, keeping the first occurrence in input order. The guard runs before the
-// write and returns only a refusal, so the collapse is written back into the caller's own array: that
-// array is the one the service stores, and nothing else carries the collapsed list back to it.
+// Collapses duplicate ids, keeping the first occurrence in input order. Pure: the argument is never
+// rewritten, so a guard that calls it stays side-effect free and the caller normalizes its own copy
+// (the one it then stores and checks for cycles).
 export function collapseDeps(deps: number[]): number[] {
-  const unique = [...new Set(deps)]
-  if (unique.length !== deps.length) {
-    deps.length = 0
-    for (const id of unique) deps.push(id)
-  }
-  return unique
+  return [...new Set(deps)]
 }
 
 export function createsCycle(depsOf: (id: number) => string | null, taskId: number, dependsOn: number[]): boolean {
