@@ -31,7 +31,10 @@
 #  Refuses before writing: if RUN_DIR itself, RUN_DIR/scripts, RUN_DIR/hooks or
 #  RUN_DIR/scripts/app.env is a symlink (dangling included) the run ABORTS
 #  before it copies a helper, rewrites app.env or runs a hook, so a planted link
-#  can never make this root run write, source or execute through it.
+#  can never make this root run write, source or execute through it. The screen
+#  runs as a PREFLIGHT and again immediately before the helper and hook copies
+#  and before the app.env rewrite (task #2260), so a link planted during the
+#  fetch — the long window in between — is refused instead of followed.
 #
 #  Seeded ports: a FRESH config.json gets server.port = PORT and mcp.httpPort =
 #  MCP_PORT (optional, defaults to PORT + 1); a fresh settings.json gets port =
@@ -123,7 +126,7 @@ parse_args() {
       --force)      FORCE=true;       shift   ;;
       --no-service) NO_SERVICE=true;  shift   ;;
       --help|-h)
-        sed -n '3,42p' "$0" 2>/dev/null || echo "See the comment header of install.sh"
+        sed -n '3,46p' "$0" 2>/dev/null || echo "See the comment header of install.sh"
         exit 0 ;;
       *) error "unknown option: $1 (try --help)" ;;
     esac
@@ -761,6 +764,14 @@ install_helper_scripts() {
   # AFTER the copy (that is the file this pass created) and BEFORE
   # apply_run_dir_ownership pins it to 0640 root:<group>: the content is the
   # installer's, the ownership boundary is the framework's.
+  #
+  # The screen is repeated HERE too (task #2260), even though the call site in
+  # main screened the same tree a moment ago: persist_layout REWRITES app.env in
+  # place (`cat > "$file"`), which truncates the path it is given — through a
+  # link, an operator's app.env (or anything else that path names) is replaced
+  # by this one. The pass above copies INTO the same tree, so both writes sit
+  # behind this one screen, immediately before them.
+  assert_run_dir_not_symlinked
   persist_layout
   info "Helpers installed in ${dest}"
 }
@@ -1058,7 +1069,17 @@ main() {
   # ownership then changes underneath it. In source mode this is the SECOND call
   # — the first, before the build, covers what the build itself wrote.
   apply_ownership
+  # RE-ASSERTED HERE, at the write it guards (task #2260). The preflight in main
+  # ran before the payload fetch and the build — minutes of wall clock on a real
+  # install — and on a pre-heal tree RUN_DIR belongs to the service user, so a
+  # link planted in that window would be written THROUGH by the copies below and
+  # by the app.env rewrite inside install_helper_scripts (cp and `cat >` both
+  # dereference). Screening immediately before each write is what keeps the
+  # preflight's "nothing was changed" a property rather than a hope. Four `-L`
+  # tests against a tree this run is about to fill cost nothing.
+  assert_run_dir_not_symlinked
   install_helper_scripts
+  assert_run_dir_not_symlinked
   install_hook_scripts
   # LAST of the ownership work: install_helper_scripts()/install_hook_scripts()
   # write RUN_DIR as root, and RUN_DIR is READ (and executed) as the service
