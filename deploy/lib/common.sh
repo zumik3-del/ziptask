@@ -167,6 +167,29 @@ resolve_target_user() {
     TARGET_USER="$(id -un)"
   fi
 
+  # A ROOT FALLBACK IS ANNOUNCED, NEVER SILENT (review #2251 finding 5, task
+  # #2252). The branch above lands on root when the run happens in a bare root
+  # shell — a container, `su -`, `docker exec -u root` — because both richer
+  # answers (SERVICE_USER from app.env, SUDO_USER from sudo) are absent. The
+  # fallback itself is right; what was wrong is that it decided, alone and
+  # quietly, that the service runs as root: everything downstream follows
+  # TARGET_USER (User=/Group= in the unit, and both ownership passes), so one
+  # unanswered fallback ships a root-run unit AND a root-owned payload/data
+  # tree. SERVICE_USER is the app.env key that answers it, so it is named here
+  # instead of being left to be rediscovered from the unit file.
+  #
+  # A warning and not a refusal, on purpose: a container install with no
+  # service account is a legitimate, documented case, and refusing it would
+  # break the one-liner on exactly the hosts the empty SERVICE_USER exists for.
+  # An explicit SERVICE_USER=root is the operator's stated choice and stays
+  # silent.
+  if [ "$TARGET_USER" = "root" ] && [ -z "${SERVICE_USER:-}" ]; then
+    warn "the service will run as ROOT: SERVICE_USER is empty and this is a bare root shell (no SUDO_USER to inherit)."
+    warn "  the unit's User= will be root, and the payload/data trees will be owned by root."
+    warn "  set SERVICE_USER=<account> in app.env (or run this through sudo from that account) to keep the service unprivileged."
+    warn "  continuing with TARGET_USER=root — a warning, not a refusal."
+  fi
+
   # The group the unit runs as, resolved HERE and not at the point of use,
   # because TARGET_USER is only known once the branch above has run.
   #
@@ -416,8 +439,12 @@ apply_ownership() {
 # also hold app state the framework does not own (a legacy data/ dir, backups,
 # a settings.json); a blind `chown -R root` would take that too, and `sudo` size
 # is exactly what this function must stop handing out.
+#
+# NOTHING HERE FOLLOWS A SYMLINK, the three roots included: they are screened
+# before the first chown/chmod and one planted link refuses the whole pass (see
+# the screen in the body, task #2252).
 apply_run_dir_ownership() {
-  local d f
+  local d f linked=""
   # Guarded BEFORE the loop, not inside it: the loop list is expanded when the
   # `for` runs, so a `[ -n "$RUN_DIR" ]` test in the body would be reached only
   # after "${RUN_DIR}/scripts" had already tripped `set -u` on a host whose
@@ -434,6 +461,44 @@ apply_run_dir_ownership() {
     warn "  has no privileged updater, so there is no boundary to enforce here."
     return 0
   fi
+  # SCREEN THE THREE CONTROLLED ROOTS FIRST, WRITE SECOND (review #2251
+  # finding 1, task #2252). Each of the three entries below is handed to
+  # own_root_controlled as a DIRECTORY, and both chown and chmod DEREFERENCE, so
+  # a symlinked scripts/ or hooks/ would make this root heal hand
+  # root:<service-group> and 0750 to the LINK TARGET — /etc, /root/.ssh, the
+  # payload tree — which is exactly the arbitrary-target write the whole
+  # function exists to prevent. It is not hypothetical on the FIRST heal of an
+  # existing host: RUN_DIR belongs to the service user until this function
+  # succeeds, so that account can `rm -rf ~/.ziptask/scripts && ln -s <target>
+  # ~/.ziptask/scripts` in the window before it. The earlier revision screened
+  # only the entries INSIDE those directories while the directories themselves
+  # were declared "not attacker-controlled"; they are.
+  #
+  # THE SCREEN IS A SEPARATE PASS OVER ALL THREE, and one hit refuses the WHOLE
+  # pass. Skipping only the offending entry would still run chown on
+  # ${RUN_DIR}/scripts through a symlinked RUN_DIR, and a half-healed tree (two
+  # of three roots tightened, one left at the old owner) is harder for the
+  # operator to reason about than a clean "nothing was changed". `-L` is tested
+  # on its own, so a DANGLING link is refused as well — it is still a pointer
+  # the next run would follow once something exists at the far end.
+  #
+  # NOT FATAL, same decision as the rest of this section: warn, name the path
+  # and the remedy, change nothing, and let the rest of the install/update
+  # continue. A refusal cannot leave an install broken either — the tree stays
+  # exactly as it already was.
+  for d in "$RUN_DIR" "${RUN_DIR}/scripts" "${RUN_DIR}/hooks"; do
+    if [ -L "$d" ]; then
+      linked="${linked}${linked:+, }${d}"
+    fi
+  done
+  if [ -n "$linked" ]; then
+    warn "refusing to change RUN_DIR ownership: ${linked} is a symlink."
+    warn "  chmod, and a dereferencing chown, would hand root:${TARGET_GROUP:-${TARGET_USER}}"
+    warn "  and mode 0750 to whatever it points at. NOTHING under ${RUN_DIR} was changed by this run."
+    warn "  inspect the target, remove the link, find out why it was planted (this tree is"
+    warn "  writable by $(ownership_target) until this pass succeeds), then re-run."
+    return 0
+  fi
   for d in "$RUN_DIR" "${RUN_DIR}/scripts" "${RUN_DIR}/hooks"; do
     own_root_controlled "$d" 0750
   done
@@ -441,19 +506,21 @@ apply_run_dir_ownership() {
   # entries are skipped: nothing in the deploy flow runs a dotfile by name, so
   # they are not part of the boundary.
   #
-  # SYMLINKS ARE SKIPPED, and that is load-bearing rather than tidy. `chown` and
-  # `chmod` both DEREFERENCE (chmod has no -h at all), so a link planted in
-  # scripts/ or hooks/ — by the compromised service user this boundary exists to
-  # contain, or by anything else that can write there — would make this root
-  # heal hand root:<group> and 0750 to the LINK TARGET, wherever it points
-  # (/etc/shadow, /etc/sudoers, the payload tree). Since the heal only ever
-  # needs to fix regular files the framework itself copied in, refusing every
-  # link costs nothing real and removes the arbitrary-target write. `-L` is
-  # tested before `-e`, so a dangling link is refused as well. The three DIRECTORY
-  # entries above are deliberately NOT screened: a symlinked RUN_DIR or
-  # scripts/ (an operator layout, not attacker-controlled) stays in scope.
+  # SYMLINKS ARE SKIPPED HERE TOO, and that is load-bearing rather than tidy.
+  # `chown` and `chmod` both DEREFERENCE (chmod has no -h at all), so a link
+  # planted in scripts/ or hooks/ — by the compromised service user this
+  # boundary exists to contain, or by anything else that can write there —
+  # would make this root heal hand root:<group> and 0750 to the LINK TARGET,
+  # wherever it points (/etc/shadow, /etc/sudoers, the payload tree). Since the
+  # heal only ever needs to fix regular files the framework itself copied in,
+  # refusing every link costs nothing real and removes the arbitrary-target
+  # write. `-L` is tested before `-e`, so a dangling link is refused as well.
+  # The [ -L "$d" ] guard below is redundant after the screen above and is kept
+  # as a local invariant: this loop must never walk a linked directory even if
+  # the two passes are ever reordered.
   for d in "${RUN_DIR}/scripts" "${RUN_DIR}/hooks"; do
     [ -d "$d" ] || continue
+    [ -L "$d" ] && continue
     for f in "$d"/*; do
       [ -L "$f" ] && continue
       [ -e "$f" ] || continue
@@ -483,8 +550,15 @@ run_dir_target() {
 # is a sudo prompt per file.
 #
 # CONTRACT: PATH must not be a symlink. Both chown and chmod DEREFERENCE, so a
-# link here is an arbitrary-target write as root — the caller screens them
-# (see the `-L` guard in apply_run_dir_ownership).
+# link here is an arbitrary-target write as root — the caller screens them (see
+# the `-L` screen in apply_run_dir_ownership). `chown -h` below is belt and
+# braces for the same reason: it makes the owner call no-dereference even if a
+# caller ever forgets the screen, so the worst case is a LINK whose own owner
+# changes (which changes nothing for anyone) instead of a foreign target's. The
+# MODE call has no portable no-dereference form — GNU chmod rejects `-h` outright
+# and BSD's sets the link's own mode, which most filesystems do not store — which
+# is exactly why refusing the link, not flagging the call, is what makes the mode
+# safe.
 own_root_controlled() {
   local p="$1" mode="${2#0}" spec current_mode current_owner
   [ -e "$p" ] || return 0
@@ -494,7 +568,12 @@ own_root_controlled() {
   if [ "$current_owner" = "$spec" ] && [ "$current_mode" = "$mode" ]; then
     return 0
   fi
-  if ! run_root chown "$spec" "$p" 2>/dev/null; then
+  # `chown -h` FIRST, with the plain form as a fallback: a busybox (or very old
+  # coreutils) chown has no -h and would fail, and after the caller's screen PATH
+  # is never a link, where the two forms are the same operation. Warning out of a
+  # host whose chown merely lacks the flag would leave the boundary untightened
+  # for a reason that is not the boundary's.
+  if ! run_root chown -h "$spec" "$p" 2>/dev/null && ! run_root chown "$spec" "$p" 2>/dev/null; then
     warn "cannot set ${p} to ${spec} (still ${current_owner})."
     warn "  the service user must READ and EXECUTE this, never rewrite it: a file it"
     warn "  owns here is code the next sudo update runs as root."
