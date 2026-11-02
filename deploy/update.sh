@@ -22,6 +22,12 @@
 #  before any write into RUN_DIR — cp, chown, chmod, source and bash all follow
 #  a link, and this run is the one that holds root.
 #
+#  Refuses before SOURCING app.env too (task #2260): a direct invocation screens
+#  its own installed tree — derived from the path as typed, so a linked scripts/
+#  stays visible — BEFORE load_app_env reads anything, and the same screen runs
+#  again immediately before the pre-update hook. A link planted after the first
+#  check therefore cannot be followed by the later write or by that hook.
+#
 #  DIST=binary swaps a release tarball's payload (executable + vec0.so +
 #  lib/libonnxruntime.so.1) instead of a git checkout; see
 #  docs/adr/0001-self-contained-binary-tarball-deployment.md.
@@ -53,7 +59,7 @@ parse_args() {
     case "$1" in
       --version) ARG_VERSION="$2"; shift 2 ;;
       --yes|-y)  ASSUME_YES=true;  shift   ;;
-      --help|-h) sed -n '2,23p' "$0" 2>/dev/null || echo "See the comment header of update.sh"; exit 0 ;;
+      --help|-h) sed -n '2,34p' "$0" 2>/dev/null || echo "See the comment header of update.sh"; exit 0 ;;
       *) error "unknown option: $1 (try --help)" ;;
     esac
   done
@@ -808,6 +814,19 @@ restart_and_verify() {
 # ── Main ───────────────────────────────────────────────────────────────────
 main() {
   parse_args "$@"
+  # THE BOOTSTRAP PREFLIGHT (task #2260), BEFORE load_app_env. load_app_env
+  # SOURCES ${RUN_DIR}/scripts/app.env, and `.` follows a link: a planted
+  # scripts/ or a planted app.env would run whatever the target holds, as this
+  # run's user (root, on the privileged update path), ahead of every check
+  # below. The screen therefore comes FIRST, off this script's own installed
+  # location — the LOGICAL path, because SCRIPT_DIR above is `pwd -P` and would
+  # report a linked scripts/ as the directory it points AT (see
+  # preflight_script_tree in lib/common.sh).
+  #
+  # The RUN_DIR screen further down stays: it screens the tree the resolved
+  # layout names, which is the one this run then writes, executes and sources
+  # through. It cannot replace this call — it needs app.env to have been read.
+  preflight_script_tree "${BASH_SOURCE[0]:-$0}"
   load_app_env
   [ -n "${APP_NAME:-}" ] || error "APP_NAME is not set in app.env"
   detect_os
@@ -927,6 +946,15 @@ main() {
   # must never be followed by an unchecked code swap.  The upstream template
   # treats all hooks as non-fatal (warn + continue).
   #
+  # RE-ASSERTED IMMEDIATELY BEFORE THE HOOK (task #2260). The preflight above
+  # ran before the fetch and the version resolution, and everything in between
+  # is a window: on a pre-heal tree RUN_DIR belongs to the service user, so a
+  # link planted there — hooks/ pointing anywhere — would be EXECUTED by
+  # run_hook, as root, seconds later. The screen is four `-L` tests, so it is
+  # repeated here instead of being trusted from earlier; the same reasoning as
+  # apply_run_dir_ownership's own screen, one step earlier and on the path a
+  # healthy host actually takes.
+  #
   # This guard was UNREACHABLE until task #1102: run_hook could not carry a hook
   # status out of its tee pipeline, so the `if !` here always saw success. It is
   # now live, and `error` (not a bare exit) so the operator gets the same
@@ -935,6 +963,7 @@ main() {
   # service is still running the code it was running a minute ago, so there is
   # nothing to recover — print_recovery would only name backups of an install
   # that is untouched.
+  assert_run_dir_not_symlinked
   if ! run_hook pre-update; then
     error "pre-update hook failed — aborting before switching code"
   fi

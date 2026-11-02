@@ -431,6 +431,9 @@ apply_ownership() {
 # ROOT is a PARAMETER because updater.sh must screen the tree it is about to
 # SOURCE app.env from and has no RUN_DIR at that point: app.env is what DEFINES
 # RUN_DIR, so the root has to come from the script's own installed location.
+# preflight_script_tree() (below) is that derivation, shared: update.sh and
+# uninstall.sh call it before load_app_env, and updater.sh keeps its own inline
+# copy because it is the frozen bootstrap.
 assert_run_dir_not_symlinked() {
   local root="${1:-${RUN_DIR:-}}" d linked=""
   # No root, nothing to screen: RUN_DIR is optional in app.env (resolve_target_user
@@ -445,6 +448,55 @@ assert_run_dir_not_symlinked() {
     if [ -L "$d" ]; then linked="${linked}${linked:+, }${d}"; fi
   done
   [ -z "$linked" ] || error "refusing to continue: ${linked} is a symlink. This run writes, executes and sources under ${root}, and cp, chown, chmod, source and bash all DEREFERENCE — the work would land on the link's target, as this run's user (root for an install or an update). NOTHING was changed by this run: inspect the target, remove the link, find out why it was planted, then re-run."
+  return 0
+}
+
+# preflight_script_tree SCRIPT_PATH — screen the deploy-state tree a SCRIPT
+# belongs to, BEFORE that script sources app.env out of it.
+#
+# WHY THE ROOT IS DERIVED FROM THE PATH AS TYPED. Every entry point computes
+# SCRIPT_DIR as `cd … && pwd -P`, and `pwd -P` RESOLVES a linked scripts/ (or a
+# linked RUN_DIR) to the directory it points AT. A preflight built on SCRIPT_DIR
+# would therefore screen the link's target and never see the link — the one
+# thing it exists to find. So the root comes from `${BASH_SOURCE[0]:-$0}`,
+# dirname'd twice: the script's own directory (${RUN_DIR}/scripts) and its
+# parent (RUN_DIR). Same derivation updater.sh makes inline; it lives here so
+# update.sh, uninstall.sh and updater.sh cannot drift apart on it.
+#
+# WHY IT ALSO SCREENS THE TWO app.env CANDIDATES BY NAME. assert_run_dir_not_
+# symlinked screens ${root}/scripts/app.env, which covers the INSTALLED layout
+# (update.sh is ${RUN_DIR}/scripts/update.sh). load_app_env also sources
+# "${dir}/app.env" and "${dir}/../app.env", and the second of those sits outside
+# that set for a deploy/ checkout (deploy/update.sh + deploy/app.env). `.`
+# follows a link exactly as cp and chown do, so both candidates are screened
+# here and the refusal names them.
+#
+# FATAL, and called BEFORE load_app_env in update.sh and uninstall.sh (task
+# #2260): "app.env was not sourced" is then a fact of ordering, not a claim made
+# after the file has already run. A linked app.env is arbitrary code as this
+# run's user (root for an update or an uninstall) ahead of every later check.
+preflight_script_tree() {
+  local script="${1:-}" dir root f linked=""
+  # No path at all: a `curl | bash` run has no BASH_SOURCE, and app.env comes
+  # from APP_ENV_URL, so there is no installed tree to derive a root from.
+  if [ -z "$script" ]; then return 0; fi
+  dir="${script%/*}"
+  # No slash in the path: bash was handed a bare name and found it through PATH
+  # or the cwd, so the cwd is the only directory the path states.
+  if [ "$dir" = "$script" ]; then dir="${PWD:-.}"; fi
+  if [ "$dir" = "." ]; then dir="${PWD:-.}"; fi
+  if [ -z "$dir" ]; then dir="/"; fi
+  case "$dir" in
+    /*) : ;;
+    *)  dir="${PWD:-.}/${dir}" ;;
+  esac
+  root="${dir%/*}"
+  if [ -z "$root" ]; then root="/"; fi
+  assert_run_dir_not_symlinked "$root"
+  for f in "${dir}/app.env" "${dir}/../app.env"; do
+    if [ -L "$f" ]; then linked="${linked}${linked:+, }${f}"; fi
+  done
+  [ -z "$linked" ] || error "refusing to continue: ${linked} is a symlink. This run SOURCES app.env before it does anything else, and source follows a link — the file's contents would run as this run's user (root for an update or an uninstall) ahead of this or any later check. NOTHING was changed by this run: inspect the target, remove the link, find out why it was planted, then re-run."
   return 0
 }
 

@@ -166,14 +166,16 @@ main() {
   esac
   _pf_root="${_pf_dir%/*}"
   if [ -z "$_pf_root" ]; then _pf_root="/"; fi
-  # Guarded because this file is the FROZEN bootstrap (contract v1): the five
-  # files are installed together, so a tree where common.sh predates this
-  # function is a hand-copied one. Dying there on a missing command would break
-  # the update path over a screen that tree never had; saying so does not.
+  # Guarded and FAIL-CLOSED (task #2260). This file is the FROZEN bootstrap
+  # (contract v1) and its five companion files are installed together, so a tree
+  # where common.sh predates this function is a hand-copied one — and on that
+  # tree nothing below has screened anything. Warning and continuing would source
+  # app.env through whatever link is there (that is the whole reason the screen
+  # exists), so a missing screen means no run: the refusal names the remedy.
   if declare -F assert_run_dir_not_symlinked >/dev/null 2>&1; then
     assert_run_dir_not_symlinked "$_pf_root"
   else
-    warn "cannot screen ${_pf_root} for symlinks: the installed lib/common.sh predates it — re-run install.sh to refresh ${SCRIPT_DIR}"
+    error "cannot screen ${_pf_root} for symlinks: the installed lib/common.sh predates assert_run_dir_not_symlinked, so a linked scripts/ or app.env would be sourced unchecked. Re-run install.sh (or re-copy the five helper files from the release's deploy/) to refresh ${SCRIPT_DIR}, then re-run this updater."
   fi
   load_app_env
   resolve_target_user

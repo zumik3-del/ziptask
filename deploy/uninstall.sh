@@ -14,6 +14,13 @@
 #
 #  By default only the service and the helper scripts are removed; code, data
 #  and state are kept so a reinstall can pick up where the app left off.
+#
+#  Refuses before SOURCING (task #2260): this script's own installed tree
+#  (RUN_DIR, scripts/, hooks/ and scripts/app.env) is screened for symlinks
+#  BEFORE app.env is read — `.` follows a link, so a planted one would run as
+#  this run's user ahead of any later check — and the tree is screened again
+#  immediately before the helper scripts are removed, so a link planted in
+#  between cannot redirect the `rm -rf` at its target.
 # ════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -42,7 +49,7 @@ parse_args() {
     case "$1" in
       --purge)   PURGE=true;      shift ;;
       --yes|-y)  ASSUME_YES=true; shift ;;
-      --help|-h) sed -n '2,15p' "$0" 2>/dev/null || echo "See the comment header of uninstall.sh"; exit 0 ;;
+      --help|-h) sed -n '2,24p' "$0" 2>/dev/null || echo "See the comment header of uninstall.sh"; exit 0 ;;
       *) error "unknown option: $1 (try --help)" ;;
     esac
   done
@@ -50,6 +57,13 @@ parse_args() {
 
 main() {
   parse_args "$@"
+  # THE BOOTSTRAP PREFLIGHT (task #2260), BEFORE load_app_env. `load_app_env`
+  # SOURCES this tree's app.env and `.` follows a link, so a planted scripts/ or
+  # app.env would run as this run's user before any check below could look at
+  # it. The root comes from this script's own installed location, in the LOGICAL
+  # form — SCRIPT_DIR above is `pwd -P`, which resolves a linked scripts/ to its
+  # target and would hide the very link being screened for.
+  preflight_script_tree "${BASH_SOURCE[0]:-$0}"
   load_app_env
   [ -n "${APP_NAME:-}" ] || error "APP_NAME is not set in app.env"
   resolve_target_user
@@ -119,6 +133,16 @@ main() {
   # group cannot unlink inside it, so removal needs root; a --dir install under
   # your own home (no privileged updater) is still owned by you, hence the plain
   # attempt first and run_root only when it is refused.
+  #
+  # RE-ASSERTED IMMEDIATELY BEFORE THAT REMOVAL (task #2260). The preflight ran
+  # before app.env was sourced, and this is the one recursive delete the script
+  # makes, run as root. `rm -rf` refuses to descend a symlink it is HANDED, but
+  # it resolves every path component BEFORE the last one: with RUN_DIR itself a
+  # link, `rm -rf "${RUN_DIR}/scripts"` is a deletion of the target's scripts
+  # directory. Four `-L` tests are cheap next to that, and they also keep this
+  # script's refusal identical to update.sh's instead of leaving one entry point
+  # that reports a linked tree and another that half-removes it.
+  assert_run_dir_not_symlinked
   if [ -d "${RUN_DIR}/scripts" ]; then
     info "Removing helper scripts: ${RUN_DIR}/scripts"
     rm -rf "${RUN_DIR}/scripts" 2>/dev/null || run_root rm -rf "${RUN_DIR}/scripts"
