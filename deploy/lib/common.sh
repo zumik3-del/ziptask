@@ -179,6 +179,25 @@ resolve_target_user() {
   # group that does not exist (ADR §3e).
   : "${TARGET_GROUP:=${SERVICE_GROUP:-$TARGET_USER}}"
 
+  # A USER that does not exist is refused HERE, for exactly the reason the group
+  # check below exists — and it is the same failure class, one step earlier. The
+  # unit's User= is validated by systemd only when the unit STARTS, i.e. after
+  # the payload is in place, so a name that does not exist on this host surfaced
+  # as a health-gate timeout: it named the port, never the account, and the
+  # remedy it pointed at (raise HEALTH_TIMEOUT) could not work by construction.
+  #
+  # The shipped app.env leaves SERVICE_USER empty on purpose, so the fallback
+  # above names an account that exists by construction (SUDO_USER, or the
+  # invoking user). A name that IS written is the operator's to get right, and
+  # getting it wrong must fail before anything is fetched or written.
+  # Checked only when SERVICE_USER is set, and skipped when getent is absent —
+  # same shape as the group check.
+  if [ -n "${SERVICE_USER:-}" ] && command -v getent >/dev/null 2>&1; then
+    if ! getent passwd "$TARGET_USER" >/dev/null 2>&1; then
+      error "SERVICE_USER='${SERVICE_USER}' is not a user on this host — the unit's User=${TARGET_USER} could only fail at start time. Create the account, set SERVICE_USER to an existing one, or leave it empty to run the service as the invoking user."
+    fi
+  fi
+
   # A group that does not exist is refused HERE, named, rather than rendered into
   # Group= and left for systemd to fail on at start time: by then the payload is
   # in place and the message is systemd's, which names neither app.env nor this
@@ -268,7 +287,16 @@ run_as_target_user() {
 # swap). The first cutovers left a swapped binary root-owned (#1113) because only
 # install.sh owned this logic, so update.sh had no way to fix what it created.
 # One implementation, called from both, is the only shape in which "every
-# install AND update leaves the tree owned by the service user" is true.
+# install AND update leaves the payload and data trees owned by the service
+# user" is true.
+#
+# TWO MODELS, on purpose (task #2245). The payload and data trees the service
+# READS and WRITES (apply_ownership) belong to the service user. The deploy
+# tooling that a later privileged run EXECUTES (apply_run_dir_ownership) belongs
+# to root, with the service group allowed to read and execute it. Treating them
+# the same is what turned "the hook must be able to read app.env" into "the
+# service user owns the scripts a sudo update runs" — see the long note on
+# apply_run_dir_ownership.
 
 # ownership_target — the `user:group` spec every chown in the framework uses.
 # TARGET_GROUP defaults to TARGET_USER in resolve_target_user; the fallback is
@@ -357,37 +385,125 @@ apply_ownership() {
   return 0
 }
 
-# apply_run_dir_ownership — the framework's own state under RUN_DIR owned by the
-# service user: RUN_DIR itself, the helper scripts (including the mode-600
-# app.env) and the hooks.
+# apply_run_dir_ownership — the framework's own state under RUN_DIR pinned to
+# ROOT, with the service group allowed to read and execute but never to write.
 #
-# WHY THIS IS SEPARATE FROM apply_ownership. RUN_DIR is not part of the install
-# payload: it is written by install_helper_scripts() / install_hook_scripts(),
-# which run AFTER apply_ownership in install.sh's main. Chowning it from there
-# would chown an empty or absent directory.
+# WHY ROOT AND NOT THE SERVICE USER (task #2245). This function used to chown
+# RUN_DIR, scripts/ and hooks/ to TARGET_USER:TARGET_GROUP, on the reasoning that
+# update.sh, updater.sh and the pre-update hook all run as TARGET_USER and must
+# be able to read them. Reading was the only thing that needed fixing, and
+# owning was granted with it — which is a straight privilege-escalation path:
+# everything under RUN_DIR is executed by a LATER `sudo bash
+# ${RUN_DIR}/scripts/update.sh` (and by the pre-update hook that update.sh
+# sources as root-of-the-run). A service user that OWNS those files can rewrite
+# them and have the next privileged update run its content as root. The
+# unprivileged service account must be able to read and execute the deploy
+# tooling; it must never be able to replace it.
 #
-# WHY IT MATTERS. update.sh, updater.sh and the pre-update hook all run as
-# TARGET_USER (the operator's `bash ${RUN_DIR}/scripts/updater.sh`, not sudo),
-# and the hook reads ${RUN_DIR}/scripts/app.env for INSTALL_DIR. app.env is
-# installed mode 600, so a root-owned one is unreadable to exactly the process
-# that takes the pre-update database backup: #1113's backup failed silently with
-# "app.env: Permission denied".
+# So the boundary is: owner root, group TARGET_GROUP (the group the unit runs
+# as), mode 0750 for every directory and every script, 0640 for app.env. The
+# group bits are what keeps the documented flow working — `${RUN_DIR}/scripts/
+# updater.sh` is started by the operator (or by the service account itself) and
+# READS app.env for the layout, and `bash` only needs read access to the file it
+# runs. The group bits are also the REQUIREMENT this places on the host: the
+# account that runs updater.sh, update.sh or uninstall.sh must be a member of
+# TARGET_GROUP (it is, by construction, when TARGET_GROUP is the service user's
+# own primary group — which is the default). An operator who sets SERVICE_GROUP
+# to some other group must add both the service account and themselves to it,
+# or the deploy tooling answers "Permission denied" while working as designed.
 #
-# Scoped to these three paths on purpose. RUN_DIR may also hold app state the
-# framework does not own (a legacy data/ dir, a settings.json); a blind
-# `chown -R ${RUN_DIR}` would silently take that too.
+# Non-recursive on purpose, one level into scripts/ and hooks/ only. RUN_DIR may
+# also hold app state the framework does not own (a legacy data/ dir, backups,
+# a settings.json); a blind `chown -R root` would take that too, and `sudo` size
+# is exactly what this function must stop handing out.
 apply_run_dir_ownership() {
-  local d
+  local d f
   # Guarded BEFORE the loop, not inside it: the loop list is expanded when the
   # `for` runs, so a `[ -n "$RUN_DIR" ]` test in the body would be reached only
   # after "${RUN_DIR}/scripts" had already tripped `set -u` on a host whose
   # app.env leaves RUN_DIR empty and never reached resolve_target_user.
   [ -n "${RUN_DIR:-}" ] || return 0
+  # Without root and without sudo this run cannot change an owner at all, so the
+  # boundary is unreachable rather than violated: say it ONCE and stop, instead
+  # of warning per file. The case is legitimate — `--dir` under your own home
+  # with --no-service has no privileged updater to protect, and chown_target()
+  # already documents the same trade for the payload tree.
+  if [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+    warn "RUN_DIR ownership left as it is: this run cannot become root (no root, no sudo)."
+    warn "  ${RUN_DIR} stays owned by $(id -un). A --dir install under your own home"
+    warn "  has no privileged updater, so there is no boundary to enforce here."
+    return 0
+  fi
   for d in "$RUN_DIR" "${RUN_DIR}/scripts" "${RUN_DIR}/hooks"; do
-    [ -e "$d" ] || continue
-    ownership_mismatch "$d" || continue
-    chown_target "$d"
+    own_root_controlled "$d" 0750
   done
+  # One level into the two directories a privileged run EXECUTES from. Hidden
+  # entries are skipped: nothing in the deploy flow runs a dotfile by name, so
+  # they are not part of the boundary.
+  #
+  # SYMLINKS ARE SKIPPED, and that is load-bearing rather than tidy. `chown` and
+  # `chmod` both DEREFERENCE (chmod has no -h at all), so a link planted in
+  # scripts/ or hooks/ — by the compromised service user this boundary exists to
+  # contain, or by anything else that can write there — would make this root
+  # heal hand root:<group> and 0750 to the LINK TARGET, wherever it points
+  # (/etc/shadow, /etc/sudoers, the payload tree). Since the heal only ever
+  # needs to fix regular files the framework itself copied in, refusing every
+  # link costs nothing real and removes the arbitrary-target write. `-L` is
+  # tested before `-e`, so a dangling link is refused as well. The three DIRECTORY
+  # entries above are deliberately NOT screened: a symlinked RUN_DIR or
+  # scripts/ (an operator layout, not attacker-controlled) stays in scope.
+  for d in "${RUN_DIR}/scripts" "${RUN_DIR}/hooks"; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do
+      [ -L "$f" ] && continue
+      [ -e "$f" ] || continue
+      case "$(basename "$f")" in
+        app.env) own_root_controlled "$f" 0640 ;;
+        *)       own_root_controlled "$f" 0750 ;;
+      esac
+    done
+  done
+  return 0
+}
+
+# run_dir_target — the `user:group` every root-controlled RUN_DIR entry carries.
+# Root is the point (see apply_run_dir_ownership); the group is the one the unit
+# runs as, so the deploy account keeps read/execute access.
+run_dir_target() {
+  printf 'root:%s' "${TARGET_GROUP:-${TARGET_USER}}"
+}
+
+# own_root_controlled PATH MODE — give PATH to root and set MODE, keeping it
+# readable/executable for the service group. NOT FATAL, same decision as
+# chown_target(): a run that cannot chown warns and names the fix instead of
+# abandoning an install that is otherwise fine.
+#
+# Reports nothing when PATH is already correct: every re-install over a host this
+# function has fixed hits that path, and on a non-root install the alternative
+# is a sudo prompt per file.
+#
+# CONTRACT: PATH must not be a symlink. Both chown and chmod DEREFERENCE, so a
+# link here is an arbitrary-target write as root — the caller screens them
+# (see the `-L` guard in apply_run_dir_ownership).
+own_root_controlled() {
+  local p="$1" mode="${2#0}" spec current_mode current_owner
+  [ -e "$p" ] || return 0
+  spec="$(run_dir_target)"
+  current_owner="$(stat -c '%U:%G' "$p" 2>/dev/null || true)"
+  current_mode="$(stat -c '%a' "$p" 2>/dev/null || true)"
+  if [ "$current_owner" = "$spec" ] && [ "$current_mode" = "$mode" ]; then
+    return 0
+  fi
+  if ! run_root chown "$spec" "$p" 2>/dev/null; then
+    warn "cannot set ${p} to ${spec} (still ${current_owner})."
+    warn "  the service user must READ and EXECUTE this, never rewrite it: a file it"
+    warn "  owns here is code the next sudo update runs as root."
+    warn "  fix: sudo chown ${spec} ${p} && sudo chmod ${mode} ${p}"
+    return 0
+  fi
+  if ! run_root chmod "$mode" "$p" 2>/dev/null; then
+    warn "cannot set mode ${mode} on ${p}; it is owned by ${spec} but its mode is ${current_mode}."
+  fi
   return 0
 }
 
@@ -675,15 +791,34 @@ release_resolve_tag() {
 }
 
 # ── Port resolution ────────────────────────────────────────────────────────
-# Effective API port: config.json governs when present (install.sh seeds it and
-# an existing file may carry a custom port), app.env PORT is the fallback.
+# Effective API port: the app's own config file governs when present (install.sh
+# seeds it and an existing file may carry a custom port), app.env PORT is the
+# fallback.
+#
+# THE CONFIG FILE IS FOUND BY ITS DECLARED HOME FIRST (task #2245). CONFIG_FILE
+# is the app.env key that names it — /var/lib/ziptask/settings.json for ziptask
+# (ADR addendum R1) — and it is read here so the port the health gate polls is
+# the port the service actually binds on an EXISTING host, not app.env's PORT.
+# That is the half of `--port` that survives a re-install: the seeding pass
+# never rewrites an existing settings.json, so on a host whose file says 3105 the
+# gate must poll 3105 even with a different PORT in app.env.
+#
+# The two payload-tree candidates after it are the pre-R1 shapes the pre-update
+# hook still searches, kept for a host that has not migrated; the derived
+# ${DATA_DIR}/settings.json covers an app whose CONFIG_FILE is not declared.
+# Ordering is load-bearing: a migrated host may still carry a pre-R1 copy under
+# INSTALL_DIR, and reading THAT one would poll a port nothing listens on.
 resolve_port() {
   local cfg p
-  cfg="${INSTALL_DIR:-}/config.json"
-  if [ -f "$cfg" ]; then
+  local -a cands=()
+  [ -n "${CONFIG_FILE:-}" ] && cands+=("$CONFIG_FILE")
+  [ -n "${DATA_DIR:-}" ]    && cands+=("${DATA_DIR}/settings.json")
+  [ -n "${INSTALL_DIR:-}" ] && cands+=("${INSTALL_DIR}/config.json" "${INSTALL_DIR}/settings.json")
+  for cfg in ${cands[@]+"${cands[@]}"}; do
+    [ -f "$cfg" ] || continue
     p="$(grep -o '"port"[[:space:]]*:[[:space:]]*[0-9][0-9]*' "$cfg" | head -1 | grep -o '[0-9][0-9]*' || true)"
     if [ -n "$p" ]; then printf '%s' "$p"; return 0; fi
-  fi
+  done
   printf '%s' "${PORT:-3000}"
 }
 
