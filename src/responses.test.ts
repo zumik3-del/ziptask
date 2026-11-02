@@ -242,6 +242,33 @@ describe('get_timeline', () => {
     expect(lines[1].split('|')[0]).toBe('2')
   })
 
+  test('a limit returns the newest N events, still in ascending order (#2243)', () => {
+    const id = json(handleCreateTask(svc, { title: 'Window', reporter: 'dev' })).id
+    for (const content of ['e2', 'e3', 'e4', 'e5', 'e6']) handleAddComment(svc, { id, agent: 'a', content })
+    // Six events exist (the create audit plus five comments); limit 3 must drop the three oldest.
+    const lines = text(handleGetTimeline(svc, { id, limit: 3 })).split('\n')
+    expect(lines).toHaveLength(3)
+    expect(lines.map(l => l.split('|')[1])).toEqual(['comment', 'comment', 'comment'])
+    expect(lines.map(l => l.split('|')[4])).toEqual(['e4', 'e5', 'e6'])
+    expect(lines.map(l => l.split('|')[0])).toEqual(['1', '2', '3'])
+  })
+
+  test('a frozen-clock tie between an audit row and a comment has a deterministic order (#2243)', () => {
+    const frozen = '2026-01-01T00:00:00.000Z'
+    const clock = { nowMs: () => Date.parse(frozen), nowIso: () => frozen }
+    const frozenSvc = new TaskService(new TaskRepo(db, clock), { leaseTtlMin: 15, scope: 'test', clock })
+    const id = json(handleCreateTask(frozenSvc, { title: 'Tie', reporter: 'dev' })).id
+    handleAddComment(frozenSvc, { id, agent: 'a', content: 'note' })
+    handleClaimTask(frozenSvc, { agent: 'a', task_id: id })
+    const events = text(handleGetTimeline(frozenSvc, { id })).split('\n').map(l => l.split('|'))
+    expect(events).toHaveLength(3)
+    // Every row shares created_at, so the type/rowid tie-break alone decides: actions first, then
+    // comments, and insertion order inside one type.
+    expect(events.map(cols => cols[1])).toEqual(['action', 'action', 'comment'])
+    expect(events.map(cols => cols[4])).toEqual(['create: null->queued', 'claim: queued->in_progress', 'note'])
+    expect(text(handleGetTimeline(frozenSvc, { id }))).toBe(text(handleGetTimeline(frozenSvc, { id })))
+  })
+
   test('default limit caps results when many entries exist', () => {
     const id = json(handleCreateTask(svc, { title: 'DfltLim', reporter: 'dev' })).id
     for (let i = 0; i < 52; i++) {
