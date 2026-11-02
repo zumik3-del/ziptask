@@ -17,8 +17,12 @@
 #
 #  Options:
 #      --dir DIR       Install root: the payload, DATA_DIR (= DIR/data unless
-#                      app.env names its own) and the unit move under DIR
-#      --port PORT     Port for the seeded config + health check (default: PORT)
+#                      app.env names its own) and the unit move under DIR, and
+#                      the resolved layout is PERSISTED into the installed
+#                      ${RUN_DIR}/scripts/app.env so updater.sh/update.sh stay
+#                      on DIR instead of the canonical /opt/<app>
+#      --port PORT     Port for the seeded config + health check (default: PORT),
+#                      persisted into the installed app.env as PORT
 #      --version TAG   Pin a version instead of resolving the latest
 #      --force         Reinstall even when the same version is already present
 #      --no-service    Skip systemd unit installation and start
@@ -114,7 +118,7 @@ parse_args() {
       --force)      FORCE=true;       shift   ;;
       --no-service) NO_SERVICE=true;  shift   ;;
       --help|-h)
-        sed -n '3,33p' "$0" 2>/dev/null || echo "See the comment header of install.sh"
+        sed -n '3,37p' "$0" 2>/dev/null || echo "See the comment header of install.sh"
         exit 0 ;;
       *) error "unknown option: $1 (try --help)" ;;
     esac
@@ -144,6 +148,13 @@ parse_args() {
 #      INSTALL_DIR is replaced BEFORE DATA_DIR: the new DATA_DIR lives under the
 #      new INSTALL_DIR, so the reverse order would leave a half-rewritten path.
 #      A string that names neither root is left exactly as it was.
+#
+# This function only changes the values in MEMORY, and that is the whole gap the
+# review of #2245 found: the installed app.env is what update.sh and updater.sh
+# load on the next run, and the copy carried the canonical /opt/<app> values, so
+# a --dir host either updated the wrong tree or aborted at "not installed at
+# /opt/<app>". persist_layout() (see "Phase: installed app.env layout") writes
+# these five keys into ${RUN_DIR}/scripts/app.env once the copy has landed.
 apply_overrides() {
   local old_install="${INSTALL_DIR:-}" old_data="${DATA_DIR:-}"
   # app.env may omit either key entirely; `set -u` would abort on the
@@ -624,6 +635,88 @@ setup_config_link() {
 # implementation: an update that swaps a payload creates root-owned files exactly
 # as an install does (#1113), and only the install side owned this logic.
 
+# ── Phase: installed app.env layout ────────────────────────────────────────
+# The installed ${RUN_DIR}/scripts/app.env is the HOST's layout record: it is
+# what updater.sh stages (stage_release) and what update.sh sources
+# (load_app_env), on every later run. A --dir/--port install must therefore
+# leave its resolved layout there, not only in this process's memory.
+
+# app_env_literal VALUE — VALUE as a double-quoted app.env literal. app.env is
+# SOURCED, so the four characters that expand in it are escaped: backslash,
+# double quote, dollar and backtick. Paths do not normally contain them; the
+# escaping is what keeps `--dir '/srv/$HOME/x'` from reloading as $HOME-expanded
+# on the next update — a silently wrong root is worse than a visible one.
+app_env_literal() {
+  local v="$1"
+  v="${v//\\/\\\\}"
+  v="${v//\"/\\\"}"
+  v="${v//\$/\\\$}"
+  v="${v//\`/\\\`}"
+  printf '"%s"' "$v"
+}
+
+# persist_app_env_value FILE KEY VALUE — make the file's KEY= line read VALUE,
+# append the line when KEY is absent, and write NOTHING when it already matches.
+#
+# WHY A LINE-BY-LINE COPY INSTEAD OF sed. The value is data in a sourced shell
+# file: slashes, spaces and quotes (EXEC_START has spaces and a flag) would have
+# to survive sed's pattern/replacement syntax, and every escape added there is
+# one more thing to get wrong. The loop copies every other line verbatim and
+# substitutes the one line whole, which has no metacharacter surface at all.
+# `cat > FILE` rather than `cp` keeps the file's inode and its 0640 mode.
+#
+# IDEMPOTENCE is the grep: a repeat install with the same layout (and every
+# canonical install without flags) compares equal on the first line and the loop
+# never runs, so the shipped file stays byte-identical.
+persist_app_env_value() {
+  local file="$1" key="$2" value="$3" line ln tmp found=false
+  [ -n "$file" ] && [ -f "$file" ] || return 0
+  [ -n "$value" ] || return 0
+  # A newline (or a CR) cannot survive the one-line-per-assignment shape: it
+  # would split the value across two lines and leave app.env unparseable, or
+  # forge a second assignment. No path contains one, so this is refused rather
+  # than escaped — and refused LOUDLY, because continuing with an unpersisted
+  # layout is exactly the broken --dir/--port host this function exists to end.
+  case "$value" in
+    *$'\n'*|*$'\r'*) error "cannot persist ${key}: the value contains a newline" ;;
+  esac
+  line="${key}=$(app_env_literal "$value")"
+  grep -qxF -- "$line" "$file" && return 0
+  mktemp_owned tmp || error "cannot create a temporary file"
+  : > "$tmp"
+  while IFS= read -r ln || [ -n "$ln" ]; do
+    if [ "$found" = false ] && [ "${ln#"$key"=}" != "$ln" ]; then
+      printf '%s\n' "$line" >> "$tmp"
+      found=true
+      continue
+    fi
+    printf '%s\n' "$ln" >> "$tmp"
+  done < "$file"
+  [ "$found" = true ] || printf '%s\n' "$line" >> "$tmp"
+  cat "$tmp" > "$file"
+}
+
+# persist_layout — write the EFFECTIVE layout into the installed app.env.
+#
+# THE FIVE KEYS are the layout: the two roots, the two strings derived from them
+# (EXEC_START, CONFIG_FILE) and the port. Everything else in app.env — identity,
+# release coordinates, the health contract — is the shipped default and is left
+# byte-identical.
+#
+# EXEC_START is skipped while empty: it is defaulted AFTER this runs
+# (install_service, `EXEC_START="${EXEC_START:-$(default_exec_start)}"`), and an
+# empty EXEC_START in the file is what makes update.sh derive it from the
+# INSTALL_DIR persisted here anyway.
+persist_layout() {
+  local env_file="${RUN_DIR}/scripts/app.env"
+  [ -f "$env_file" ] || return 0
+  persist_app_env_value "$env_file" INSTALL_DIR "${INSTALL_DIR:-}"
+  persist_app_env_value "$env_file" DATA_DIR    "${DATA_DIR:-}"
+  persist_app_env_value "$env_file" EXEC_START  "${EXEC_START:-}"
+  persist_app_env_value "$env_file" CONFIG_FILE "${CONFIG_FILE:-}"
+  persist_app_env_value "$env_file" PORT        "${PORT:-}"
+}
+
 # ── Phase: helper scripts in RUN_DIR/scripts ───────────────────────────────
 # update.sh / updater.sh / uninstall.sh / common.sh / app.env are installed together so the
 # app can be managed later without the original deploy/ directory.
@@ -660,6 +753,10 @@ install_helper_scripts() {
     fi
     if [ "$f" = "app.env" ]; then chmod 0640 "${dest}/${f}"; else chmod 0750 "${dest}/${f}"; fi
   done
+  # AFTER the copy (that is the file this pass created) and BEFORE
+  # apply_run_dir_ownership pins it to 0640 root:<group>: the content is the
+  # installer's, the ownership boundary is the framework's.
+  persist_layout
   info "Helpers installed in ${dest}"
 }
 
