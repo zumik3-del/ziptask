@@ -42,10 +42,12 @@ updates keep using `D` and `N` instead of the canonical `/opt/ziptask` and
 The deploy state is root-owned (`app.env` is `0640 root:<service-group>`,
 directories and helper scripts `0750`), so the service account and the account
 that runs the update must be in that group. `updater.sh` and `uninstall.sh` are
-installed into `~/.ziptask/scripts/`. The ownership pass refuses a symlinked
-`~/.ziptask`, `scripts/` or `hooks/` — `chown`/`chmod` dereference, so a planted
-link would retarget them at an arbitrary path — and changes nothing in that
-case: inspect the link, remove it, re-run.
+installed into `~/.ziptask/scripts/`. Every entry point — `install.sh`,
+`update.sh` and `updater.sh` — screens `~/.ziptask`, `scripts/`, `hooks/` and
+`scripts/app.env` and aborts before changing anything if one of them is a
+symlink (dangling included): `cp`, `chown`, `chmod`, `source` and `bash` all
+dereference, so a planted link would retarget the work at an arbitrary path.
+Inspect the link, remove it, re-run.
 
 The layout, the unit policy and the per-app `app.env` keys are shared with
 synaptomind and subagentix and documented once, in
