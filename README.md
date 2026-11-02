@@ -29,14 +29,23 @@ sudo bash deploy/install.sh --version v0.5.4
 Canonical layout: binary in `/opt/ziptask`, database **and** `settings.json` in
 `/var/lib/ziptask/`, deploy state (helpers, hooks, `app.env`) in `~/.ziptask/`.
 `--port N` seeds a fresh `settings.json` with `port: N` and points the health
-check at it (an existing file is never rewritten); `--dir D` makes the install
-self-contained under `D`, with the config and the database in `D/data/`;
-`--version` pins a release and `--no-service` skips systemd —
-`bash deploy/install.sh --help` lists them all. The deploy state is root-owned
-(`app.env` is `0640 root:<service-group>`, directories and helper scripts
-`0750`), so the service account and the account that runs the update must be in
-that group. `updater.sh` and `uninstall.sh` are installed into
-`~/.ziptask/scripts/`.
+check at it (an existing file is never rewritten); `--dir D` moves the payload,
+the config and the database under `D` (config at `D/data/settings.json`) while
+the deploy state stays in `~/.ziptask/`; `--version` pins a release and
+`--no-service` skips systemd — `bash deploy/install.sh --help` lists them all.
+Both `--dir` and `--port` are also persisted into the installed
+`~/.ziptask/scripts/app.env` (`INSTALL_DIR`, `DATA_DIR`, `EXEC_START`,
+`CONFIG_FILE`, `PORT`) — the file `updater.sh` and `update.sh` reload — so later
+updates keep using `D` and `N` instead of the canonical `/opt/ziptask` and
+`3005`. A repeat install with the same flags rewrites nothing.
+
+The deploy state is root-owned (`app.env` is `0640 root:<service-group>`,
+directories and helper scripts `0750`), so the service account and the account
+that runs the update must be in that group. `updater.sh` and `uninstall.sh` are
+installed into `~/.ziptask/scripts/`. The ownership pass refuses a symlinked
+`~/.ziptask`, `scripts/` or `hooks/` — `chown`/`chmod` dereference, so a planted
+link would retarget them at an arbitrary path — and changes nothing in that
+case: inspect the link, remove it, re-run.
 
 The layout, the unit policy and the per-app `app.env` keys are shared with
 synaptomind and subagentix and documented once, in
@@ -53,8 +62,13 @@ starts it. The unit runs as the invoking account — `SUDO_USER` when the instal
 went through `sudo` — unless `SERVICE_USER` in
 [`deploy/app.env`](deploy/app.env) names another one: it wins over `SUDO_USER`,
 and a name that does not exist on the host aborts the install before anything is
-written. Set it (plus `SERVICE_GROUP` when the group is not the account's own)
-to run under a dedicated account. Manage it with:
+written. A shell that is root without `SUDO_USER` (a container, `su -`,
+`docker exec -u root`) has no invoking account to inherit: the installer warns,
+names `SERVICE_USER`, and continues with a root-run unit — set `SERVICE_USER`
+(or install through `sudo` from that account) to keep the service unprivileged;
+`SERVICE_USER=root` is the explicit way to say root is intended. Set it (plus
+`SERVICE_GROUP` when the group is not the account's own) to run under a
+dedicated account. Manage it with:
 
 ```bash
 sudo systemctl start ziptask
