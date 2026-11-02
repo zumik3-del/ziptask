@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { createsCycle, depsSatisfied, parseDeps } from './core/deps'
+import { collapseDeps, createsCycle, depsSatisfied, parseDeps } from './core/deps'
 import { MAX_DEPENDS_ON } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
@@ -337,5 +337,45 @@ describe('listQueue dep-aware priority ordering (#767)', () => {
     const queue = text(handleListQueue(svc, {}))
     const ids = queue.split('\n').map(line => Number(line.split('|')[0]))
     expect(ids).toEqual([p2a, p2b])
+  })
+})
+
+describe('collapseDeps purity (#2257)', () => {
+  test('keeps the first occurrence of every id in input order', () => {
+    expect(collapseDeps([3, 1, 3, 2, 1])).toEqual([3, 1, 2])
+  })
+
+  test('leaves the caller array untouched', () => {
+    const input = [2, 2, 5]
+    collapseDeps(input)
+    expect(input).toEqual([2, 2, 5])
+  })
+
+  test('returns a distinct array even when nothing needs collapsing', () => {
+    // Pins the contract the guard relies on: it may keep the returned array as the normalised list,
+    // so an aliasing fast path (`return deps`) would quietly reintroduce the caller-array rewrite.
+    const input = [1, 2, 3]
+    expect(collapseDeps(input)).not.toBe(input)
+  })
+})
+
+describe('the service normalizes depends_on without rewriting the caller array (#2257)', () => {
+  test('createTask stores the deduped list and leaves the argument array as passed', () => {
+    const dep = createTaskRow({ title: 'Dep', reporter: 'dev' })
+    const input = [dep, dep]
+    const res = svc.createTask({ title: 'Dup', reporter: 'dev', depends_on: input })
+    if (!res.ok) throw new Error(res.error.message)
+    expect(JSON.parse(getTaskRow(db, res.data.id).depends_on)).toEqual([dep])
+    expect(input).toEqual([dep, dep])
+  })
+
+  test('updateTask stores the deduped list and leaves the argument array as passed', () => {
+    const dep = createTaskRow({ title: 'Dep', reporter: 'dev' })
+    const id = createTaskRow({ title: 'Target', reporter: 'dev' })
+    const input = [dep, dep]
+    const res = svc.updateTask({ id, agent: 'dev', depends_on: input })
+    if (!res.ok) throw new Error(res.error.message)
+    expect(JSON.parse(getTaskRow(db, id).depends_on)).toEqual([dep])
+    expect(input).toEqual([dep, dep])
   })
 })
