@@ -1019,3 +1019,39 @@ describe('review → in_progress: work sent back takes the lease', () => {
       .toBe('BLOCKED: dependencies not satisfied')
   })
 })
+
+describe('lease TTL cap (#2243)', () => {
+  test('the service refuses a TTL above 1440 minutes and writes nothing', () => {
+    const id = createTaskRow('TooLong')
+    const res = svc.claimTask({ agent: HOLDER, taskId: id, leaseTtlMin: 1441 })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(formatError(res.error)).toBe('INVALID: lease_ttl_min too large')
+    expect(row(id).status).toBe('queued')
+    expect(row(id).assignee).toBeNull()
+    expect(row(id).lease_expires_at).toBeNull()
+  })
+
+  test('1440 minutes is the cap and is accepted', () => {
+    const id = createTaskRow('AtCap')
+    const res = svc.claimTask({ agent: HOLDER, taskId: id, leaseTtlMin: 1440 })
+    if (!res.ok) throw new Error(formatError(res.error))
+    expect(res.data.leaseTtlMin).toBe(1440)
+    expect(row(id).status).toBe('in_progress')
+    expect(row(id).assignee).toBe(HOLDER)
+    const remainingMin = (leaseMs(id) - monotonicNowMs()) / 60_000
+    expect(remainingMin).toBeGreaterThan(1439)
+    expect(remainingMin).toBeLessThanOrEqual(1440)
+  })
+
+  test('a huge TTL is refused instead of throwing RangeError', () => {
+    const id = createTaskRow('Huge')
+    // Before the cap, now + ttl was an invalid Date, so claimTask threw RangeError instead of failing.
+    expect(() => svc.claimTask({ agent: HOLDER, taskId: id, leaseTtlMin: Number.MAX_SAFE_INTEGER })).not.toThrow()
+    const res = svc.claimTask({ agent: HOLDER, taskId: id, leaseTtlMin: Number.MAX_SAFE_INTEGER })
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(formatError(res.error)).toBe('INVALID: lease_ttl_min too large')
+    expect(row(id).status).toBe('queued')
+    expect(row(id).lease_expires_at).toBeNull()
+  })
+})

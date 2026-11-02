@@ -340,6 +340,33 @@ describe('MCP schema guards (#431)', () => {
     expect(taskCount()).toBe(before)
   })
 
+  test('claim_task refuses a lease_ttl_min above 1440 on the wire and accepts 1440 (#2243)', async () => {
+    const id = getId(srv.svc.createTask({ title: 'Lease cap', reporter: 'dev' }))
+    const tooHigh: any = await client.callTool({
+      name: 'claim_task',
+      arguments: { agent: 'tester', task_id: id, lease_ttl_min: 1441 }
+    })
+    expect(tooHigh.isError).toBe(true)
+    expect(textOf(tooHigh)).toContain('Invalid arguments for tool claim_task: INVALID: lease_ttl_min too large')
+    // Refused at the schema, so the row is untouched.
+    const row = srv.db.query('SELECT status, assignee FROM tasks WHERE id = ?').get(id) as any
+    expect(row).toMatchObject({ status: 'queued', assignee: null })
+
+    const huge: any = await client.callTool({
+      name: 'claim_task',
+      arguments: { agent: 'tester', task_id: id, lease_ttl_min: Number.MAX_SAFE_INTEGER }
+    })
+    expect(huge.isError).toBe(true)
+    expect(textOf(huge)).toContain('Invalid arguments for tool claim_task: INVALID: lease_ttl_min too large')
+
+    const atCap: any = await client.callTool({
+      name: 'claim_task',
+      arguments: { agent: 'tester', task_id: id, lease_ttl_min: 1440 }
+    })
+    expect(atCap.isError).toBeUndefined()
+    expect(JSON.parse(textOf(atCap))).toMatchObject({ id, lease_ttl_min: 1440 })
+  })
+
   test('create_task accepts a description exactly at the limit on the wire (#1857)', async () => {
     const res: any = await client.callTool({
       name: 'create_task',
