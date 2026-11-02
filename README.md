@@ -43,9 +43,9 @@ The deploy state is root-owned (`app.env` is `0640 root:<service-group>`,
 directories and helper scripts `0750`), so the service account and the account
 that runs the update must be in that group. `updater.sh` and `uninstall.sh` are
 installed into `~/.ziptask/scripts/`. Every entry point — `install.sh`,
-`update.sh` and `updater.sh` — screens `~/.ziptask`, `scripts/`, `hooks/` and
-`scripts/app.env` and aborts before changing anything if one of them is a
-symlink (dangling included): `cp`, `chown`, `chmod`, `source` and `bash` all
+`update.sh`, `uninstall.sh` and `updater.sh` — screens `~/.ziptask`, `scripts/`,
+`hooks/` and `scripts/app.env` and aborts before changing anything if one of them
+is a symlink (dangling included): `cp`, `chown`, `chmod`, `source` and `bash` all
 dereference, so a planted link would retarget the work at an arbitrary path.
 Inspect the link, remove it, re-run.
 
