@@ -1,6 +1,6 @@
 import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, Clock } from './tasks'
 import { createHash } from 'node:crypto'
-import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, asClock, normalizePriority, PRIORITY_INVALID_MESSAGE, codePointLength } from './tasks'
+import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, clampLimit, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, MAX_LEASE_TTL_MIN, LEASE_TTL_TOO_LARGE_MESSAGE, asClock, normalizePriority, PRIORITY_INVALID_MESSAGE, codePointLength } from './tasks'
 import type { CommentRow, LifecycleStore, ProjectListItem, ProjectRow, ProjectStore, QueryStore, TaskServiceStore, TimelineRow, SvcResult, SvcError, UpdateStatusData, UpdateTaskData } from './types'
 import { parseDeps, createsCycle, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
@@ -214,6 +214,10 @@ export class TaskLifecycleService {
   claimTask(args: ClaimTaskArgs): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> {
     const agentErr = agentError(args.agent)
     if (agentErr) return fail(agentErr)
+    // The cap guards both doors — the explicit value and the configured default — and it refuses
+    // instead of clamping, so a caller never believes it holds a lease the server shortened.
+    const leaseTtlMin = args.leaseTtlMin ?? this.opts.leaseTtlMin
+    if (leaseTtlMin > MAX_LEASE_TTL_MIN) return fail('INVALID', LEASE_TTL_TOO_LARGE_MESSAGE)
     let projectId: number | undefined
     if (args.taskId === undefined) {
       const project = this.projects.resolve(args.project)
@@ -242,7 +246,6 @@ export class TaskLifecycleService {
     const claimedTask = task
 
     const now = this._nowIso()
-    const leaseTtlMin = args.leaseTtlMin ?? this.opts.leaseTtlMin
     const leaseUntil = this._leaseUntil(leaseTtlMin)
     return this.store.transaction((): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> => {
       const changes = this.store.markClaimed(claimedTask.id, claimedTask.version, args.agent, leaseUntil, now)

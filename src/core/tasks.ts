@@ -106,8 +106,10 @@ export function statusToCode(status: TaskStatus | 'not_found'): number {
   return STATUS_CODES[status]
 }
 
+// A pipe row is one line of N columns: a `|` in a value would add a column, a CR/LF a line, so a
+// value can never break the row it is rendered into.
 export function sanitizePipe(text: string): string {
-  return text.replaceAll('|', '/')
+  return text.replaceAll('|', '/').replace(/[\r\n]+/g, ' ')
 }
 
 export function pipeJoin(...fields: Array<string | number>): string {
@@ -225,6 +227,12 @@ export const MAX_CONTENT_LENGTH = 10000
 export const MAX_DESCRIPTION_LENGTH = 20000
 export const MAX_DEPENDS_ON = 100
 export const MAX_RESULT_LIMIT = 1000
+// A lease TTL is a policy, not a wall: a day is the longest lease worth honouring, and the cap
+// keeps `now + ttl` a valid Date instead of letting a schema-valid minute count throw a RangeError.
+export const MAX_LEASE_TTL_MIN = 1440
+// The one refusal text for a lease TTL above the cap. Like PRIORITY_INVALID_MESSAGE it is BARE:
+// formatError adds the code prefix on the service path, the schema layer adds `INVALID: ` itself.
+export const LEASE_TTL_TOO_LARGE_MESSAGE = 'lease_ttl_min too large'
 export const MAX_SAFE_TIMESTAMP_MS = 8_640_000_000_000_000
 // The ceiling of an internal pagination cursor (an OFFSET). A cursor must not be capped at the
 // result ceiling: a scan that re-reads the same page never reaches the tail of the queue.

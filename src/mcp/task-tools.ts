@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
 import type { TaskStatus, TaskPriorityInput } from '../core/tasks'
-import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, MAX_DEPENDS_ON, isTaskPriorityInput, PRIORITY_INVALID_MESSAGE } from '../core/tasks'
+import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT, MAX_LEASE_TTL_MIN, LEASE_TTL_TOO_LARGE_MESSAGE, MAX_SAFE_TIMESTAMP_MS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, MAX_DEPENDS_ON, isTaskPriorityInput, PRIORITY_INVALID_MESSAGE } from '../core/tasks'
 import { foldResult } from '../core/result'
 import {
   type ToolResult, jsonResult, textResult, errorTool, toToolResult, pickFields, rejectUnknownArgs,
@@ -70,7 +70,7 @@ const CLAIM_TASK_SHAPE = {
   agent: z.string().max(MAX_AGENT_LENGTH, 'INVALID: agent too long').optional().describe('agent name; defaults to "unknown" when omitted; <=200 code points'),
   task_id: TaskId.optional(),
   fields: z.array(z.string()).optional().describe('extra fields to include in the response'),
-  lease_ttl_min: z.number().int().positive().optional().describe('lease TTL in minutes for this claim; overrides the server default for this claim only'),
+  lease_ttl_min: z.number().int().positive().max(MAX_LEASE_TTL_MIN, `INVALID: ${LEASE_TTL_TOO_LARGE_MESSAGE}`).optional().describe(`lease TTL in minutes for this claim; overrides the server default for this claim only; <=${MAX_LEASE_TTL_MIN}`),
   project: PROJECT_ARG
 }
 
@@ -155,7 +155,7 @@ export function handleListTasks(svc: TaskService, args: {
           return withAssignee ? pipeJoin(id, code, '-') : pipeJoin(id, code)
         }
         const code = statusToCode(task.status)
-        return withAssignee ? pipeJoin(id, code, task.assignee ?? '-') : pipeJoin(id, code)
+        return withAssignee ? pipeJoin(id, code, task.assignee === null ? '-' : sanitizePipe(task.assignee)) : pipeJoin(id, code)
       })
       return textResult(lines.join('\n'))
     }, errorTool)
@@ -248,7 +248,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleListTasks(svc, args))
 
   server.registerTool('claim_task', {
-    description: 'Claim a task (auto-picks the best queued, or task_id — queued/blocked). `project` (slug) is required for the auto-pick (it is the only scoped branch); a by-id claim stays unscoped. agent is optional (defaults to "unknown"); lease_ttl_min overrides the server default lease for this claim only. fields: extra fields to include in the response',
+    description: 'Claim a task (auto-picks the best queued, or task_id — queued/blocked). `project` (slug) is required for the auto-pick (it is the only scoped branch); a by-id claim stays unscoped. agent is optional (defaults to "unknown"); lease_ttl_min overrides the server default lease for this claim only (<=1440; a larger value is refused with INVALID: lease_ttl_min too large). fields: extra fields to include in the response',
     inputSchema: z.object(CLAIM_TASK_SHAPE).catchall(z.unknown())
   }, async (args) => handleClaimTask(svc, args))
 

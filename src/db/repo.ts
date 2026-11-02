@@ -39,7 +39,10 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   }
 
   transaction<T>(fn: () => T): T {
-    return this.db.transaction(fn)()
+    // An IMMEDIATE transaction takes the write lock up front, so a read-then-write body (the cycle
+    // check in update_task is one) waits for a concurrent writer instead of failing with
+    // SQLiteError: database is locked (a snapshot that went stale between the read and the write).
+    return this.db.transaction(fn).immediate()
   }
 
   getTaskRow(id: number): Task | null {
@@ -256,13 +259,18 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
 
   timelineEntries(taskId: number, limit: number): Array<{ type: string; agent: string; text: string; created_at: string }> {
     const n = clampLimit(limit, 0)
-    const sql = `SELECT 'action' as type, agent, action || ': ' || COALESCE(old_value, 'null') || '->' || COALESCE(new_value, 'null') as text, created_at, rowid
+    // The LIMIT picks the newest window (both orders are the exact reverse of each other, so the
+    // tie-break on created_at, type, rowid stays deterministic); the outer ORDER BY hands it back
+    // in ascending chronological order, which is how every other read presents the feed.
+    const sql = `SELECT type, agent, text, created_at FROM (
+      SELECT 'action' as type, agent, action || ': ' || COALESCE(old_value, 'null') || '->' || COALESCE(new_value, 'null') as text, created_at, rowid AS rid
       FROM audit_log WHERE task_id = ?
       UNION ALL
-      SELECT 'comment', agent, content, created_at, rowid
+      SELECT 'comment', agent, content, created_at, rowid AS rid
       FROM comments WHERE task_id = ?
-      ORDER BY created_at ASC, type ASC, rowid ASC
-      LIMIT ?`
+      ORDER BY created_at DESC, type DESC, rid DESC
+      LIMIT ?
+    ) ORDER BY created_at ASC, type ASC, rid ASC`
     return this.db.query(sql).all(taskId, taskId, n) as Array<{ type: string; agent: string; text: string; created_at: string }>
   }
 

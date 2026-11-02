@@ -36,7 +36,7 @@ export function handleGetTimeline(svc: TaskService, args: { id: number; limit?: 
   const unknown = rejectUnknownArgs('get_timeline', GET_TIMELINE_SHAPE, args)
   if (unknown) return unknown
   return foldResult(svc.getTimeline(args.id, args.limit), (rows) => {
-    const lines = rows.map((row, i) => pipeJoin(i + 1, row.type, row.agent, row.created_at, sanitizePipe(row.text)))
+    const lines = rows.map((row, i) => pipeJoin(i + 1, row.type, sanitizePipe(row.agent), row.created_at, sanitizePipe(row.text)))
     return textResult(lines.join('\n'))
   }, errorTool)
 }
@@ -48,7 +48,7 @@ export function registerCommentTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleAddComment(svc, args))
 
   server.registerTool('get_timeline', {
-    description: 'Merged audit_log + comments feed for a task, pipe seq|type|agent|at|text',
+    description: 'Merged audit_log + comments feed for a task, pipe seq|type|agent|at|text in ascending order; a limit returns the newest N events',
     inputSchema: z.object(GET_TIMELINE_SHAPE).catchall(z.unknown())
   }, async (args) => handleGetTimeline(svc, args))
 }
