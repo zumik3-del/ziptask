@@ -59,7 +59,7 @@ export async function readBodyWithLimit(req: Request, maxBytes: number): Promise
   return result.tooLarge ? { body: '', oversized: true } : { body: result.text, oversized: false }
 }
 
-export function trackStreamActivity(response: Response, session: Session): Response {
+export function trackStreamActivity(response: Response, session: Pick<Session, 'lastAccess'>): Response {
   const contentType = response.headers.get('content-type') ?? ''
   if (!response.body || !contentType.includes('text/event-stream')) return response
   const tracked = response.body.pipeThrough(
@@ -103,15 +103,17 @@ export class InMemoryEventStore implements EventStore {
     this.events.set(eventId, { streamId, message })
     // One store per session and sessions are capped, but a single long-lived session
     // can still emit unbounded events, so keep memory bounded by evicting the oldest
-    // (Map preserves insertion order). If a client resumes after its last event id was
-    // evicted, replayEventsAfter returns '' and the client re-initializes instead of
-    // replaying — degraded but bounded, never a memory leak.
+    // (Map preserves insertion order). Evicted cursors are rejected at the HTTP boundary.
     while (this.events.size > MAX_EVENT_STORE_EVENTS) {
       const oldest = this.events.keys().next().value
       if (oldest === undefined) break
       this.events.delete(oldest)
     }
     return eventId
+  }
+
+  knowsEvent(eventId: string): boolean {
+    return this.events.has(eventId)
   }
 
   async replayEventsAfter(lastEventId: string, { send }: { send: (eventId: string, message: JSONRPCMessage) => Promise<void> }): Promise<string> {
@@ -185,6 +187,7 @@ const JSONRPC_BAD_REQUEST = -32000
 
 const SESSION_NOT_FOUND = { jsonrpc: '2.0', error: { code: JSONRPC_SESSION_NOT_FOUND, message: 'Session not found' }, id: null }
 const SESSION_REQUIRED = { jsonrpc: '2.0', error: { code: JSONRPC_BAD_REQUEST, message: 'Bad Request: Mcp-Session-Id header is required' }, id: null }
+const LAST_EVENT_ID_NOT_REPLAYABLE = { jsonrpc: '2.0', error: { code: JSONRPC_BAD_REQUEST, message: "Bad Request: Last-Event-ID is not in this session's replay window" }, id: null }
 
 // Projection from a full Task to the minimal read shape used by the /api/tasks list endpoint.
 // /api/task/:id returns the whole task row (see docs/http-endpoints.md), so it is not projected here.
@@ -285,6 +288,13 @@ export function startHttp(opts: StartHttpOptions) {
             return Response.json(SESSION_NOT_FOUND, { status: 404 })
           }
           session.lastAccess = Date.now()
+          const lastEventId = req.method === 'GET' ? req.headers.get('last-event-id') : null
+          // The SDK must reach replayEventsAfter's synchronous lookup without an intervening
+          // async yield; an SDK change there could allow eviction after this check.
+          if (lastEventId && !session.replayWindow.knowsEvent(lastEventId)) {
+            svcLogger.warn('mcp replay refused: Last-Event-ID outside the replay window', { session: sessionId, lastEventId })
+            return Response.json(LAST_EVENT_ID_NOT_REPLAYABLE, { status: 400 })
+          }
           return trackStreamActivity(await session.transport.handleRequest(req), session)
         }
 
@@ -310,7 +320,7 @@ export function startHttp(opts: StartHttpOptions) {
             // never runs the peek, so without this it would fall back to the SDK's 4 MiB default.
             maxRequestBodySize: DEFAULT_HTTP_MAX_BODY_BYTES,
             onsessioninitialized: (id) => {
-              registry.open(id, { transport, lastAccess: Date.now(), agent: peek.agentName })
+              registry.open(id, { transport, lastAccess: Date.now(), agent: peek.agentName, replayWindow: eventStore })
             },
             onsessionclosed: (id) => {
               registry.close(id)
