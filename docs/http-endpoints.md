@@ -15,6 +15,14 @@ The two `/api/*` read endpoints are browser-facing, so they answer with permissi
 
 `GET /health` is purely additive over `{"ok":true}`: `version` carries the running package version (no leading `v`) so the deploy framework's health gate can compare it against the target release (`HEALTH_VERSION_FIELD`, `expected = ${TAG#v}`).
 
+## MCP stream resumability
+
+Each MCP HTTP session retains its latest 1000 events in memory. A `GET /mcp` with a non-empty `Last-Event-ID` from that session's retained window replays subsequent retained events from the same stream. Older events are evicted as the window fills.
+
+For an existing session, an unknown, another session's, or evicted event ID returns HTTP `400` with a JSON-RPC error instead of opening a replay stream; the session remains available. This differs from HTTP `404` for an unknown or terminated session, which is checked first.
+
+Direct HTTP clients can read the JSON error message. The MCP SDK client receives `400 Bad Request` without that message; automatic recovery is not guaranteed, so client applications must handle the error and decide how to recover.
+
 ## `GET /api/tasks` (experimental)
 
 A provisional, read-only endpoint that lists tasks of one project, optionally filtered by status. Intended for lightweight REST consumers (e.g. the OpenCode TUI plugin) that do not speak MCP. It routes through the same service layer as the MCP tools.
