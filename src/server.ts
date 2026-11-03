@@ -5,7 +5,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { TaskService } from './core/service'
 import { formatError } from './core/result'
 import { TASK_STATUS_VALUES } from './core/tasks'
-import type { TaskStatus } from './core/tasks'
+import type { Task, TaskPriority, TaskStatus } from './core/tasks'
 import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
 import { isLoopbackHost } from './config'
@@ -186,6 +186,12 @@ const JSONRPC_BAD_REQUEST = -32000
 const SESSION_NOT_FOUND = { jsonrpc: '2.0', error: { code: JSONRPC_SESSION_NOT_FOUND, message: 'Session not found' }, id: null }
 const SESSION_REQUIRED = { jsonrpc: '2.0', error: { code: JSONRPC_BAD_REQUEST, message: 'Bad Request: Mcp-Session-Id header is required' }, id: null }
 
+// Shared projection from a full Task to the minimal read shape used by both /api/* read
+// endpoints, so the list and view responses cannot drift apart.
+export function projectTask(task: Task): { id: number; title: string; status: TaskStatus; priority: TaskPriority } {
+  return { id: task.id, title: task.title, status: task.status, priority: task.priority }
+}
+
 // EXPERIMENTAL: provisional read-only endpoint, response shape subject to change.
 function handleTaskList(svc: TaskService, url: URL): Response {
   const project = url.searchParams.get('project') ?? undefined
@@ -206,12 +212,7 @@ function handleTaskList(svc: TaskService, url: URL): Response {
     const httpStatus = result.error.code === 'NOT_FOUND' ? 404 : 400
     return Response.json({ error: formatError(result.error) }, { status: httpStatus })
   }
-  const tasks = result.data.tasks.map((task) => ({
-    id: task.id,
-    title: task.title,
-    status: task.status,
-    priority: task.priority
-  }))
+  const tasks = result.data.tasks.map(projectTask)
   return Response.json({ tasks, total: result.data.total })
 }
 

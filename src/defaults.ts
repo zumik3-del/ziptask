@@ -29,9 +29,6 @@ export const DEFAULT_AUDIT_LOG = true
 export const SQLITE_BUSY_TIMEOUT_MS = 5000
 export const CANDIDATES_PAGE_SIZE = 100
 export const SESSION_CLEANUP_INTERVAL_MS = MINUTE_MS
-// The priority list is owned by src/core/tasks.ts (next to the TaskPriority type, the way
-// TASK_STATUS_VALUES owns TaskStatus); this alias keeps the historical import path working.
-export { TASK_PRIORITIES } from './core/tasks'
 
 const LOG_LEVEL_ORDER: Record<LogLevel, number> = { off: 0, error: 1, warn: 2, info: 3, debug: 4 }
 
