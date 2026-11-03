@@ -186,8 +186,8 @@ const JSONRPC_BAD_REQUEST = -32000
 const SESSION_NOT_FOUND = { jsonrpc: '2.0', error: { code: JSONRPC_SESSION_NOT_FOUND, message: 'Session not found' }, id: null }
 const SESSION_REQUIRED = { jsonrpc: '2.0', error: { code: JSONRPC_BAD_REQUEST, message: 'Bad Request: Mcp-Session-Id header is required' }, id: null }
 
-// Shared projection from a full Task to the minimal read shape used by both /api/* read
-// endpoints, so the list and view responses cannot drift apart.
+// Projection from a full Task to the minimal read shape used by the /api/tasks list endpoint.
+// /api/task/:id returns the whole task row (see docs/http-endpoints.md), so it is not projected here.
 export function projectTask(task: Task): { id: number; title: string; status: TaskStatus; priority: TaskPriority } {
   return { id: task.id, title: task.title, status: task.status, priority: task.priority }
 }
