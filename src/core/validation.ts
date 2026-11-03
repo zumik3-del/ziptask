@@ -1,4 +1,4 @@
-import { codePointLength, type Task } from './tasks'
+import { codePointLength, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, type Task } from './tasks'
 import type { SvcError } from './types'
 
 export function requiredError(value: string | null | undefined, field: string): SvcError | null {
@@ -23,4 +23,16 @@ export function optionalFieldError(value: string | null | undefined, max: number
 
 export function epicError(task: Task, message: string): SvcError | null {
   return task.is_epic ? { code: 'INVALID', message } : null
+}
+
+export function agentError(agent: string): SvcError | null {
+  return requiredError(agent, 'agent') ?? tooLongError(agent, MAX_AGENT_LENGTH, 'agent')
+}
+
+export function contentError(content: string): SvcError | null {
+  return requiredError(content, 'content') ?? tooLongError(content, MAX_CONTENT_LENGTH, 'content')
+}
+
+export function commentError(comment: string): SvcError | null {
+  return requiredError(comment, 'comment') ?? tooLongError(comment, MAX_CONTENT_LENGTH, 'comment')
 }
