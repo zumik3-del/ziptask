@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto'
 import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, Clock } from './tasks'
-import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, MAX_LEASE_TTL_MIN, LEASE_TTL_TOO_LARGE_MESSAGE, MAX_CONTENT_LENGTH, normalizePriority, PRIORITY_INVALID_MESSAGE, codePointLength } from './tasks'
+import { TERMINAL_STATUSES, nowIso, monotonicNowMs, sanitizePipe, MAX_LEASE_TTL_MIN, LEASE_TTL_TOO_LARGE_MESSAGE, normalizePriority, PRIORITY_INVALID_MESSAGE, codePointLength } from './tasks'
 import type { LifecycleStore, ProjectRow, SvcResult, SvcError, UpdateStatusData, UpdateTaskData } from './types'
 import { createsCycle, collapseDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
 import { LeaseReaper } from './reaper'
 import { createTaskGuard, updateStatusGuard, updateTaskGuard, editableWindowError, claimEligibilityError, epicNotClaimableError, epicTargetChangedError, epicPromotionRaceError } from './guards'
-import { tooLongError, agentError, commentError } from './validation'
+import { agentError, commentError } from './validation'
 import { MINUTE_MS } from '../defaults'
 import type { ProjectService } from './project-service'
 import type { ResolvedOptions } from './service'
@@ -84,7 +84,6 @@ export class TaskLifecycleService {
         title: args.title,
         description: args.description ?? null,
         priority,
-        assignee: null,
         reporter,
         depends_on: JSON.stringify(deps),
         now,
@@ -145,7 +144,6 @@ export class TaskLifecycleService {
       const claimErr = claimEligibilityError(task, this.store)
       if (claimErr) return fail(claimErr)
     } else if (projectId !== undefined) {
-      // readyCandidates imported lazily to avoid circular? import at top
       task = readyCandidates(this.store, 1, this.opts.autoClaimCeiling, projectId)[0] ?? null
     }
 
@@ -181,7 +179,9 @@ export class TaskLifecycleService {
   }
 
   private _digestDescription(value: string | null): string {
-    const hash = createHash('sha256').update(value ?? '', 'utf8').digest('hex').slice(0, 16)
+    // Prefix length of the sha256 hex digest stored in the audit trail.
+    const DIGEST_PREFIX_LENGTH = 16
+    const hash = createHash('sha256').update(value ?? '', 'utf8').digest('hex').slice(0, DIGEST_PREFIX_LENGTH)
     return `sha256:${hash}:${codePointLength(value ?? '')}`
   }
 
@@ -189,7 +189,7 @@ export class TaskLifecycleService {
     const agentErr = agentError(args.agent)
     if (agentErr) return fail(agentErr)
     if (args.comment !== undefined) {
-      const commentErr = tooLongError(args.comment, MAX_CONTENT_LENGTH, 'comment')
+      const commentErr = commentError(args.comment)
       if (commentErr) return fail(commentErr)
     }
     const task = this.store.getTaskRow(args.id)
@@ -296,8 +296,7 @@ export class TaskLifecycleService {
       }
 
       if (task.epic_id !== null && subtaskMirror !== null && this.opts.auditLog) {
-        this.store.appendEpicAuditMirror(task.epic_id, args.agent, subtaskMirror,
-          `#${task.id} ${sanitizePipe(task.title)}`)
+        this.store.auditAppend(task.epic_id, args.agent, subtaskMirror, undefined, `#${task.id} ${sanitizePipe(task.title)}`)
       }
 
       return ok({ id: args.id, status: args.status, version: updated.version, ...(refund ? { attempts: updated.attempts } : {}) })

@@ -28,8 +28,6 @@ const SHAPES: ClockShape[] = [
   { name: 'a bare nowMs function', clock: () => INJECTED_MS },
   { name: '{ nowIso }', clock: { nowIso: () => INJECTED_ISO } },
   { name: '{ nowMs }', clock: { nowMs: () => INJECTED_MS } },
-  { name: '{ now }', clock: { now: () => INJECTED_MS } },
-  { name: '{ monotonicNowMs }', clock: { monotonicNowMs: () => INJECTED_MS } },
   { name: '{ clock: { nowMs } }', clock: { clock: { nowMs: () => INJECTED_MS } } },
   { name: '{ clock: { nowIso } }', clock: { clock: { nowIso: () => INJECTED_ISO } } }
 ]
@@ -75,12 +73,6 @@ describe('asClock: the accepted shapes', () => {
     const clock = asClock({ nowIso: () => INJECTED_ISO, nowMs: () => INJECTED_MS + 1000 })
     expect(clock!.nowMs()).toBe(INJECTED_MS + 1000)
     expect(clock!.nowIso()).toBe(INJECTED_ISO)
-  })
-
-  test('{ now } and { monotonicNowMs } are aliases of nowMs', () => {
-    expect(asClock({ now: () => INJECTED_MS })!.nowMs()).toBe(INJECTED_MS)
-    expect(asClock({ monotonicNowMs: () => INJECTED_MS })!.nowMs()).toBe(INJECTED_MS)
-    expect(asClock({ now: () => INJECTED_MS })!.nowIso()).toBe(INJECTED_ISO)
   })
 
   test('a { clock } envelope is unwrapped and normalised', () => {

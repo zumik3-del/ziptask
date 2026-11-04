@@ -95,7 +95,9 @@ export class InMemoryEventStore implements EventStore {
   // ambiguous because bursts land in the same millisecond, so it is paired with a
   // fixed-width monotonic counter. Ids are unique and lexicographically ordered.
   private generateEventId(streamId: string): string {
-    return `${streamId}_${this.eventTimestamp()}_${String(++this.seq).padStart(10, '0')}`
+    // Fixed-width monotonic counter so event ids sort lexicographically within a millisecond.
+    const EVENT_SEQ_PAD_WIDTH = 10
+    return `${streamId}_${this.eventTimestamp()}_${String(++this.seq).padStart(EVENT_SEQ_PAD_WIDTH, '0')}`
   }
 
   async storeEvent(streamId: string, message: JSONRPCMessage): Promise<string> {

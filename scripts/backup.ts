@@ -5,7 +5,8 @@ import { dirname, join, resolve, sep } from 'node:path'
 const DB_PATH = process.env.ZIPTASK_DB ?? './data/ziptask.db'
 const BACKUP_DIR = process.env.ZIPTASK_BACKUP_DIR ?? './backups'
 const BACKUP_PREFIX = process.env.ZIPTASK_BACKUP_PREFIX ?? 'ziptask'
-const RETAIN_COUNT = parseInt(process.env.ZIPTASK_BACKUP_RETAIN ?? '7', 10)
+const DEFAULT_BACKUP_RETAIN = 7
+const RETAIN_COUNT = parseInt(process.env.ZIPTASK_BACKUP_RETAIN ?? String(DEFAULT_BACKUP_RETAIN), 10)
 
 // sqlite3 dot-command destination; never derived from user-controlled paths.
 const TEMP_BACKUP_NAME = '.ziptask-backup.tmp.db'
@@ -51,7 +52,7 @@ function doBackup(): void {
     validatePath(BACKUP_DIR, 'BACKUP_DIR')
     validateBackupLocation(backupPath, BACKUP_DIR)
     if (!Number.isFinite(RETAIN_COUNT) || RETAIN_COUNT < 0) {
-      throw new Error(`RETAIN_COUNT must be a non-negative number, got: ${process.env.ZIPTASK_BACKUP_RETAIN ?? '7'}`)
+      throw new Error(`RETAIN_COUNT must be a non-negative number, got: ${process.env.ZIPTASK_BACKUP_RETAIN ?? DEFAULT_BACKUP_RETAIN}`)
     }
   } catch (e) {
     log(`invalid configuration: ${e instanceof Error ? e.message : String(e)}`)
@@ -138,6 +139,3 @@ if (import.meta.main) {
 }
 
 export { doBackup, validatePath, validateBackupLocation, TEMP_BACKUP_NAME }
-export function validateBackupPath(p: string): string {
-  return validatePath(p, 'backupPath')
-}

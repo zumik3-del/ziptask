@@ -2,7 +2,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
 import { sanitizePipe, pipeJoin, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH } from '../core/tasks'
-import { type ToolResult, toToolResult, rejectUnknownArgs, foldResult, textResult, errorTool, TaskId } from './common'
+import { type ToolResult, toToolResult, rejectUnknownArgs, textResult, errorTool, TaskId } from './common'
+import { foldResult } from '../core/result'
 
 const ADD_COMMENT_SHAPE = {
   id: TaskId,

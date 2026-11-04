@@ -3,9 +3,10 @@ import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
 import { type ToolResult, toToolResult, rejectUnknownArgs, textResult } from './common'
 import { sanitizePipe, pipeJoin } from '../core/tasks'
+import { PROJECT_SLUG_PATTERN } from '../core/project-slug'
 
 const CREATE_PROJECT_SHAPE = {
-  slug: z.string().optional().describe('lowercase ^[a-z0-9][a-z0-9._-]{0,31}$; defaults to the normalized folder name'),
+  slug: z.string().optional().describe(`lowercase ${PROJECT_SLUG_PATTERN.source}; defaults to the normalized folder name`),
   folder_path: z.string().describe('absolute path of the project folder on the host that creates the row (an annotation; normalized, never checked for existence, never resolved against the server cwd). A relative path is refused: INVALID: folder_path must be an absolute path')
 }
 
@@ -50,7 +51,7 @@ export function handleDeleteProject(svc: TaskService, args: { project: string })
 
 export function registerProjectTools(server: McpServer, svc: TaskService) {
   server.registerTool('create_project', {
-    description: 'Create a project; slug? derives from the folder name and must match ^[a-z0-9][a-z0-9._-]{0,31}$ ("legacy" is reserved). Output {slug}',
+    description: `Create a project; slug? derives from the folder name and must match ${PROJECT_SLUG_PATTERN.source} ("legacy" is reserved). Output {slug}`,
     inputSchema: z.object(CREATE_PROJECT_SHAPE).catchall(z.unknown())
   }, async (args) => handleCreateProject(svc, args))
 

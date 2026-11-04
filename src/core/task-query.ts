@@ -1,4 +1,4 @@
-import type { Task, TaskStatus, Clock } from './tasks'
+import type { Task, TaskStatus } from './tasks'
 import { clampLimit } from './tasks'
 import type { QueryStore, SvcResult, CommentRow, TimelineRow } from './types'
 import type { ProjectService } from './project-service'
@@ -18,14 +18,12 @@ export type ListQueueArgs = { limit?: number; project?: string }
 
 export class TaskQueryService {
   private readonly opts: ResolvedOptions
-  private readonly clock: Clock | null
   private readonly reaper: LeaseReaper
   readonly projects: ProjectService
 
   constructor(private store: QueryStore, opts: ResolvedOptions, projects: ProjectService, reaper?: LeaseReaper) {
     this.opts = opts
-    this.clock = opts.clock
-    this.reaper = reaper ?? new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, this.clock)
+    this.reaper = reaper ?? new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, opts.clock)
     this.projects = projects
   }
 

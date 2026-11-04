@@ -1,10 +1,7 @@
-import { DEFAULT_LOG_LEVEL, LEVELS, type LogLevel, logLevelEnabled, matchLogLevel } from './defaults'
+import { DEFAULT_LOG_LEVEL, type LogLevel, logLevelEnabled, matchLogLevel } from './defaults'
 
 export type { LogLevel }
 export type LogFields = Record<string, unknown>
-
-// Re-exported for schema/enum consumers: LEVELS and LogLevel are owned by src/defaults.ts.
-export { LEVELS }
 
 type RecordLevel = Exclude<LogLevel, 'off'>
 type LogRecord = LogFields & { logger: string; ts: string; level: RecordLevel; msg: string }

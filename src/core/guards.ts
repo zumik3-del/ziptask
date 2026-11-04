@@ -1,8 +1,8 @@
 import type { Task, TaskStatus } from './tasks'
-import { isValidTransition, TERMINAL_STATUSES, EDITABLE_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_CONTENT_LENGTH, MAX_DEPENDS_ON, normalizePriority, PRIORITY_INVALID_MESSAGE } from './tasks'
+import { isValidTransition, TERMINAL_STATUSES, EDITABLE_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON, normalizePriority, PRIORITY_INVALID_MESSAGE } from './tasks'
 import type { TaskStore, SvcError } from './types'
 import { parseDeps, depsSatisfied, collapseDeps } from './deps'
-import { requiredError, tooLongError, optionalFieldError, epicError } from './validation'
+import { requiredError, tooLongError, optionalFieldError, epicError, commentError } from './validation'
 import { RESERVED_PROJECT_SLUG } from './project-slug'
 
 // Only the reads a guard performs: a guard never writes, so it cannot reach the mutating half.
@@ -95,6 +95,19 @@ export function epicTargetGuardError(refusal: EpicTargetRefusal, epicId: number)
   }
 }
 
+// One home for the dependency-list validation: "not found / is an epic / other project". Both
+// call sites (create_task and update_task) read it so the three refusal strings cannot drift.
+export function depsGuardError(store: GuardStore, deps: number[], project: string): SvcError | null {
+  const batch = store.batchTasks(deps)
+  for (const d of deps) {
+    const t = batch.get(d)
+    if (!t) return { code: 'INVALID', message: `dependency #${d} not found` }
+    if (t.is_epic) return { code: 'INVALID', message: `dependencies on epic tasks not allowed (#${d})` }
+    if (t.project !== project) return { code: 'INVALID', message: `dependency #${d} belongs to project '${t.project ?? ''}'` }
+  }
+  return null
+}
+
 export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcError | null {
   const titleErr = requiredError(args.title, 'title') ?? tooLongError(args.title, MAX_TITLE_LENGTH, 'title')
   if (titleErr) return titleErr
@@ -134,15 +147,8 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   }
   if (args.projectArchived) return { code: 'INVALID', message: `project '${args.project}' is archived` }
   if (deps.length > 0) {
-    const batch = store.batchTasks(deps)
-    for (const d of deps) {
-      const t = batch.get(d)
-      if (!t) return { code: 'INVALID', message: `dependency #${d} not found` }
-      if (t.is_epic) return { code: 'INVALID', message: `dependencies on epic tasks not allowed (#${d})` }
-      if (t.project !== args.project) {
-        return { code: 'INVALID', message: `dependency #${d} belongs to project '${t.project ?? ''}'` }
-      }
-    }
+    const depErr = depsGuardError(store, deps, args.project)
+    if (depErr) return depErr
   }
   // G4: it must also live in the same project (G5: an epic's children inherit, never guess)
   if (args.epic_id !== undefined) {
@@ -246,7 +252,7 @@ export function updateTaskGuard(args: UpdateTaskInput, task: Task, store: GuardS
   const agentErr = requiredError(args.agent, 'agent') ?? tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent')
   if (agentErr) return agentErr
   if (args.comment !== undefined) {
-    const commentErr = tooLongError(args.comment, MAX_CONTENT_LENGTH, 'comment')
+    const commentErr = commentError(args.comment)
     if (commentErr) return commentErr
   }
   if (args.version !== undefined && task.version !== args.version) {
@@ -283,15 +289,8 @@ export function updateTaskGuard(args: UpdateTaskInput, task: Task, store: GuardS
     if (task.is_epic && (deps.length > 0 || parseDeps(task.depends_on).length > 0)) {
       return { code: 'INVALID', message: 'an epic cannot have depends_on' }
     }
-    const batch = store.batchTasks(deps)
-    for (const d of deps) {
-      const t = batch.get(d)
-      if (!t) return { code: 'INVALID', message: `dependency #${d} not found` }
-      if (t.is_epic) return { code: 'INVALID', message: `dependencies on epic tasks not allowed (#${d})` }
-      if (t.project !== task.project) {
-        return { code: 'INVALID', message: `dependency #${d} belongs to project '${t.project ?? ''}'` }
-      }
-    }
+    const depErr = depsGuardError(store, deps, task.project ?? '')
+    if (depErr) return depErr
   }
   return null
 }

@@ -1,6 +1,7 @@
 export const SECOND_MS = 1000
 export const MINUTE_MS = 60_000
 export const HOUR_MS = 3_600_000
+export const DAY_MS = 86_400_000
 
 export const DEFAULT_DB_PATH = './data/ziptask.db'
 export const DEFAULT_HOST = '127.0.0.1'

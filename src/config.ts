@@ -13,7 +13,7 @@ import { isTaskPriorityInput, normalizePriority, PRIORITY_INVALID_MESSAGE, MAX_L
 // The configured default accepts the same shapes as create_task (the canonical "pN", the number N
 // and the digit string "N"): the normalizer in src/core/tasks.ts is the one mapping, and the
 // transform turns the accepted shape into the canonical string the settings carry.
-const PRIORITY_INPUT = z.unknown().refine(
+export const PRIORITY_INPUT = z.unknown().refine(
   (value) => value === undefined || isTaskPriorityInput(value),
   { message: `INVALID: ${PRIORITY_INVALID_MESSAGE}` }
 )
@@ -69,25 +69,29 @@ const SettingsSchema = z.object({
 // The env layer is the last word, so the merged result is re-validated against the same
 // boundaries minus logging.level: that one stays a raw string on purpose (the logger parses
 // it and warns about an unknown level, see src/logger.ts).
-const MergedSettingsSchema = z.object({
-  ...boundaries,
-  logging: partialGroup({ level: z.string() }),
+// The merged result is always complete (defaults filled in), so it is validated against a
+// required schema rather than the partial one: the type is derived from it, not hand-mirrored.
+const CompleteSettingsSchema = z.object({
+  dbPath: z.string(),
+  host: z.string(),
+  port: z.number().int().nonnegative(),
+  leaseTtlMin: z.number().int().positive().max(MAX_LEASE_TTL_MIN),
+  maxAttempts: z.number().int().positive(),
+  reapCooldownSec: z.number().int().positive(),
+  autoClaimCeiling: z.number().int().positive(),
+  http: z.object({ maxSessions: z.number().int().positive(), sessionTtlMs: z.number().int().positive() }),
+  defaults: z.object({
+    priority: PRIORITY_INPUT.transform(value => normalizePriority(value) ?? DEFAULT_PRIORITY),
+    reporter: z.string(),
+    listLimit: z.number().int().positive(),
+    timelineLimit: z.number().int().positive(),
+    queueLimit: z.number().int().positive()
+  }),
+  logging: z.object({ level: z.string() }),
   auditLog: z.boolean()
-}).partial()
+})
 
-export type Settings = z.infer<typeof SettingsSchema> & {
-  dbPath: string
-  host: string
-  port: number
-  leaseTtlMin: number
-  maxAttempts: number
-  reapCooldownSec: number
-  autoClaimCeiling: number
-  http: { maxSessions: number; sessionTtlMs: number }
-  defaults: { priority: string; reporter: string; listLimit: number; timelineLimit: number; queueLimit: number }
-  logging: { level: string }
-  auditLog: boolean
-}
+export type Settings = z.infer<typeof CompleteSettingsSchema>
 
 // Level parsing is the logger's job: the raw ZIPTASK_LOG_LEVEL string reaches createLogger
 // so it can warn about an unknown level. settings.json keeps the closed enum instead, so a
@@ -285,10 +289,10 @@ export function loadSettings(opts?: {
     setNested(merged, path, value)
   }
 
-  const validated = MergedSettingsSchema.safeParse(merged)
+  const validated = CompleteSettingsSchema.safeParse(merged)
   if (!validated.success) {
     throw new Error(`Invalid configuration after env overrides: ${formatIssues(validated.error)}`)
   }
 
-  return validated.data as unknown as Settings
+  return validated.data
 }

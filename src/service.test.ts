@@ -215,8 +215,7 @@ describe('auto-claim ceiling (#105)', () => {
           title: `Blocked ${i}`,
           description: null,
           priority: 'p2',
-          assignee: null,
-          reporter: 'dev',
+                    reporter: 'dev',
           depends_on: JSON.stringify([999]),
           now: nowIso(),
           projectId: testProjectId(repo2)
@@ -227,8 +226,7 @@ describe('auto-claim ceiling (#105)', () => {
       title: 'Free',
       description: null,
       priority: 'p2',
-      assignee: null,
-      reporter: 'dev',
+            reporter: 'dev',
       depends_on: '[]',
       now: nowIso(),
       projectId: testProjectId(repo2)
@@ -252,8 +250,7 @@ describe('auto-claim ceiling (#105)', () => {
           title: `Blocked ${i}`,
           description: null,
           priority: 'p2',
-          assignee: null,
-          reporter: 'dev',
+                    reporter: 'dev',
           depends_on: JSON.stringify([999]),
           now: nowIso(),
           projectId: testProjectId(repo2)
@@ -264,8 +261,7 @@ describe('auto-claim ceiling (#105)', () => {
       title: 'Free',
       description: null,
       priority: 'p2',
-      assignee: null,
-      reporter: 'dev',
+            reporter: 'dev',
       depends_on: '[]',
       now: nowIso(),
       projectId: testProjectId(repo2)
@@ -666,7 +662,7 @@ describe('a creation-time assignee is refused (#1872)', () => {
     // The guard is the first line of defence; the repo is the last one. A bypass or a cross-process
     // race that reaches the store with a value in hand must not leave a holder without a lease.
     const id = repo.insertTask({
-      title: 'Bypass', description: null, priority: 'p2', assignee: 'boss', reporter: 'dev',
+      title: 'Bypass', description: null, priority: 'p2', reporter: 'dev',
       depends_on: '[]', now: nowIso(), projectId: testProjectId(repo)
     }).id
     const row = getTaskRow(db, id)!

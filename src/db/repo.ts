@@ -5,6 +5,10 @@ import type { AuditStore, CommentRow, CommentStore, LeaseStore, ProjectListItem,
 import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
 import { PRIORITY_ORDER_SQL, TASK_SELECT, TERMINAL_STATUSES_SQL, EDITABLE_STATUSES_SQL } from './sql'
 
+// Chunk size for batched IN-clause reads; stays under SQLite's bound-variable limit (portable
+// builds cap at 999), so 500 leaves headroom for the other bound parameters in the statement.
+const BATCH_CHUNK_SIZE = 500
+
 type SqlParam = string | number | null
 
 // bun:sqlite's spread bindings need a typed array; keep the single cast here.
@@ -17,7 +21,7 @@ type TaskRow = Omit<Task, 'is_epic'> & { is_epic: number; project_id: number | n
 // SQL keeps is_epic as 0/1; the domain type carries it as a boolean.
 function toTask(row: TaskRow): Task {
   const { project_id: _internal, ...rest } = row
-  return { ...rest, project: rest.project ?? null, is_epic: rest.is_epic !== 0 }
+  return { ...rest, project: rest.project, is_epic: rest.is_epic !== 0 }
 }
 
 export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditStore, LeaseStore {
@@ -52,8 +56,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
 
   insertTask(task: {
     title: string; description: string | null; priority: TaskPriority
-    // `assignee` stays in the seam for its callers, but the creation path never writes a holder.
-    assignee: string | null; reporter: string; depends_on: string; now: string
+    reporter: string; depends_on: string; now: string
     maxAttempts?: number
     epicId?: number; isEpic?: boolean; projectId?: number | null
   }): { id: number; status: CreatedTaskStatus } {
@@ -64,14 +67,10 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     const projectId = task.projectId ?? null
     // ADR 0002: an epic is born `open` and holds no lease, so it never carries an assignee.
     const status = isEpic ? 'open' : 'queued'
-    // A task is born without a lease — an epic `open`, a regular task `queued` — and the holder is
-    // written by the claim. So the creation path never writes one: the guard refuses a caller's
-    // `assignee` and the column stays NULL here even when a bypass hands one in (task #1872).
-    const assignee = null
     const result = this.db.run(
       `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic, project_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
-      [task.title, task.description, status, task.priority, assignee, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, epicFlag, projectId]
+       VALUES (?, ?, ?, ?, NULL, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+      [task.title, task.description, status, task.priority, task.reporter, task.depends_on, maxAttempts, task.now, task.now, epicId, epicFlag, projectId]
     )
     // The birth rule lives here, so the created status is reported from the row that was
     // written: the caller never recomputes it and the audit trail cannot name another one.
@@ -147,9 +146,8 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     const map = new Map<number, Task | null>()
     if (ids.length === 0) return map
     // Chunk to stay under SQLite's bound-variable limit (portable builds cap at 999).
-    const chunkSize = 500
-    for (let i = 0; i < ids.length; i += chunkSize) {
-      const chunk = ids.slice(i, i + chunkSize)
+    for (let i = 0; i < ids.length; i += BATCH_CHUNK_SIZE) {
+      const chunk = ids.slice(i, i + BATCH_CHUNK_SIZE)
       const rows = this.db.query(`${TASK_SELECT} WHERE t.id ${this.inClause(chunk.length)}`).all(...bindParams(chunk)) as TaskRow[]
       for (const row of rows) map.set(row.id, toTask(row))
     }
@@ -219,7 +217,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     ).all(nowIso) as Array<{ id: number; version: number; attempts: number; max_attempts: number }>
   }
 
-  reapTransition(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number {
+  reapTransition(id: number, expectedVersion: number, status: 'queued' | 'failed', attempts: number, now: string): number {
     // The reap policy is derived from the target status here, so both write paths cannot drift
     // and no caller can pass a policy that contradicts the status it asks for.
     const completedAt = TERMINAL_STATUSES.includes(status) ? now : null
@@ -232,8 +230,8 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
       'completed_at = COALESCE(?, completed_at)'
     ]
     const params: SqlParam[] = [status, attempts, now, completedAt]
-    // Terminal transitions (and re-queue) drop ownership metadata so no stale assignee survives.
-    if (status === 'queued' || TERMINAL_STATUSES.includes(status)) assignments.push('assignee = NULL')
+    // Reaping only ever re-queues or fails a task, so ownership metadata is always dropped.
+    assignments.push('assignee = NULL')
     params.push(id, expectedVersion)
     const result = this.db.run(
       `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND status = 'in_progress' AND version = ?`,
@@ -288,16 +286,16 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   }
 
   childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number; canceled: number } {
-    const rows = this.db.query(
+    const row = this.db.query(
       `SELECT
          COUNT(*) as total,
-         SUM(CASE WHEN status NOT IN ${TERMINAL_STATUSES_SQL} THEN 1 ELSE 0 END) as open,
-         SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done,
-         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
-         SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END) as canceled
+         COALESCE(SUM(CASE WHEN status NOT IN ${TERMINAL_STATUSES_SQL} THEN 1 ELSE 0 END), 0) as open,
+         COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) as done,
+         COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed,
+         COALESCE(SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END), 0) as canceled
        FROM tasks WHERE epic_id = ?`
-    ).get(epicId) as { total: number; open: number; done: number; failed: number; canceled: number } | null
-    return rows ?? { total: 0, open: 0, done: 0, failed: 0, canceled: 0 }
+    ).get(epicId) as { total: number; open: number; done: number; failed: number; canceled: number }
+    return row
   }
 
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): number {
@@ -323,10 +321,6 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     }
     // The report: 1 when this call promoted the target, 0 when it matched no row.
     return changes
-  }
-
-  appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void {
-    this.auditAppend(taskId, agent, action, undefined, newValue)
   }
 
   insertProject(project: { slug: string; folderPath: string; now: string }): number {
