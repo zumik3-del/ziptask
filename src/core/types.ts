@@ -3,14 +3,14 @@ import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, CommentType } f
 // Lease reaping needs only the sweep, its CAS transition and (via AuditStore) the audit row.
 export interface LeaseStore {
   expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>>
-  reapTransition(id: number, expectedVersion: number, status: TaskStatus, attempts: number, now: string): number
+  reapTransition(id: number, expectedVersion: number, status: 'queued' | 'failed', attempts: number, now: string): number
 }
 
 // Task-scoped storage: task CRUD, deps, leases, epic roll-up. No project/comment/audit methods.
 export interface TaskStore {
   getTaskRow(id: number): Task | null
   insertTask(task: { title: string; description: string | null; priority: TaskPriority;
-    assignee: string | null; reporter: string; depends_on: string; now: string; maxAttempts?: number
+    reporter: string; depends_on: string; now: string; maxAttempts?: number
     epicId?: number; isEpic?: boolean; projectId?: number | null }): { id: number; status: CreatedTaskStatus }
   deleteTask(id: number): void
   listTasks(filters: { assignee?: string; status?: TaskStatus; updatedSinceIso?: string; epicId?: number; isEpic?: boolean; limit: number; projectId?: number })
@@ -30,7 +30,6 @@ export interface TaskStore {
   nonTerminalChildCount(epicId: number): number
   childStatusCounts(epicId: number): { total: number; open: number; done: number; failed: number; canceled: number }
   promoteEpicWithMirror(id: number, agent: string, action: string, newValue: string, now: string, auditLog: boolean): number
-  appendEpicAuditMirror(taskId: number, agent: string, action: string, newValue: string): void
 }
 
 // Project administration storage.
@@ -64,7 +63,7 @@ export interface Store extends TaskStore, ProjectStore, CommentStore, AuditStore
 export type LifecycleStore = Pick<TaskStore,
   'getTaskRow' | 'insertTask' | 'deleteTask' | 'depsOf' | 'statusesOf' | 'batchTasks'
   | 'markClaimed' | 'transitionStatus' | 'updateTaskFields' | 'transaction' | 'nonTerminalChildCount'
-  | 'promoteEpicWithMirror' | 'appendEpicAuditMirror' | 'queuedCandidates'
+  | 'promoteEpicWithMirror' | 'queuedCandidates'
 > & Pick<CommentStore, 'insertComment'> & Pick<AuditStore, 'auditAppend'> & LeaseStore
 
 export type QueryStore = Pick<TaskStore,

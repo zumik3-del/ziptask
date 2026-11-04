@@ -97,7 +97,7 @@ curl -s http://127.0.0.1:3005/health   # {"ok":true}
 
 The previous unit body is also kept at `/etc/systemd/system/ziptask.service.bak`, so the single-line `ExecStart` revert can be done by restoring that file instead of editing. Reverting means the pre-update hook resolves `dbPath` through the `RUN_DIR` candidate again, which is why that candidate is retained.
 
-**Schema guard on startup:** a fresh DB auto-initialises; an older DB (V < L) auto-migrates forward; a DB newer than the binary (V > L, i.e. you downgraded) refuses to start with `SCHEMA: database schema version <V> is newer than this binary supports (<L>); upgrade ziptask or restore the database from backup`, exit 1. Fix by re-upgrading to the newer binary or restoring the backup the pre-update hook wrote. `--version` does not touch the DB.
+**Schema guard on startup:** a fresh DB auto-initialises; an older DB (V < L) auto-migrates forward; a DB newer than the binary (V > L, i.e. you downgraded) refuses to start with `SCHEMA: database schema version <V> is newer than this binary supports (<L>); upgrade ziptask or restore the database from backup`, exit 1. Here `<V>` and `<L>` are counts of applied SQL migrations (the `schema_version` row), not product versions. Fix by re-upgrading to the newer binary or restoring the backup the pre-update hook wrote. `--version` does not touch the DB.
 
 ## Script environment variables
 
@@ -108,7 +108,7 @@ These apply only to the maintenance scripts, not the server.
 | `ZIPTASK_BACKUP_DIR` | `./backups` | Backup destination directory (`scripts/backup.ts`) |
 | `ZIPTASK_BACKUP_PREFIX` | `ziptask` | Backup filename prefix (`scripts/backup.ts`) |
 | `ZIPTASK_BACKUP_RETAIN` | `7` | Number of backups to retain (`scripts/backup.ts`) |
-| `PRUNE_OLDER_THAN_DAYS` | `30` | Age threshold for pruning terminal tasks (`scripts/prune-tasks.ts`) |
+| `PRUNE_OLDER_THAN_DAYS` | `30` | Age threshold for pruning closed-for-work tasks (`scripts/prune-tasks.ts`) |
 
 ## Backups
 
@@ -116,4 +116,4 @@ These apply only to the maintenance scripts, not the server.
 
 ## Task retention
 
-`bun run scripts/prune-tasks.ts` deletes terminal tasks (`done`/`failed`/`canceled`) whose `completed_at` is older than `--days` (default `30`; env `PRUNE_OLDER_THAN_DAYS`). It never deletes a task that a live (non-terminal) task still lists in `depends_on` — a missing dependency id would block its dependent forever — nor a parent epic with remaining children (`epic_id` has no `ON DELETE CASCADE`, so an epic is prunable only after its children are gone). `comments`/`audit_log` rows cascade with the task (schema v4). The script is a dry run unless `--apply` is passed; `--db`/`ZIPTASK_DB` selects the database.
+`bun run scripts/prune-tasks.ts` deletes closed-for-work tasks (`done`/`failed`/`canceled`) whose `completed_at` is older than `--days` (default `30`; env `PRUNE_OLDER_THAN_DAYS`). It never deletes a task that a live (non-terminal) task still lists in `depends_on` — a missing dependency id would block its dependent forever — nor a parent epic with remaining children (`epic_id` has no `ON DELETE CASCADE`, so an epic is prunable only after its children are gone). `comments`/`audit_log` rows cascade with the task (schema v4). The script is a dry run unless `--apply` is passed; `--db`/`ZIPTASK_DB` selects the database.

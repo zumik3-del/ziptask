@@ -31,8 +31,7 @@ const insertRow = (opts: { title: string; reporter: string; projectId: number | 
     title: opts.title,
     description: null,
     priority: 'p2',
-    assignee: null,
-    reporter: opts.reporter,
+        reporter: opts.reporter,
     depends_on: '[]',
     now: '2026-01-01T00:00:00.000Z',
     projectId: opts.projectId
@@ -246,7 +245,7 @@ describe('projects: CRUD contract (ADR D4)', () => {
       const betaId = repo.projectBySlug('beta')!.id
       for (const [title, projectId] of [['a1', alphaId], ['a2', alphaId], ['b1', betaId]] as const) {
         repo.insertTask({
-          title, description: null, priority: 'p2', assignee: null, reporter: 'dev',
+          title, description: null, priority: 'p2', reporter: 'dev',
           depends_on: '[]', now: '2026-01-01T00:00:00.000Z', projectId
         })
       }

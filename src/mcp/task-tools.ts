@@ -2,7 +2,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
 import type { TaskStatus, TaskPriorityInput } from '../core/tasks'
-import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT, MAX_LEASE_TTL_MIN, LEASE_TTL_TOO_LARGE_MESSAGE, MAX_SAFE_TIMESTAMP_MS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, MAX_DEPENDS_ON, isTaskPriorityInput, PRIORITY_INVALID_MESSAGE } from '../core/tasks'
+import { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, TASK_PRIORITIES, MAX_RESULT_LIMIT, MAX_LEASE_TTL_MIN, LEASE_TTL_TOO_LARGE_MESSAGE, MAX_SAFE_TIMESTAMP_MS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, MAX_DEPENDS_ON } from '../core/tasks'
+import { PRIORITY_INPUT as BASE_PRIORITY_INPUT } from '../config'
 import { foldResult } from '../core/result'
 import {
   type ToolResult, jsonResult, textResult, errorTool, toToolResult, pickFields, rejectUnknownArgs,
@@ -26,10 +27,7 @@ const PRIORITY_JSON_SHAPE = {
   ]
 }
 
-const PRIORITY_INPUT = z.unknown().refine(
-  (value) => value === undefined || isTaskPriorityInput(value),
-  { message: `INVALID: ${PRIORITY_INVALID_MESSAGE}` }
-).meta(PRIORITY_JSON_SHAPE)
+const PRIORITY_INPUT = BASE_PRIORITY_INPUT.meta(PRIORITY_JSON_SHAPE)
 
 // A string bound is counted in code points in both layers: zod v4 measures `maxLength` in code
 // points, and the create guard measures the same way (`codePointLength`), so the schema and the
@@ -92,7 +90,7 @@ const UPDATE_TASK_SHAPE = {
   description: z.string().max(MAX_DESCRIPTION_LENGTH, 'INVALID: description too long').optional(),
   priority: PRIORITY_INPUT.optional(),
   depends_on: z.array(TaskId).max(MAX_DEPENDS_ON, 'INVALID: depends_on too long').optional(),
-  comment: z.string().max(MAX_CONTENT_LENGTH, 'INVALID: comment too long').optional()
+  comment: z.string().max(MAX_CONTENT_LENGTH, 'INVALID: comment too long').optional().describe('rationale stored as a comment; <=10000 code points')
 }
 
 const LIST_QUEUE_SHAPE = {
@@ -258,7 +256,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
   }, async (args) => handleUpdateStatus(svc, args))
 
   server.registerTool('update_task', {
-    description: 'Edit a task that is not under way yet: a queued task (regular) or an open epic, with no lease holder. Fields: title? (<=200 code points), description? (<=20000 code points; the contract), priority? (p0..p3, the number 0..3 or the digit string "0".."3"), depends_on? (<=100 ids; replaces the list; an epic takes no deps). Everything else is immutable: status belongs to update_status, assignee is the lease holder, project/epic_id/reporter/max_attempts never change. version is an optional optimistic lock (the write always compares against the version it read). Refused without a write: a task that is in_progress/review/blocked or closed for work (INVALID: cannot edit #N in status=<s>: only a queued task (or an open epic) is editable) — use add_comment there; a stale version (CONFLICT: expected version N, got M). No editable field at all is INVALID: nothing to update. A supplied value equal to the stored one is a no-op: changed lists only the fields that really changed. Output {id, version, changed}',
+    description: 'Edit a task that is not under way yet: a queued task (regular) or an open epic, with no lease holder. Fields: title? (<=200 code points), description? (<=20000 code points; the contract), priority? (p0..p3, the number 0..3 or the digit string "0".."3"), depends_on? (<=100 ids; replaces the list; an epic takes no deps), comment? (<=10000 code points; rationale stored as a comment). Everything else is immutable: status belongs to update_status, assignee is the lease holder, project/epic_id/reporter/max_attempts never change. version is an optional optimistic lock (the write always compares against the version it read). Refused without a write: a task that is in_progress/review/blocked or closed for work (INVALID: cannot edit #N in status=<s>: only a queued task (or an open epic) is editable) — use add_comment there; a stale version (CONFLICT: expected version N, got M). No editable field at all is INVALID: nothing to update. A supplied value equal to the stored one is a no-op: changed lists only the fields that really changed. Output {id, version, changed}',
     inputSchema: z.object(UPDATE_TASK_SHAPE).catchall(z.unknown())
   }, async (args) => handleUpdateTask(svc, args))
 

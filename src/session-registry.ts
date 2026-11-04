@@ -5,6 +5,7 @@ export interface Session {
   transport: WebStandardStreamableHTTPServerTransport
   lastAccess: number
   agent: string
+  replayWindow: { knowsEvent(id: string): boolean }
 }
 
 export interface SessionRegistryOptions {

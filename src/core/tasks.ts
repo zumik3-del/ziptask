@@ -151,8 +151,6 @@ export interface Clock {
   nowIso(): string
 }
 
-export type MonotonicClock = Clock
-
 // The single time source: every stamp is strictly greater than the previous one, even when two
 // calls land in the same millisecond, so no ordering invariant depends on the wall clock ticking.
 let lastTimestampMs = 0
@@ -180,11 +178,9 @@ export function resetMonotonicClock(): void {
 // it, so they accept exactly this set:
 //   - null / undefined              → no clock; the caller falls back to the process-wide source
 //   - () => number                  → a bare nowMs function
-//   - { nowIso(): string }          → nowIso as given; nowMs from nowMs/now/monotonicNowMs when
-//                                    present, otherwise parsed out of nowIso()
+//   - { nowIso(): string }          → nowIso as given; nowMs from nowMs when present, otherwise
+//                                    parsed out of nowIso()
 //   - { nowMs(): number }           → nowIso is derived from nowMs
-//   - { now(): number }             → alias of nowMs
-//   - { monotonicNowMs(): number }  → alias of nowMs
 //   - { clock: <any of the above> } → unwrapped and normalized
 // Anything else → null (the caller falls back to the process-wide source).
 export function asClock(input: unknown): Clock | null {
@@ -200,23 +196,14 @@ export function asClock(input: unknown): Clock | null {
     const nowIsoFn = (o.nowIso as () => string).bind(o)
     const nowMsFn = typeof o.nowMs === 'function'
       ? (o.nowMs as () => number).bind(o)
-      : typeof o.now === 'function'
-        ? (o.now as () => number).bind(o)
-        : typeof o.monotonicNowMs === 'function'
-          ? (o.monotonicNowMs as () => number).bind(o)
-          : () => Date.parse(nowIsoFn())
+      : () => Date.parse(nowIsoFn())
     return { nowMs: nowMsFn, nowIso: nowIsoFn }
   }
-  if (typeof o.nowMs === 'function' || typeof o.now === 'function' || typeof o.monotonicNowMs === 'function') {
-    const nowMsFn = ((o.nowMs ?? o.now ?? o.monotonicNowMs) as () => number).bind(o)
+  if (typeof o.nowMs === 'function') {
+    const nowMsFn = (o.nowMs as () => number).bind(o)
     return { nowMs: nowMsFn, nowIso: () => new Date(nowMsFn()).toISOString() }
   }
   return null
-}
-
-export const defaultClock: Clock = {
-  nowMs: monotonicNowMs,
-  nowIso: nowIso
 }
 
 export const MAX_TITLE_LENGTH = 200

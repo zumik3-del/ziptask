@@ -1,7 +1,7 @@
 import { openDatabase, closeDatabase } from '../src/db/db'
 import { parseDeps } from '../src/core/deps'
 import { TERMINAL_STATUSES_SQL } from '../src/db/sql'
-import { DEFAULT_DB_PATH } from '../src/defaults'
+import { DEFAULT_DB_PATH, DAY_MS } from '../src/defaults'
 
 function parseArg(name: string): string | undefined {
   const idx = process.argv.indexOf(name)
@@ -18,7 +18,7 @@ if (!Number.isFinite(days) || days < 0) {
   process.exit(1)
 }
 
-const cutoff = new Date(Date.now() - days * 86_400_000).toISOString()
+const cutoff = new Date(Date.now() - days * DAY_MS).toISOString()
 
 const db = openDatabase(dbPath)
 try {

@@ -379,7 +379,7 @@ describe('terminal-status single source (#1445)', () => {
 describe('listTasks deterministic ordering (#1445)', () => {
   const TIE_NOW = '2026-01-01T00:00:00.000Z'
   const insertAt = (title: string, now: string) => repo.insertTask({
-    title, description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now, projectId: testProjectId(repo)
+    title, description: null, priority: 'p2', reporter: 'dev', depends_on: '[]', now, projectId: testProjectId(repo)
   }).id
 
   test('same-millisecond created_at ties break by id DESC, not by scan order', () => {
@@ -804,8 +804,8 @@ describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
     const dbB = createTestDb()
     const repoB = new TaskRepo(dbB)
     try {
-      const idA = repoA.insertTask({ title: 'A', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' }).id
-      const idB = repoB.insertTask({ title: 'B', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' }).id
+      const idA = repoA.insertTask({ title: 'A', description: null, priority: 'p2', reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' }).id
+      const idB = repoB.insertTask({ title: 'B', description: null, priority: 'p2', reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' }).id
       // Inject 5 comments into both repos to establish baseline monotonicity.
       // One transaction per repo: the burst below is 500 rows, and one WAL commit per row is what
       // made this fixture the slowest test in the suite (a per-row commit, not a per-row clock tick).
@@ -878,12 +878,11 @@ describe('TaskRepo port conformance (#812)', () => {
       expect(typeof repo3.nonTerminalChildCount).toBe('function')
       expect(typeof repo3.childStatusCounts).toBe('function')
       expect(typeof repo3.promoteEpicWithMirror).toBe('function')
-      expect(typeof repo3.appendEpicAuditMirror).toBe('function')
 
       // Verify each method actually works
       const id = repo3.insertTask({
         title: 'PortTest', description: null, priority: 'p2',
-        assignee: null, reporter: 'dev', depends_on: '[]', now: nowIso()
+        reporter: 'dev', depends_on: '[]', now: nowIso()
       }).id
       expect(repo3.getTaskRow(id)!.title).toBe('PortTest')
       expect(repo3.depsOf(id)).toBe('[]')

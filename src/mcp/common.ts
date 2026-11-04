@@ -1,5 +1,6 @@
 import { z } from 'zod/v4'
 import type { Task } from '../core/tasks'
+
 import type { SvcResult, SvcError } from '../core/types'
 import { foldResult, formatError } from '../core/result'
 
@@ -59,9 +60,4 @@ export function rejectUnknownArgs(tool: string, shape: object, args: object): To
   )
 }
 
-export type { Task, TaskStatus, TaskPriority } from '../core/tasks'
-export { statusToCode, sanitizePipe, pipeJoin, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_SAFE_TIMESTAMP_MS } from '../core/tasks'
-export { TASK_PRIORITIES } from '../defaults'
-export type { TaskService } from '../core/service'
-export type { SvcResult, SvcError } from '../core/types'
-export { foldResult, formatError } from '../core/result'
+

@@ -983,7 +983,7 @@ describe('an epic takes no assignee (review #1740 P2)', () => {
     // so only a direct store call exercises repo.ts:63 — the last line of defence behind that guard,
     // which a bypass or a cross-process race would reach with a value in hand.
     const id = repo.insertTask({
-      title: 'Epic', description: null, priority: 'p2', assignee: 'boss', reporter: 'dev',
+      title: 'Epic', description: null, priority: 'p2', reporter: 'dev',
       depends_on: '[]', now: nowIso(), isEpic: true, projectId: testProjectId(repo)
     }).id
     const task = getTaskRow(db, id)

@@ -320,7 +320,7 @@ describe('update_task: validation', () => {
     db.run("INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES ('other', '', ?, ?)", [new Date().toISOString(), new Date().toISOString()])
     // insert task in other project directly
     const otherProjectId = (db.query("SELECT id FROM projects WHERE slug='other'").get() as any).id
-    const otherTaskId = repo.insertTask({ title: 'Other', description: null, priority: 'p2', assignee: null, reporter: 'dev', depends_on: '[]', now: new Date().toISOString(), projectId: otherProjectId }).id
+    const otherTaskId = repo.insertTask({ title: 'Other', description: null, priority: 'p2', reporter: 'dev', depends_on: '[]', now: new Date().toISOString(), projectId: otherProjectId }).id
     const id = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id as number
     const res = handleUpdateTask(svc, { id, agent: 'dev', depends_on: [otherTaskId] })
     expect(res.isError).toBe(true)

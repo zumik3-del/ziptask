@@ -29,7 +29,7 @@ export function readyCandidates(store: CandidateStore, limit: number, ceiling: n
       // a repeated page must not yield the same task twice
       if (yielded.has(row.id)) continue
       // every row of this page was cached in the loop above
-      if (depsSatisfied(depStatuses, depCache.get(row.id) ?? [])) { ready.push(row); yielded.add(row.id) }
+      if (depsSatisfied(depStatuses, depCache.get(row.id)!)) { ready.push(row); yielded.add(row.id) }
     }
     offset += CANDIDATES_PAGE_SIZE
   }

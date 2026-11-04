@@ -28,8 +28,7 @@ function seedQueued(title: string, opts: { dependsOn?: number[]; createdAt?: str
     title,
     description: null,
     priority: 'p2',
-    assignee: null,
-    reporter: 'dev',
+        reporter: 'dev',
     depends_on: JSON.stringify(opts.dependsOn ?? []),
     now: opts.createdAt ?? CREATED_AT,
     projectId
