@@ -1,7 +1,7 @@
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
-import type { EventStore } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
-import { readRequestBody } from '@modelcontextprotocol/sdk/server/requestBody.js'
-import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server'
+import type { EventStore } from '@modelcontextprotocol/server'
+import { readRequestBody, createMcpHandler, isLegacyRequest } from '@modelcontextprotocol/server'
+import type { JSONRPCMessage } from '@modelcontextprotocol/server'
 import type { TaskService } from './core/service'
 import { formatError } from './core/result'
 import { TASK_STATUS_VALUES } from './core/tasks'
@@ -250,6 +250,10 @@ export function startHttp(opts: StartHttpOptions) {
     svcLogger.warn('listening on non-loopback host; HTTP has no authentication by design', { host })
   }
   const registry = new SessionRegistry({ logger: svcLogger, maxSessions, sessionTtlMs })
+  const modernHandler = createMcpHandler((_ctx) => createMcpServer(svc), {
+    legacy: 'reject',
+    maxRequestBodySize: DEFAULT_HTTP_MAX_BODY_BYTES
+  })
 
   const cleanup = setInterval(() => registry.sweep(), SESSION_CLEANUP_INTERVAL_MS)
 
@@ -298,6 +302,14 @@ export function startHttp(opts: StartHttpOptions) {
             return Response.json(LAST_EVENT_ID_NOT_REPLAYABLE, { status: 400 })
           }
           return trackStreamActivity(await session.transport.handleRequest(req), session)
+        }
+
+        // Modern (2026-07-28) traffic carries the per-request envelope and is served
+        // statelessly by the modern handler; legacy (2025) traffic keeps the
+        // sessionful transport below so sessions and Last-Event-ID replay survive.
+        const isLegacy = await isLegacyRequest(req, undefined, { maxRequestBodySize: DEFAULT_HTTP_MAX_BODY_BYTES })
+        if (!isLegacy) {
+          return await modernHandler.fetch(req)
         }
 
         if (!registry.reserve()) {

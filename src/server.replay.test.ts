@@ -1,6 +1,6 @@
 import { describe, test, expect, spyOn } from 'bun:test'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { Client } from '@modelcontextprotocol/client'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import { InMemoryEventStore, MAX_EVENT_STORE_EVENTS } from './server'
 import { startTestServer } from './test-context'
 
@@ -76,7 +76,7 @@ describe('HTTP replay window', () => {
     try {
       await client.connect(transport)
       const session = transport.sessionId
-      await expect(transport.resumeStream('never-issued')).rejects.toMatchObject({ code: 400, message: 'Streamable HTTP error: Failed to open SSE stream: Bad Request' })
+      await expect(transport.resumeStream('never-issued')).rejects.toMatchObject({ status: 400, message: 'Failed to open SSE stream: Bad Request' })
       expect(transport.sessionId).toBe(session)
       expect((await client.listTools()).tools.length).toBeGreaterThan(0)
     } finally {
