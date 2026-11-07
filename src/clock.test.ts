@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
+import type { JSONRPCMessage } from '@modelcontextprotocol/server'
 import { asClock, monotonicNowMs, resetMonotonicClock } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'

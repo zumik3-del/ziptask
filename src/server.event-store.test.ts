@@ -1,6 +1,6 @@
 import { describe, test, expect, spyOn } from 'bun:test'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { Client } from '@modelcontextprotocol/client'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import type { InMemoryEventStore } from './server'
 import { startTestServer } from './test-context'
 

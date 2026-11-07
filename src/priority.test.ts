@@ -3,8 +3,8 @@ import type { Database } from 'bun:sqlite'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { Client } from '@modelcontextprotocol/client'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { TASK_PRIORITIES, type TaskPriority } from './core/tasks'
@@ -486,7 +486,7 @@ describe('the create_task priority over the wire', () => {
       arguments: { title: 'WireRefused', reporter: 'dev', priority: 'p4', project: 'test' }
     })
     expect(res.isError).toBe(true)
-    expect(textOf(res)).toBe(`MCP error -32602: Input validation error: Invalid arguments for tool create_task: ${PRIORITY_REFUSAL} at priority`)
+    expect(textOf(res)).toBe(`Input validation error: Invalid arguments for tool create_task: priority: ${PRIORITY_REFUSAL}`)
     expect(taskCount()).toBe(before)
   })
 

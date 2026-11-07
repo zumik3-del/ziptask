@@ -1,4 +1,4 @@
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import { openDatabase, closeDatabase } from './db/db'
 import { TaskRepo } from './db/repo'
 import { TaskService, type TaskServiceOptions } from './core/service'
@@ -45,12 +45,7 @@ try {
   const svc = new TaskService(new TaskRepo(db), serviceOptions)
 
   function startStdio() {
-    const server = createMcpServer(svc)
-    const transport = new StdioServerTransport()
-    server.connect(transport).catch(err => {
-      logger.error('stdio transport error', normalizeError(err))
-      process.exit(1)
-    })
+    serveStdio((_ctx) => createMcpServer(svc), { legacy: 'serve' })
     logger.info('ziptask started', { version: VERSION, dbPath: settings.dbPath })
   }
 

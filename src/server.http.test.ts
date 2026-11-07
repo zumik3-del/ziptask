@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { Client } from '@modelcontextprotocol/client'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import type { TaskService } from './core/service'
 import { VERSION } from './version'
 import { startTestServer, textOf, TEST_PROJECT_SLUG } from './test-context'
@@ -340,7 +340,7 @@ describe('MCP schema guards (#431)', () => {
     expect(res.isError).toBe(true)
     // The documented string reaches the wire verbatim; zod v4 appends the argument path
     // (" at description"), so the assertion pins the documented part, not the SDK suffix.
-    expect(textOf(res)).toContain('Invalid arguments for tool create_task: INVALID: description too long')
+    expect(textOf(res)).toContain('Input validation error: Invalid arguments for tool create_task: description: INVALID: description too long')
     expect(taskCount()).toBe(before)
   })
 
@@ -351,7 +351,7 @@ describe('MCP schema guards (#431)', () => {
       arguments: { agent: 'tester', task_id: id, lease_ttl_min: 1441 }
     })
     expect(tooHigh.isError).toBe(true)
-    expect(textOf(tooHigh)).toContain('Invalid arguments for tool claim_task: INVALID: lease_ttl_min too large')
+    expect(textOf(tooHigh)).toContain('Input validation error: Invalid arguments for tool claim_task: lease_ttl_min: INVALID: lease_ttl_min too large')
     // Refused at the schema, so the row is untouched.
     const row = srv.db.query('SELECT status, assignee FROM tasks WHERE id = ?').get(id) as any
     expect(row).toMatchObject({ status: 'queued', assignee: null })
@@ -361,7 +361,7 @@ describe('MCP schema guards (#431)', () => {
       arguments: { agent: 'tester', task_id: id, lease_ttl_min: Number.MAX_SAFE_INTEGER }
     })
     expect(huge.isError).toBe(true)
-    expect(textOf(huge)).toContain('Invalid arguments for tool claim_task: INVALID: lease_ttl_min too large')
+    expect(textOf(huge)).toContain('Input validation error: Invalid arguments for tool claim_task: lease_ttl_min: INVALID: lease_ttl_min too large')
 
     const atCap: any = await client.callTool({
       name: 'claim_task',
@@ -394,7 +394,7 @@ describe('MCP schema guards (#431)', () => {
       }
     })
     expect(res.isError).toBe(true)
-    expect(textOf(res)).toContain('Invalid arguments for tool create_task: INVALID: depends_on too long')
+    expect(textOf(res)).toContain('Input validation error: Invalid arguments for tool create_task: depends_on: INVALID: depends_on too long')
     expect(taskCount()).toBe(before)
   })
 
@@ -437,7 +437,7 @@ describe('MCP schema guards (#431)', () => {
         arguments: { title: 'Long description', reporter: 'dev', description: multiByte(MAX_DESCRIPTION_LENGTH + 1), project: 'test' }
       })
       expect(res.isError).toBe(true)
-      expect(textOf(res)).toBe('MCP error -32602: Input validation error: Invalid arguments for tool create_task: INVALID: description too long at description')
+      expect(textOf(res)).toBe('Input validation error: Invalid arguments for tool create_task: description: INVALID: description too long')
       expect(taskCount()).toBe(before)
     })
 
@@ -449,7 +449,7 @@ describe('MCP schema guards (#431)', () => {
         arguments: { title, reporter: 'dev', project: 'test' }
       })
       expect(res.isError).toBe(true)
-      expect(textOf(res)).toBe('MCP error -32602: Input validation error: Invalid arguments for tool create_task: INVALID: title too long at title')
+      expect(textOf(res)).toBe('Input validation error: Invalid arguments for tool create_task: title: INVALID: title too long')
       expect(taskCount()).toBe(before)
       // The title's observable wire shape changed with the fix: the bound is now advertised, so
       // the refusal comes from the schema (SDK-wrapped). A direct service call sees the bare one.
@@ -463,7 +463,7 @@ describe('MCP schema guards (#431)', () => {
         name: 'create_task',
         arguments: { title: 'Direct', reporter: 'dev', description, project: 'test' }
       })
-      expect(textOf(wire)).toBe('MCP error -32602: Input validation error: Invalid arguments for tool create_task: INVALID: description too long at description')
+      expect(textOf(wire)).toBe('Input validation error: Invalid arguments for tool create_task: description: INVALID: description too long')
       // The service sees the bare refusal: the SDK wrapper is the wire's, not the domain's.
       expect(srv.svc.createTask({ title: 'Direct', reporter: 'dev', description }))
         .toEqual({ ok: false, error: { code: 'INVALID', message: 'description too long' } })
@@ -520,7 +520,7 @@ describe('MCP schema guards (#431)', () => {
           arguments: { title: 'Long reporter', reporter, project: 'test' }
         })
         expect(res.isError).toBe(true)
-        expect(textOf(res)).toBe('MCP error -32602: Input validation error: Invalid arguments for tool create_task: INVALID: reporter too long at reporter')
+        expect(textOf(res)).toBe('Input validation error: Invalid arguments for tool create_task: reporter: INVALID: reporter too long')
         expect(storeCounts()).toEqual(before)
         // The service sees the bare refusal: the SDK wrapper is the wire's, not the domain's.
         expect(srv.svc.createTask({ title: 'Long reporter', reporter }))
@@ -547,7 +547,7 @@ describe('MCP schema guards (#431)', () => {
           arguments: { title: 'Long assignee', reporter: 'dev', assignee, project: 'test' }
         })
         expect(res.isError).toBe(true)
-        expect(textOf(res)).toBe('MCP error -32602: Input validation error: Invalid arguments for tool create_task: INVALID: assignee too long at assignee')
+        expect(textOf(res)).toBe('Input validation error: Invalid arguments for tool create_task: assignee: INVALID: assignee too long')
         expect(storeCounts()).toEqual(before)
         expect(srv.svc.createTask({ title: 'Long assignee', reporter: 'dev', assignee }))
           .toEqual({ ok: false, error: { code: 'INVALID', message: 'assignee too long' } })
@@ -772,7 +772,7 @@ describe('argument contract over MCP (F1 #1040)', () => {
         arguments: { id, agent: 'tester', status: 'in_progress', version: getVersion(srv.db, id), renew: 'yes' }
       })
       expect(res.isError).toBe(true)
-      expect(textOf(res)).toContain('expected boolean, received string at renew')
+      expect(textOf(res)).toContain('renew: Invalid input: expected boolean, received string')
       expect(storeSnapshot()).toEqual(before)
     })
 
@@ -786,7 +786,7 @@ describe('argument contract over MCP (F1 #1040)', () => {
         arguments: { id, agent: 'tester', status: 'blocked', version: getVersion(srv.db, id), reset_attempts: 1, comment: 'x' }
       })
       expect(res.isError).toBe(true)
-      expect(textOf(res)).toContain('expected boolean, received number at reset_attempts')
+      expect(textOf(res)).toContain('reset_attempts: Invalid input: expected boolean, received number')
       expect(storeSnapshot()).toEqual(before)
     })
   })

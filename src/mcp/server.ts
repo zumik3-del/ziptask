@@ -1,4 +1,4 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { McpServer } from '@modelcontextprotocol/server'
 import { registerAllTools } from './tools'
 import type { TaskService } from '../core/service'
 import { VERSION } from '../version'
