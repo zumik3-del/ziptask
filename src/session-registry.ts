@@ -1,4 +1,4 @@
-import type { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
+import type { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server'
 import type { Logger } from './logger'
 
 export interface Session {
