@@ -25,9 +25,6 @@ export const SSE_KEEPALIVE_MS = 10_000
 export const HTTP_IDLE_TIMEOUT_SEC = 60
 export const MAX_EVENT_STORE_EVENTS = 1000
 
-// The browser-facing /api/* surface is read-only and needs to be callable cross-origin, so the
-// three headers are fixed here rather than negotiated per request. /mcp is deliberately left out:
-// it is an agent-to-server channel, not something a page fetches through the same-origin policy.
 export const CORS_ALLOW_ORIGIN = '*'
 export const CORS_ALLOW_METHODS = 'GET, OPTIONS'
 export const CORS_ALLOW_HEADERS = 'Content-Type'
@@ -38,9 +35,6 @@ const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS
 }
 
-// Rebuilds the response so the CORS headers land on success and error alike (a 400/404 that
-// omits them is unreadable in a browser). The body is passed through untouched, so a streaming
-// response keeps streaming.
 export function withCors(response: Response): Response {
   const headers = new Headers(response.headers)
   for (const [name, value] of Object.entries(CORS_HEADERS)) headers.set(name, value)
@@ -51,9 +45,6 @@ export function withCors(response: Response): Response {
   })
 }
 
-// Thin adapter over the SDK's own body reader, so the peek below and the transport it feeds agree
-// on one cap and one Content-Length fast path: two copies drift (a local one enforced 1 MiB here
-// while the transport still accepted 4 MiB). The caller turns `oversized` into a 413.
 export async function readBodyWithLimit(
   req: Request,
   maxBytes: number
@@ -88,20 +79,13 @@ export class InMemoryEventStore implements EventStore {
   private seq = 0
   private lastEventTs = 0
 
-  // Transport-local timestamp: the domain clock (monotonicNowMs in src/core/tasks.ts) belongs to
-  // the task stamps, and transport traffic must not advance it — every event would push the next
-  // created_at into the future. This counter is per store and keeps the id prefix increasing.
   private eventTimestamp(): number {
     const now = Date.now()
     this.lastEventTs = now > this.lastEventTs ? now : this.lastEventTs + 1
     return this.lastEventTs
   }
 
-  // Event ids must order the same way events were stored: the timestamp prefix alone is
-  // ambiguous because bursts land in the same millisecond, so it is paired with a
-  // fixed-width monotonic counter. Ids are unique and lexicographically ordered.
   private generateEventId(streamId: string): string {
-    // Fixed-width monotonic counter so event ids sort lexicographically within a millisecond.
     const EVENT_SEQ_PAD_WIDTH = 10
     return `${streamId}_${this.eventTimestamp()}_${String(++this.seq).padStart(EVENT_SEQ_PAD_WIDTH, '0')}`
   }
@@ -109,9 +93,6 @@ export class InMemoryEventStore implements EventStore {
   async storeEvent(streamId: string, message: JSONRPCMessage): Promise<string> {
     const eventId = this.generateEventId(streamId)
     this.events.set(eventId, { streamId, message })
-    // One store per session and sessions are capped, but a single long-lived session
-    // can still emit unbounded events, so keep memory bounded by evicting the oldest
-    // (Map preserves insertion order). Evicted cursors are rejected at the HTTP boundary.
     while (this.events.size > MAX_EVENT_STORE_EVENTS) {
       const oldest = this.events.keys().next().value
       if (oldest === undefined) break
@@ -130,7 +111,6 @@ export class InMemoryEventStore implements EventStore {
   ): Promise<string> {
     if (!lastEventId || !this.events.has(lastEventId)) return ''
     const streamId = this.events.get(lastEventId)!.streamId
-    // Snapshot then iterate in insertion order, which is the store order; no id sort needed.
     const snapshot = [...this.events.entries()]
     let found = false
     for (const [id, { streamId: sId, message }] of snapshot) {
@@ -160,8 +140,6 @@ export interface StartHttpOptions {
   onShutdown?: () => void
 }
 
-// The oversized case carries no request: the caller answers 413 and never replays the body, so the
-// union states that invariant instead of handing back a request no caller reads.
 type PeekResult =
   | { oversized: true }
   | { oversized: false; request: Request; agentName: string; isInitialize: boolean }
@@ -188,8 +166,6 @@ async function peekInitialize(
     const name = init?.params?.clientInfo?.name
     if (typeof name === 'string' && name.length > 0) agentName = name
   } catch (err) {
-    // A non-JSON body is a client error, not a server fault: log it for diagnosis and keep
-    // treating the request as a non-initialize one (the caller answers 400).
     logger.debug('peekInitialize: failed to parse request body', {
       err: err instanceof Error ? err.message : String(err)
     })
@@ -197,8 +173,6 @@ async function peekInitialize(
   return { oversized: false, request, agentName, isInitialize }
 }
 
-// JSON-RPC server-error codes live in the -32000..-32099 range; name them so both transport
-// error responses stay consistent and the two magic numbers cannot drift apart.
 const JSONRPC_SESSION_NOT_FOUND = -32001
 const JSONRPC_BAD_REQUEST = -32000
 
@@ -221,8 +195,6 @@ const LAST_EVENT_ID_NOT_REPLAYABLE = {
   id: null
 }
 
-// Projection from a full Task to the minimal read shape used by the /api/tasks list endpoint.
-// /api/task/:id returns the whole task row (see docs/http-endpoints.md), so it is not projected here.
 export function projectTask(task: Task): {
   id: number
   title: string
@@ -354,9 +326,6 @@ export function startHttp(opts: StartHttpOptions) {
           return trackStreamActivity(await session.transport.handleRequest(req), session)
         }
 
-        // Modern (2026-07-28) traffic carries the per-request envelope and is served
-        // statelessly by the modern handler; legacy (2025) traffic keeps the
-        // sessionful transport below so sessions and Last-Event-ID replay survive.
         const isLegacy = await isLegacyRequest(req, undefined, {
           maxRequestBodySize: DEFAULT_HTTP_MAX_BODY_BYTES
         })
@@ -382,8 +351,6 @@ export function startHttp(opts: StartHttpOptions) {
             sessionIdGenerator: () => crypto.randomUUID(),
             keepAliveMs: SSE_KEEPALIVE_MS,
             eventStore,
-            // The same cap as the peek, applied by the transport itself: a session-bearing POST
-            // never runs the peek, so without this it would fall back to the SDK's 4 MiB default.
             maxRequestBodySize: DEFAULT_HTTP_MAX_BODY_BYTES,
             onsessioninitialized: (id) => {
               registry.open(id, {

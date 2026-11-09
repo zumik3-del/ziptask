@@ -3,11 +3,6 @@ import type { CandidateStore } from './types'
 import { parseDeps, depsSatisfied } from './deps'
 import { CANDIDATES_PAGE_SIZE } from '../defaults'
 
-// Deps-satisfied queued tasks in claim order, scoped to one project. Paginated so a long tail of
-// unsatisfied candidates never loads the whole table; `ceiling` bounds the scan for a pathological
-// queue at page granularity: the loop stops once the offset has reached the ceiling, so at most
-// `ceiling + CANDIDATES_PAGE_SIZE - 1` rows are read before it gives up on the rest. Each task is
-// yielded at most once, so an overlapping page can never duplicate a row.
 export function readyCandidates(
   store: CandidateStore,
   limit: number,
@@ -34,9 +29,7 @@ export function readyCandidates(
     const depStatuses = store.statusesOf(Array.from(allDeps))
     for (const row of page) {
       if (ready.length >= limit) break
-      // a repeated page must not yield the same task twice
       if (yielded.has(row.id)) continue
-      // every row of this page was cached in the loop above
       if (depsSatisfied(depStatuses, depCache.get(row.id)!)) {
         ready.push(row)
         yielded.add(row.id)

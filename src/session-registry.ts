@@ -27,8 +27,6 @@ export class SessionRegistry {
     this.sessionTtlMs = sessionTtlMs
   }
 
-  // A reserved slot belongs to an in-flight handshake, so the cap counts those too: two
-  // concurrent initializes cannot both read "one slot left" and overshoot.
   reserve(): boolean {
     if (this.sessions.size + this.reserved >= this.maxSessions) return false
     this.reserved++
@@ -49,8 +47,6 @@ export class SessionRegistry {
     this.logger.child({ session: id, agent: session.agent }).info('session open')
   }
 
-  // A client-initiated close is logged even for an id the registry no longer holds, so the
-  // close line always pairs with the open one.
   close(id: string): void {
     const session = this.sessions.get(id)
     this.logClose(id, session?.agent ?? 'unknown')

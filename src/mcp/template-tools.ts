@@ -11,7 +11,6 @@ import commentFailureTemplate from '../../templates/comment-failure.md' with { t
 const TEMPLATE_NAMES = ['task', 'epic', 'comment-success', 'comment-failure'] as const
 type TemplateName = (typeof TEMPLATE_NAMES)[number]
 
-// Keep API names stable; imports embed the markdown so the compiled binary works.
 const TEMPLATES: Record<TemplateName, string> = {
   task: taskTemplate,
   epic: epicTemplate,

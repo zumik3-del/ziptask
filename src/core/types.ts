@@ -1,8 +1,5 @@
 import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, CommentType } from './tasks'
 
-// The write/read shapes the store slices share with their implementation and the services with
-// each other: one name per literal, so a parameter, a patch and a result page cannot drift apart.
-
 export type InsertTaskInput = {
   title: string
   description: string | null
@@ -33,7 +30,6 @@ export type UpdateTaskPatch = {
   dependsOn?: string
 }
 
-// The epic roll-up: one read, so a caller cannot count some statuses and miss others.
 export type ChildStatusCounts = {
   total: number
   open: number
@@ -42,20 +38,16 @@ export type ChildStatusCounts = {
   canceled: number
 }
 
-// The get_task answer: the row, the unsatisfied deps, and (for an epic) the child roll-up.
 export type TaskView = {
   task: Readonly<Task>
   blockedBy: number[]
   subtasks?: ChildStatusCounts
 }
 
-// The list_tasks answer: one page plus the filtered total.
 export type TaskListPage = { tasks: ReadonlyArray<Readonly<Task>>; total: number }
 
-// The batch answer: one entry per requested id, in request order; a missing task is null.
 export type TaskBatch = { items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }
 
-// Lease reaping needs only the sweep, its CAS transition and (via AuditStore) the audit row.
 export interface LeaseStore {
   expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>>
   reapTransition(
@@ -67,7 +59,6 @@ export interface LeaseStore {
   ): number
 }
 
-// Task-scoped storage: task CRUD, deps, leases, epic roll-up. No project/comment/audit methods.
 export interface TaskStore {
   getTaskRow(id: number): Task | null
   insertTask(task: InsertTaskInput): { id: number; status: CreatedTaskStatus }
@@ -108,7 +99,6 @@ export interface TaskStore {
   ): number
 }
 
-// Project administration storage.
 export interface ProjectStore {
   insertProject(project: { slug: string; folderPath: string; now: string }): number
   projectBySlug(slug: string): ProjectRow | null
@@ -119,7 +109,6 @@ export interface ProjectStore {
   projectTaskCount(id: number): number
 }
 
-// Comment storage.
 export interface CommentStore {
   insertComment(
     taskId: number,
@@ -130,7 +119,6 @@ export interface CommentStore {
   commentsOf(taskId: number): CommentRow[]
 }
 
-// Audit storage.
 export interface AuditStore {
   auditAppend(
     taskId: number,
@@ -142,11 +130,8 @@ export interface AuditStore {
   timelineEntries(taskId: number, limit: number): TimelineRow[]
 }
 
-// Aggregate store implemented by TaskRepo; use this when a component needs every slice.
 export interface Store extends TaskStore, ProjectStore, CommentStore, AuditStore, LeaseStore {}
 
-// The store slices the services depend on: a service names the methods it uses, so it cannot
-// reach the whole aggregate. The same Pick pattern the guards apply locally (src/core/guards.ts).
 export type LifecycleStore = Pick<
   TaskStore,
   | 'getTaskRow'
@@ -180,13 +165,10 @@ export type QueryStore = Pick<
   AuditStore &
   LeaseStore
 
-// The candidate scan reads the queue page and the dependency statuses, nothing else.
 export type CandidateStore = Pick<TaskStore, 'queuedCandidates' | 'statusesOf'>
 
-// The composition root wires the slices into the services below it, so it depends on their union.
 export type TaskServiceStore = LifecycleStore & QueryStore & ProjectStore
 
-// The internal id never crosses the tool boundary; `slug` is the identity every call speaks.
 export type ProjectRow = {
   id: number
   slug: string
@@ -221,7 +203,6 @@ export type SvcError = { code: ErrorCode; message: string }
 
 export type SvcResult<T> = { ok: true; data: T } | { ok: false; error: SvcError }
 
-// attempts is present only when update_status was called with reset_attempts
 export type UpdateStatusData = {
   id: number
   status: TaskStatus

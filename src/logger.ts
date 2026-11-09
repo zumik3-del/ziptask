@@ -8,18 +8,6 @@ type LogRecord = LogFields & { logger: string; ts: string; level: RecordLevel; m
 
 const RESERVED_KEYS = new Set(['logger', 'ts', 'level', 'msg'])
 
-/**
- * Canonical error() contract, in one place:
- *
- *   error(msg)                -> the record carries no err/stack key at all
- *   error(msg, fields)        -> fields merge into the record (a plain object in the second
- *                                position is fields, never an err)
- *   error(msg, err, fields?)  -> err joins the record; fields are optional
- *
- * `err` is `unknown` because it normally comes from a catch or an `uncaughtException`
- * listener. An Error contributes its message and stack, anything else is String()-ified into
- * `err`; wrap a non-Error throw with normalizeError() to keep its shape instead.
- */
 export interface Logger {
   error(msg: string): void
   error(msg: string, fields: LogFields): void
@@ -30,11 +18,6 @@ export interface Logger {
   child(fields: LogFields): Logger
 }
 
-/**
- * Result of reading a configured level. The return type separates "recognised" from
- * "fallback" so the caller decides what a fallback means; `matched` is present exactly when
- * the configured value was recognised.
- */
 type LogLevelResolution =
   | { matched: true; level: LogLevel }
   | { matched: false; level: LogLevel; requested: string }
@@ -46,13 +29,10 @@ function resolveLogLevel(raw: string): LogLevelResolution {
     : { matched: true, level }
 }
 
-// Recognised level, or the info fallback for callers that only want the level.
 export function parseLogLevel(raw: string): LogLevel {
   return resolveLogLevel(raw).level
 }
 
-// Reserved keys are dropped rather than spread: a call-site or child-context `logger`/`ts`/
-// `level`/`msg` field must not be able to forge record metadata.
 function stripReservedKeys(fields: LogFields): LogFields {
   const out: LogFields = {}
   for (const [key, value] of Object.entries(fields)) {
@@ -82,10 +62,6 @@ function serializeRecord(record: LogRecord): string {
   }
 }
 
-// A throw site hands over `unknown`: an Error carries its own message and stack, anything else
-// (a string, a plain object) only keeps its shape as a field, since String() would collapse an
-// object to "[object Object]". Pass the result as the err argument of error(): an Error lands
-// in the err slot, the fields object in the fields slot.
 export function normalizeError(err: unknown): Error | LogFields {
   return err instanceof Error ? err : { thrown: err }
 }
@@ -130,8 +106,6 @@ export function createLogger(name: string, level: string): Logger {
           emit('error', msg, errOrFields)
           return
         }
-        // errFields last, for the same reason the reserved keys go last: the failure being
-        // reported must win over a call-site field named `err` or `stack`.
         const errPart = errOrFields === undefined ? {} : errFields(errOrFields)
         emit('error', msg, fields === undefined ? errPart : { ...fields, ...errPart })
       },

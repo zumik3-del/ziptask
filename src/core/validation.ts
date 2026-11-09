@@ -5,10 +5,6 @@ export function requiredError(value: string | null | undefined, field: string): 
   return value?.trim() ? null : { code: 'INVALID', message: `${field} required` }
 }
 
-// A value that is not a string has no length to measure: it is refused as missing, never measured.
-// The refusal is the ordinary "<field> required", so a null never crashes the guard on its length.
-// The length is counted in code points (`codePointLength`), the unit the advertised schema measures
-// in, so both layers refuse the same strings.
 export function tooLongError(
   value: string | null | undefined,
   max: number,
@@ -18,8 +14,6 @@ export function tooLongError(
   return codePointLength(value) > max ? { code: 'INVALID', message: `${field} too long` } : null
 }
 
-// The guard for an optional field: absent (undefined) passes, a present value is checked — a null
-// is refused as missing, a string over the limit is refused as too long.
 export function optionalFieldError(
   value: string | null | undefined,
   max: number,
@@ -37,8 +31,6 @@ export function agentError(agent: string): SvcError | null {
   return requiredError(agent, 'agent') ?? tooLongError(agent, MAX_AGENT_LENGTH, 'agent')
 }
 
-// A free-text body: a comment and a task description both share the same limit and the same two
-// refusals, so the field name is the only thing that differs between the call sites.
 export function textError(value: string, field: string): SvcError | null {
   return requiredError(value, field) ?? tooLongError(value, MAX_CONTENT_LENGTH, field)
 }

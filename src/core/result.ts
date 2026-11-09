@@ -21,8 +21,6 @@ export function foldResult<A, B>(
   return result.ok ? onOk(result.data) : onErr(result.error)
 }
 
-// The wire contract is the plain string form: `CODE: message`, or `CODE:` when the code carries
-// no message (NOT_FOUND). Keeping it here means the typed error never leaks into MCP responses.
 export function formatError(error: SvcError): string {
   return error.message ? `${error.code}: ${error.message}` : `${error.code}:`
 }

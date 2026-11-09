@@ -36,8 +36,6 @@ import type {
 } from './task-lifecycle'
 import type { ListTasksArgs, ListQueueArgs } from './task-query'
 
-// TaskServiceOptions: options for TaskService construction.
-
 export type TaskServiceOptions = {
   leaseTtlMin?: number
   maxAttempts?: number

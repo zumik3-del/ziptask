@@ -33,15 +33,6 @@ import {
   TaskId
 } from './common'
 
-// The accepted priority shapes (the canonical "pN", the number N and the digit string "N") are
-// decided by the one normalizer in src/core/tasks.ts, so the tool schema, the settings schema and
-// the service accept exactly the same set.
-// The refine is the validator, and it keeps ONE refusal message on every layer (a union of the
-// accepted shapes would answer with a per-input message). The advertised shape is therefore
-// attached ALONGSIDE the refine, as the JSON Schema metadata below: that is what tools/list
-// publishes, and it is derived from TASK_PRIORITIES, so it cannot drift from the accepted set.
-// The shape carries no transform — a transform is not representable in JSON Schema, so the service
-// normalizes the value it writes.
 const PRIORITY_JSON_SHAPE = {
   anyOf: [
     { type: 'string', enum: [...TASK_PRIORITIES] },
@@ -52,12 +43,6 @@ const PRIORITY_JSON_SHAPE = {
 
 const PRIORITY_INPUT = BASE_PRIORITY_INPUT.meta(PRIORITY_JSON_SHAPE)
 
-// A string bound is counted in code points in both layers: zod v4 measures `maxLength` in code
-// points, and the create guard measures the same way (`codePointLength`), so the schema and the
-// guard refuse the same strings. `depends_on` counts ids — an array length, which both layers
-// count identically. The actor names carry the bound the guard enforces on them
-// (MAX_AGENT_LENGTH): every string field the guard bounds is bounded here too, so the advertised
-// schema never understates what the service refuses.
 const CREATE_TASK_SHAPE = {
   title: z
     .string()
@@ -224,7 +209,6 @@ export function handleGetTask(
       if (fields.includes('blocked_by')) {
         result.blocked_by = data.blockedBy
       }
-      // D3: derived subtasks roll-up for epics
       if (fields.includes('subtasks') && data.subtasks) {
         result.subtasks = data.subtasks
       }

@@ -3,9 +3,6 @@ import { asClock, clockNowIso, clockNowMs } from './tasks'
 import type { AuditStore, LeaseStore } from './types'
 import { SECOND_MS } from '../defaults'
 
-// Lease reaping is its own responsibility: it owns the cooldown clock and the sweep, so the
-// service no longer carries that state. The cooldown is bypassed deliberately by the write
-// paths via reap(); read paths use reapIfStale().
 export class LeaseReaper {
   private lastReapAt = 0
   private readonly clock: Clock | null
@@ -16,8 +13,6 @@ export class LeaseReaper {
     private readonly auditLog: boolean,
     clock?: unknown
   ) {
-    // One normalisation for every clock consumer: the accepted shapes are documented on asClock
-    // (src/core/tasks.ts), so the reaper can never accept less than the service half does.
     this.clock = asClock(clock)
   }
 

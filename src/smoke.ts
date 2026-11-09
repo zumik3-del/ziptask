@@ -149,7 +149,6 @@ try {
     `claim_task fields → {id, lease_ttl_min, description}: ${JSON.stringify(claim)}`
   )
 
-  // ── F2 lease heartbeat + F3 attempts recovery (F2 #1065 / F3 #1066) ─────────
   // Runs while idA is still in_progress and held by smoke-agent: the heartbeat is the
   // in_progress → in_progress self-edge and it re-arms only the caller's own lease.
   const leaseField = async (id: number) =>
@@ -411,7 +410,6 @@ try {
   })
   assert(tplUnknown.isError === true, 'get_template unknown name → error')
 
-  // ── epic → sub-task mechanism ──────────────────────────────────────────────
   const epicCreate = parseToolResult(
     await client.callTool({
       name: 'create_task',
@@ -437,9 +435,6 @@ try {
     arguments: { agent: 'smoke', task_id: epicId }
   })
   assert(epicClaim.isError === true, 'claim epic → error (not claimable)')
-  // ADR 0002 keeps the epic refusal ahead of the status window (src/core/service.ts:185), so the
-  // claim names the real reason on an epic whatever its status — the same sentence the update_status
-  // acquisition guard uses two blocks below, and the one docs/epics.md documents for this door.
   assert(
     textOf(epicClaim) === `INVALID: #${epicId} is an epic, not claimable`,
     `claim error is the epic refusal: ${textOf(epicClaim)}`
@@ -525,7 +520,6 @@ try {
       arguments: { title: 'Guard sub', reporter: 'smoke', epic_id: epic2Id, project: 'smoke' }
     })
   )
-  // ── lease acquisition guard: in_progress needs claim-grade eligibility (#1075) ─
   // An epic holds no work, so it is never leased: update_status must refuse the acquisition, and
   // since ADR 0002 an epic never parks either — `open` refuses blocked/review/queued, so its only
   // exits are the terminal outcomes. Both refusal strings are wire-visible, and on a
@@ -622,7 +616,6 @@ try {
     `rejection mentions children: ${textOf(guardDone)}`
   )
 
-  // ── argument contract: claim_task id alias + unknown-key rejection (F1 #1040) ─
   // Order-independent: the rejection probes run on a still-queued task, and the
   // conflict probe claims nothing, so it can sit at the end of the flow.
   const aliasCreate = parseToolResult(

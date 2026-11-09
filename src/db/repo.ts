@@ -23,20 +23,16 @@ import {
   EDITABLE_STATUSES_SQL
 } from './sql'
 
-// Chunk size for batched IN-clause reads; stays under SQLite's bound-variable limit (portable
-// builds cap at 999), so 500 leaves headroom for the other bound parameters in the statement.
 const BATCH_CHUNK_SIZE = 500
 
 type SqlParam = string | number | null
 
-// bun:sqlite's spread bindings need a typed array; keep the single cast here.
 function bindParams(params: SqlParam[]): SQLQueryBindings[] {
   return params as SQLQueryBindings[]
 }
 
 type TaskRow = Omit<Task, 'is_epic'> & { is_epic: number; project_id: number | null }
 
-// SQL keeps is_epic as 0/1; the domain type carries it as a boolean.
 function toTask(row: TaskRow): Task {
   const { project_id: _internal, ...rest } = row
   return { ...rest, project: rest.project, is_epic: rest.is_epic !== 0 }
@@ -93,14 +89,10 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
         projectId
       ]
     )
-    // The birth rule lives here, so the created status is reported from the row that was
-    // written: the caller never recomputes it and the audit trail cannot name another one.
     return { id: Number(result.lastInsertRowid), status }
   }
 
   deleteTask(id: number): void {
-    // comments and audit_log carry ON DELETE CASCADE (schema v4), so the single delete
-    // removes the task and every child row in one statement.
     this.db.run('DELETE FROM tasks WHERE id = ?', [id])
   }
 
@@ -133,9 +125,6 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
     const limit = clampLimit(filters.limit, 0)
-    // One pass: the window function carries the filtered total on every row, so no
-    // second COUNT query is needed. When the filter yields no rows the window has
-    // nothing to attach to, so total defaults to 0 (which is the correct total).
     type RowWithTotal = TaskRow & { __total: number }
     const rows = this.db
       .query(
@@ -148,8 +137,6 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
 
   queuedCandidates(limit: number, projectId: number, offset?: number): Task[] {
     const n = clampLimit(limit, 0)
-    // The offset is an internal scan cursor, not a result limit: clampCursor keeps it on the
-    // cursor ceiling, so a scan past the result ceiling still reaches the tail of the queue.
     const o = clampCursor(offset ?? 0, 0)
     const rows = this.db
       .query(
@@ -181,7 +168,6 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   batchTasks(ids: number[]): Map<number, Task | null> {
     const map = new Map<number, Task | null>()
     if (ids.length === 0) return map
-    // Chunk to stay under SQLite's bound-variable limit (portable builds cap at 999).
     for (let i = 0; i < ids.length; i += BATCH_CHUNK_SIZE) {
       const chunk = ids.slice(i, i + BATCH_CHUNK_SIZE)
       const rows = this.db
@@ -216,8 +202,6 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     holder: string | null = null,
     resetAttempts: 0 | 1 = 0
   ): number {
-    // Assemble the SET list from the target status so each column's rule is one readable
-    // branch instead of a chain of `CASE WHEN ? = ...` over the same bound parameter.
     const assignments = [
       'status = ?',
       'version = version + 1',
@@ -229,8 +213,6 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
       assignments.push('lease_expires_at = ?', 'assignee = ?')
       params.push(leaseUntilIso, holder)
     } else {
-      // Every target but in_progress drops ownership metadata, so `assignee` always means "lease
-      // holder" — the same rule reapTransition applies when it requeues an expired lease.
       assignments.push('lease_expires_at = NULL', 'assignee = NULL')
     }
     if (resetAttempts === 1) assignments.push('attempts = 0')
@@ -297,8 +279,6 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     attempts: number,
     now: string
   ): number {
-    // The reap policy is derived from the target status here, so both write paths cannot drift
-    // and no caller can pass a policy that contradicts the status it asks for.
     const completedAt = TERMINAL_STATUSES.includes(status) ? now : null
     const assignments = [
       'status = ?',
@@ -309,7 +289,6 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
       'completed_at = COALESCE(?, completed_at)'
     ]
     const params: SqlParam[] = [status, attempts, now, completedAt]
-    // Reaping only ever re-queues or fails a task, so ownership metadata is always dropped.
     assignments.push('assignee = NULL')
     params.push(id, expectedVersion)
     const result = this.db.run(
@@ -350,9 +329,6 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     limit: number
   ): Array<{ type: string; agent: string; text: string; created_at: string }> {
     const n = clampLimit(limit, 0)
-    // The LIMIT picks the newest window (both orders are the exact reverse of each other, so the
-    // tie-break on created_at, type, rowid stays deterministic); the outer ORDER BY hands it back
-    // in ascending chronological order, which is how every other read presents the feed.
     const sql = `SELECT type, agent, text, created_at FROM (
       SELECT 'action' as type, agent, action || ': ' || COALESCE(old_value, 'null') || '->' || COALESCE(new_value, 'null') as text, created_at, rowid AS rid
       FROM audit_log WHERE task_id = ?
@@ -410,21 +386,11 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     now: string,
     auditLog: boolean
   ): number {
-    // The WHERE confines promotion to a `queued` non-epic: that is the one state with no holder and no
-    // work to destroy, so the rewrite cannot silently cancel in-flight work. Any other target matches
-    // no row, leaving is_epic, status, assignee, lease_expires_at and version untouched. createTaskGuard
-    // refuses every other non-terminal status up front; this is the defence behind it.
-    // The promotion is a row write like any other, so it bumps `version`: the optimistic lock has to
-    // see the status/is_epic rewrite, or a holder's stale version would still match the promoted row.
     const result = this.db.run(
       "UPDATE tasks SET is_epic = 1, status = 'open', lease_expires_at = NULL, assignee = NULL, version = version + 1, updated_at = ? WHERE id = ? AND is_epic = 0 AND status = 'queued'",
       [now, id]
     )
     const changes = Number(result.changes)
-    // The mirror belongs to the epic: it is written when the target is an epic after this call — the
-    // row promoted here (changes === 1), or an epic that already was one (attaching a child to it
-    // promotes nothing). A target that is not an epic gets no mirror row: the promotion lost a race
-    // and the caller has to refuse the attach.
     if (auditLog) {
       const stillEpic =
         changes === 1 ||
@@ -435,7 +401,6 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
         )?.is_epic === 1
       if (stillEpic) this.auditAppend(id, agent, action, undefined, newValue)
     }
-    // The report: 1 when this call promoted the target, 0 when it matched no row.
     return changes
   }
 

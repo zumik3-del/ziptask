@@ -39,7 +39,6 @@ import { MINUTE_MS } from '../defaults'
 import type { ProjectService } from './project-service'
 import type { ResolvedOptions } from './service'
 
-// `priority` is the value as the caller wrote it, so it stays `unknown` here.
 export type CreateTaskArgs = {
   title: string
   description?: string
@@ -103,8 +102,6 @@ export class TaskLifecycleService {
     return new Date(clockNowMs(this.clock) + offsetMs).toISOString()
   }
 
-  // One gate for every audit write: the option is read here, so no call site repeats the check
-  // and none can forget it (an audit action name is a wire string, so it stays at the call site).
   private _audit(
     taskId: number,
     agent: string,
@@ -264,7 +261,6 @@ export class TaskLifecycleService {
   }
 
   private _digestDescription(value: string | null): string {
-    // Prefix length of the sha256 hex digest stored in the audit trail.
     const DIGEST_PREFIX_LENGTH = 16
     const hash = createHash('sha256')
       .update(value ?? '', 'utf8')

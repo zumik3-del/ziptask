@@ -61,8 +61,6 @@ export function handleAddComment(
 ): ToolResult {
   const unknown = rejectUnknownArgs('add_comment', ADD_COMMENT_SHAPE, args)
   if (unknown) return unknown
-  // content is canonical; text/comment are forgiving aliases. An empty pick falls through to
-  // the service's "content required" so that wording stays single-sourced.
   const content = args.content ?? args.text ?? args.comment
   return toToolResult(svc.addComment({ id: args.id, agent: args.agent, content: content ?? '' }))
 }

@@ -15,7 +15,6 @@ import { parseDeps, depsSatisfied, collapseDeps } from './deps'
 import { requiredError, tooLongError, optionalFieldError, epicError, textError } from './validation'
 import { RESERVED_PROJECT_SLUG } from './project-slug'
 
-// Only the reads a guard performs: a guard never writes, so it cannot reach the mutating half.
 type GuardStore = Pick<
   TaskStore,
   'batchTasks' | 'getTaskRow' | 'statusesOf' | 'nonTerminalChildCount'
@@ -120,7 +119,6 @@ export function epicTargetRefusal(target: Task | null, project: string): EpicTar
   return null
 }
 
-// The up-front mapping: a refusal here is the caller's mistake, so it names what the caller must fix.
 export function epicTargetGuardError(refusal: EpicTargetRefusal, epicId: number): SvcError {
   switch (refusal.kind) {
     case 'missing':
@@ -140,8 +138,6 @@ export function epicTargetGuardError(refusal: EpicTargetRefusal, epicId: number)
   }
 }
 
-// One home for the dependency-list validation: "not found / is an epic / other project". Both
-// call sites (create_task and update_task) read it so the three refusal strings cannot drift.
 export function depsGuardError(
   store: GuardStore,
   deps: number[],
@@ -179,8 +175,6 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   if (args.depends_on !== undefined && !Array.isArray(args.depends_on)) {
     return { code: 'INVALID', message: 'invalid depends_on' }
   }
-  // Duplicates collapse before every check, so the limit counts distinct ids. The guard only reads
-  // this local: the stored list is the service's own normalized copy.
   const deps = args.depends_on === undefined ? [] : collapseDeps(args.depends_on)
   if (deps.length > MAX_DEPENDS_ON) return { code: 'INVALID', message: 'depends_on too long' }
   if (args.epic && args.epic_id !== undefined)
@@ -204,8 +198,6 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
       message: 'assignee is refused at creation: a task holds a lease only from in_progress'
     }
   }
-  // G1/G2: `legacy` parks pre-v5 rows and archived projects keep their work readable but take no new
-  // task; both are refusals on the resolved project row the service already looked up.
   if (args.project === RESERVED_PROJECT_SLUG) {
     return {
       code: 'INVALID',
@@ -218,7 +210,6 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
     const depErr = depsGuardError(store, deps, args.project)
     if (depErr) return depErr
   }
-  // G4: it must also live in the same project (G5: an epic's children inherit, never guess)
   if (args.epic_id !== undefined) {
     const refusal = epicTargetRefusal(store.getTaskRow(args.epic_id), args.project)
     if (refusal) return epicTargetGuardError(refusal, args.epic_id)
@@ -226,20 +217,10 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   return null
 }
 
-// The one refusal for the promotion race: the epic_id target left the state the up-front guard
-// accepted, so the attach is refused. It is a conflict, not a malformed request — the target moved.
 export function epicPromotionRaceError(epicId: number): SvcError {
   return { code: 'CONFLICT', message: `epic #${epicId} changed state during promotion` }
 }
 
-// The epic_id target preconditions, re-checked next to the write. createTaskGuard reads the target
-// before the write, and a rival can claim it in between (a claim takes the row out of `queued`), so
-// the same preconditions are verified again inside the write transaction — through the one shared
-// predicate, so the two call sites cannot drift apart. A target that already is an epic only has to
-// stay attachable (non-terminal, no parent); a non-epic is promoted here, and only from `queued` —
-// the one state with no holder and no work to destroy. Every mismatch means the target changed
-// after the guard accepted it, so it is reported as the race, not as a precondition the caller got
-// wrong.
 export function epicTargetChangedError(
   target: Task | null,
   epicId: number,
@@ -254,21 +235,15 @@ export function updateStatusGuard(
   refund: boolean,
   store: GuardStore
 ): SvcError | null {
-  // version is optional: when omitted the read-time check is skipped, but the write still CASes on
-  // the version read here, so a concurrent modification between read and write refuses as CONFLICT.
   if (args.version !== undefined && task.version !== args.version) {
     return { code: 'CONFLICT', message: `expected version ${task.version}, got ${args.version}` }
   }
 
-  // Lease heartbeat: only the holder re-arms its own in_progress lease. The reap above is the fence,
-  // so a late heartbeat sees a requeued task and fails here instead of resurrecting the lease.
   const selfEdge = task.status === 'in_progress' && args.status === 'in_progress'
   const renewal = selfEdge && args.renew === true
   if (args.renew === true && !selfEdge) {
     return { code: 'INVALID', message: 'renew requires status=in_progress on an in_progress task' }
   }
-  // the self-edge exists in VALID_TRANSITIONS; without the flag it stays unreachable so a
-  // typo'd in_progress cannot silently become a lease bump
   if (selfEdge && !renewal) {
     return { code: 'INVALID', message: 'in_progress → in_progress requires renew: true' }
   }
@@ -298,13 +273,6 @@ export function updateStatusGuard(
     if (task.assignee !== args.agent)
       return { code: 'CONFLICT', message: `lease held by ${task.assignee}` }
   }
-  // acquiring a lease is a claim-verb concern: update_status must not stay a second, unguarded
-  // door to in_progress. The claimTask precondition set maps 1:1 — NOT_FOUND is covered by the
-  // row read, the status window by isValidTransition, so is_epic and deps are the rest. Both use
-  // claimEligibilityError; review -> in_progress is a deliberate superset (work sent back) and asks
-  // only for the epic half, because its deps are provably still satisfied: deps are immutable after
-  // the claim and a dependency closed for work stays closed for work — the administrative edge out of
-  // `failed` (`failed -> canceled`) closes a task out, it never reopens one.
   if (args.status === 'in_progress' && !selfEdge) {
     const eligibilityErr =
       task.status === 'queued' || task.status === 'blocked'
@@ -312,10 +280,6 @@ export function updateStatusGuard(
         : epicNotClaimableError(task)
     if (eligibilityErr) return eligibilityErr
   }
-  // an epic is never leased (the in_progress acquisition guard above), so its attempts is always 0 and
-  // a refund here would be a no-op write with a misleading audit row. A task closed for work is
-  // refused explicitly: the transition table refuses every edge out of `done`/`canceled`, and the one
-  // administrative edge out of `failed` (`failed -> canceled`) must not smuggle a refund in with it.
   if (refund) {
     const epicErr = epicError(task, `cannot reset attempts on epic #${task.id}`)
     if (epicErr) return epicErr
@@ -372,8 +336,6 @@ export function updateTaskGuard(
     if (!Array.isArray(args.depends_on)) return { code: 'INVALID', message: 'invalid depends_on' }
     const deps = collapseDeps(args.depends_on)
     if (deps.length > MAX_DEPENDS_ON) return { code: 'INVALID', message: 'depends_on too long' }
-    // An epic's stored list is always empty, so a caller who sends the same empty list changes
-    // nothing and is answered with the ordinary no-op rather than a refusal.
     if (task.is_epic && (deps.length > 0 || parseDeps(task.depends_on).length > 0)) {
       return { code: 'INVALID', message: 'an epic cannot have depends_on' }
     }

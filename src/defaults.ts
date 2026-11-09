@@ -23,8 +23,6 @@ export const DEFAULT_QUEUE_LIMIT = 100
 export const LOG_LEVELS = Object.freeze(['off', 'error', 'warn', 'info', 'debug'] as const)
 export type LogLevel = (typeof LOG_LEVELS)[number]
 export const DEFAULT_LOG_LEVEL: LogLevel = 'info'
-// Closed enum of the levels: kept under its historical name so settings.json validation
-// (src/config.ts) imports it from here instead of the logging module.
 export const LEVELS: readonly LogLevel[] = LOG_LEVELS
 export const DEFAULT_AUDIT_LOG = true
 export const SQLITE_BUSY_TIMEOUT_MS = 5000
@@ -38,8 +36,6 @@ export function matchLogLevel(raw: string): LogLevel | undefined {
   return LOG_LEVELS.find((level) => level === normalized)
 }
 
-// Level comparison lives next to the level list so a new level cannot be added without saying
-// where it lands in the order.
 export function logLevelEnabled(min: LogLevel, recordLevel: LogLevel): boolean {
   return min !== 'off' && LOG_LEVEL_ORDER[recordLevel] <= LOG_LEVEL_ORDER[min]
 }
