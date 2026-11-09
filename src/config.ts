@@ -60,7 +60,10 @@ export const DEFAULTS = Object.freeze({
 // partial, exactly like the hand-written schema before.
 const partialGroup = <T extends z.ZodRawShape>(shape: T) => z.object(shape).partial()
 
-const boundaries = {
+// Every leaf constraint lives here once: the file layer and the merged result are validated
+// against the same number shapes, so a limit cannot drift between them. Only the leaves are
+// shared — the partial/complete difference and the deliberate exceptions stay at the objects.
+const LEAF = {
   dbPath: z.string(),
   host: z.string(),
   port: z.number().int().nonnegative(),
@@ -68,16 +71,29 @@ const boundaries = {
   maxAttempts: z.number().int().positive(),
   reapCooldownSec: z.number().int().positive(),
   autoClaimCeiling: z.number().int().positive(),
-  http: partialGroup({
+  http: {
     maxSessions: z.number().int().positive(),
     sessionTtlMs: z.number().int().positive()
-  }),
-  defaults: partialGroup({
-    priority: PRIORITY_INPUT.optional().transform((value) => normalizePriority(value) ?? undefined),
+  },
+  defaults: {
     reporter: z.string(),
     listLimit: z.number().int().positive(),
     timelineLimit: z.number().int().positive(),
     queueLimit: z.number().int().positive()
+  },
+  auditLog: z.boolean()
+}
+
+// auditLog is spread in after logging, so a settings.json with several bad fields still reports
+// them in the order the hand-written objects did (logging.level before auditLog).
+const { auditLog, ...leaves } = LEAF
+
+const boundaries = {
+  ...leaves,
+  http: partialGroup(LEAF.http),
+  defaults: partialGroup({
+    priority: PRIORITY_INPUT.optional().transform((value) => normalizePriority(value) ?? undefined),
+    ...LEAF.defaults
   })
 }
 
@@ -85,7 +101,7 @@ const SettingsSchema = z
   .object({
     ...boundaries,
     logging: partialGroup({ level: z.enum(LEVELS) }),
-    auditLog: z.boolean()
+    auditLog
   })
   .partial()
 
@@ -95,26 +111,14 @@ const SettingsSchema = z
 // The merged result is always complete (defaults filled in), so it is validated against a
 // required schema rather than the partial one: the type is derived from it, not hand-mirrored.
 const CompleteSettingsSchema = z.object({
-  dbPath: z.string(),
-  host: z.string(),
-  port: z.number().int().nonnegative(),
-  leaseTtlMin: z.number().int().positive().max(MAX_LEASE_TTL_MIN),
-  maxAttempts: z.number().int().positive(),
-  reapCooldownSec: z.number().int().positive(),
-  autoClaimCeiling: z.number().int().positive(),
-  http: z.object({
-    maxSessions: z.number().int().positive(),
-    sessionTtlMs: z.number().int().positive()
-  }),
+  ...leaves,
+  http: z.object(LEAF.http),
   defaults: z.object({
     priority: PRIORITY_INPUT.transform((value) => normalizePriority(value) ?? DEFAULT_PRIORITY),
-    reporter: z.string(),
-    listLimit: z.number().int().positive(),
-    timelineLimit: z.number().int().positive(),
-    queueLimit: z.number().int().positive()
+    ...LEAF.defaults
   }),
   logging: z.object({ level: z.string() }),
-  auditLog: z.boolean()
+  auditLog
 })
 
 export type Settings = z.infer<typeof CompleteSettingsSchema>
