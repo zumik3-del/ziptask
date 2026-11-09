@@ -12,10 +12,6 @@ import { handleAddComment, handleGetTimeline } from './mcp/comment-tools'
 import { handleCreateProject, handleListProjects } from './mcp/project-tools'
 import { createTestDb, closeTestDb, json, text } from './test-context'
 
-// Wire integrity (#2243): a pipe row is one line of N columns, so a value carrying `|`, CR or LF must
-// never add a column or a line to what a caller reads. Every case drives the MCP handler and parses
-// the returned text, so the assertion is on the wire shape rather than on sanitizePipe itself.
-
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
@@ -28,7 +24,6 @@ afterEach(() => {
   closeTestDb(db)
 })
 
-// `|` becomes `/`; every run of CR/LF collapses to one space (the old sanitizePipe left them intact).
 const NASTY = 'line1\r\n|line2\nline3\r'
 const NASTY_SAFE = 'line1 /line2 line3 '
 
@@ -67,7 +62,6 @@ describe('pipe output cannot be broken by a value (#2243)', () => {
     expect(added.isError).toBeUndefined()
     const out = text(handleGetTimeline(svc, { id }))
     const lines = rows(out)
-    // The create audit plus the one comment: neither may add a line.
     expect(lines).toHaveLength(2)
     for (const cols of lines) expect(cols).toHaveLength(5)
     expect(lines[1][2]).toBe(NASTY_SAFE)

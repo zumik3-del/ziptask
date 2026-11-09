@@ -1,13 +1,21 @@
 import type { Task, TaskStatus } from './tasks'
 import { clampLimit } from './tasks'
-import type { QueryStore, SvcResult, CommentRow, TimelineRow } from './types'
+import type {
+  QueryStore,
+  SvcResult,
+  CommentRow,
+  TaskBatch,
+  TaskListPage,
+  TaskView,
+  TimelineRow
+} from './types'
 import type { ProjectService } from './project-service'
 import type { ResolvedOptions } from './service'
 import { parseDeps, blockingDeps } from './deps'
 import { readyCandidates } from './candidates'
 import { ok, fail } from './result'
 import { LeaseReaper } from './reaper'
-import { agentError, contentError } from './validation'
+import { agentError, textError } from './validation'
 
 export type ListTasksArgs = {
   assignee?: string
@@ -38,11 +46,7 @@ export class TaskQueryService {
     this.projects = projects
   }
 
-  getTaskView(id: number): SvcResult<{
-    task: Readonly<Task>
-    blockedBy: number[]
-    subtasks?: { total: number; open: number; done: number; failed: number; canceled: number }
-  }> {
+  getTaskView(id: number): SvcResult<TaskView> {
     this.reaper.reapIfStale()
     const task = this.store.getTaskRow(id)
     if (!task) return fail('NOT_FOUND')
@@ -58,9 +62,7 @@ export class TaskQueryService {
     return ok({ task, blockedBy })
   }
 
-  listTasks(
-    args: ListTasksArgs
-  ): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number }> {
+  listTasks(args: ListTasksArgs): SvcResult<TaskListPage> {
     const project = this.projects.resolve(args.project)
     if (!project.ok) return fail(project.error)
     if (args.updated_since !== undefined) {
@@ -83,9 +85,7 @@ export class TaskQueryService {
     return ok({ tasks: rows, total })
   }
 
-  getTasksByIds(
-    ids: number[]
-  ): SvcResult<{ items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
+  getTasksByIds(ids: number[]): SvcResult<TaskBatch> {
     this.reaper.reapIfStale()
     const batch = this.store.batchTasks(ids)
     return ok({
@@ -110,7 +110,7 @@ export class TaskQueryService {
     this.reaper.reapIfStale()
     const task = this.store.getTaskRow(args.id)
     if (!task) return fail('NOT_FOUND')
-    const validationErr = agentError(args.agent) ?? contentError(args.content)
+    const validationErr = agentError(args.agent) ?? textError(args.content, 'content')
     if (validationErr) return fail(validationErr)
     const comment_id = this.store.insertComment(args.id, args.agent, args.content)
     return ok({ comment_id })

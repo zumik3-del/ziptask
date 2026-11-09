@@ -5,7 +5,6 @@ import { requiredError } from './validation'
 import { nowIso } from './tasks'
 import { PROJECT_SLUG_PATTERN, PROJECT_SLUG_MAX, RESERVED_PROJECT_SLUG } from './project-slug'
 
-// Lowercase, `[^a-z0-9._-] -> '-'`, leading non-alphanumerics stripped, truncated to 32.
 export function normalizeSlug(input: string): string {
   return input
     .toLowerCase()
@@ -14,14 +13,11 @@ export function normalizeSlug(input: string): string {
     .slice(0, PROJECT_SLUG_MAX)
 }
 
-// RL1: `folder_path` is a caller-side annotation, so a relative input is refused instead of being
-// resolved against the server's own cwd (which would record a path the caller never named).
 export function normalizeFolderPath(input: string): SvcResult<string> {
   if (!isAbsolute(input)) return fail('INVALID', 'folder_path must be an absolute path')
   return ok(resolve(input))
 }
 
-// The single slug validation point: pattern, then the reserved word.
 function slugError(slug: string): SvcError | null {
   if (!PROJECT_SLUG_PATTERN.test(slug))
     return { code: 'INVALID', message: `slug must match ${PROJECT_SLUG_PATTERN.source}` }
@@ -31,8 +27,6 @@ function slugError(slug: string): SvcError | null {
   return null
 }
 
-// Enumeration scope: absent is a refusal, an unknown slug lists the known ones so a typo is
-// self-correcting in one round trip. `project: ''`/`'*'` are ordinary unknown slugs.
 export function resolveProject(store: ProjectStore, slug?: string): SvcResult<ProjectRow> {
   if (slug === undefined) return fail('INVALID', 'project required')
   const project = store.projectBySlug(slug)
@@ -47,7 +41,6 @@ export function resolveProject(store: ProjectStore, slug?: string): SvcResult<Pr
   return fail('INVALID', `unknown project '${slug}' (known: ${known.join(', ')})`)
 }
 
-// A project mutation names one project; an unknown slug is NOT_FOUND, not an unknown-scope refusal.
 function requireProject(store: ProjectStore, slug: string): SvcResult<ProjectRow> {
   const project = store.projectBySlug(slug)
   return project ? ok(project) : fail('NOT_FOUND')
@@ -64,8 +57,6 @@ export function createProject(
   if (!normalized.ok) return fail(normalized.error)
   let slug = args.slug
   if (slug === undefined) {
-    // normalizeSlug only ever emits the pattern's charset, so a derived slug is empty or valid:
-    // emptiness is the entire derivation rule, and slugError below owns the pattern.
     slug = normalizeSlug(basename(normalized.data))
     if (slug === '') return fail('INVALID', 'slug required (cannot derive from folder name)')
   }

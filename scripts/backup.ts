@@ -69,21 +69,16 @@ function doBackup(): void {
   mkdirSync(dirname(backupPath), { recursive: true })
   mkdirSync(BACKUP_DIR, { recursive: true })
 
-  // Pragma to truncate WAL before backup
   try {
     spawnSync('sqlite3', [DB_PATH, 'PRAGMA wal_checkpoint(TRUNCATE);'], { stdio: 'pipe' })
-  } catch {
-    // best-effort; continue
-  }
+  } catch {}
 
   // Online backup via sqlite3 CLI .backup command into a fixed, safe temp file
   // (never interpolate the destination path into the dot-command).
   const tempBackupPath = join(BACKUP_DIR, TEMP_BACKUP_NAME)
   try {
     rmSync(tempBackupPath, { force: true })
-  } catch {
-    // ignore
-  }
+  } catch {}
 
   try {
     const r = spawnSync('sqlite3', [DB_PATH, `.backup '${TEMP_BACKUP_NAME}'`], {
@@ -111,7 +106,6 @@ function doBackup(): void {
 
   log(`Backup written: ${backupPath}`)
 
-  // Tar+gzip for space efficiency; remove raw .db after success
   try {
     const rawName = `${BACKUP_PREFIX}-${ts}.db`
     const r = spawnSync('tar', ['czf', join(BACKUP_DIR, tarName), '-C', BACKUP_DIR, rawName])
@@ -125,7 +119,6 @@ function doBackup(): void {
     log(`tar failed, keeping raw backup at ${backupPath}`)
   }
 
-  // Clean old backups (keep RETAIN_COUNT)
   try {
     const files = readdirSync(BACKUP_DIR)
       .filter((f) => f.startsWith(`${BACKUP_PREFIX}-`) && f.endsWith('.db.tar.gz'))

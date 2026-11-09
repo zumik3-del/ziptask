@@ -3,8 +3,6 @@ import { createLogger, normalizeError, parseLogLevel, type LogLevel } from './lo
 
 type JsonRecord = Record<string, unknown>
 
-// Every record leaves the logger through the same single stderr write, so the capture
-// lives here for the whole file instead of being copied into each describe below.
 let writeSpy: ReturnType<typeof spyOn>
 let chunks: string[]
 
@@ -96,7 +94,6 @@ describe('createLogger record contract', () => {
     for (const line of lines) {
       expect(line.endsWith('\n')).toBe(true)
       const body = line.trimEnd()
-      // a second line inside one chunk would mean the record was not one JSON line
       expect(body.includes('\n')).toBe(false)
       expect(body.startsWith('{')).toBe(true)
       expect(body.endsWith('}')).toBe(true)
@@ -110,8 +107,6 @@ describe('createLogger record contract', () => {
     expect(writeSpy).toHaveBeenCalledTimes(1)
     const lines = drainLines()
     expect(lines.length).toBe(1)
-    // The newline left as the two-character escape \n, so the chunk is one physical line
-    // and nothing after it can be read as a second record.
     expect(lines[0]!.endsWith('\n')).toBe(true)
     expect(lines[0]!.slice(0, -1).includes('\n')).toBe(false)
     expect(lines[0]!).toContain('\\n')
@@ -120,7 +115,6 @@ describe('createLogger record contract', () => {
     expect(records.length).toBe(1)
     expect(records[0]!.msg).toBe('real')
     expect(records[0]!.logger).toBe('forge')
-    // ...and the value still round trips intact, so escaping loses no information.
     expect(records[0]!.agent).toBe(`evil\n${payload}`)
   })
 
@@ -136,7 +130,6 @@ describe('createLogger record contract', () => {
     }
     const [injected, fromError] = lines.map((line) => JSON.parse(line) as JsonRecord)
     expect(injected!.msg).toBe('real\n{"msg":"forged"}')
-    // an Error stack is multi-line by nature, so it is the field most at risk
     expect((fromError!.stack as string).includes('\n')).toBe(true)
     expect(fromError!.stack as string).toBe(boom.stack as string)
     expect(fromError!.err).toBe('boom')
@@ -149,7 +142,6 @@ describe('createLogger record contract', () => {
     expect(record!.logger).toBe('my-module')
     expect(record!.level).toBe('info')
     expect(record!.msg).toBe('hello')
-    // ISO-8601 and re-serializable: toISOString() on an unparsable ts would throw
     expect(new Date(record!.ts as string).toISOString()).toBe(record!.ts as string)
   })
 
@@ -191,7 +183,6 @@ describe('createLogger record contract', () => {
     expect(record!.level).toBe('info')
     expect(record!.msg).toBe('real')
     expect(record!.ts).not.toBe('fake-ts')
-    // non-reserved keys from ctx and fields still pass through
     expect(record!.tenant).toBe('acme')
     expect(record!.port).toBe(1)
     expect(Object.keys(record!).includes('fake-msg')).toBe(false)
@@ -204,8 +195,6 @@ describe('createLogger record contract', () => {
       port: 1
     })
     const [record] = drain()
-    // Two defenses (stripping reserved keys, and writing them last) make the values
-    // hold on their own; only the key order tells them apart, so pin it too.
     expect(Object.keys(record!)).toEqual(['tenant', 'port', 'logger', 'ts', 'level', 'msg'])
     expect(record!.level).toBe('info')
     expect(record!.ts).not.toBe('fake-ts')
@@ -334,7 +323,6 @@ describe('createLogger error records', () => {
     const [nulled, arrayed] = drain()
     expect(nulled!.err).toBe('null')
     expect(arrayed!.err).toBe('1,2')
-    // neither is an Error, so neither carries a stack
     expect(Object.keys(nulled!).includes('stack')).toBe(false)
     expect(Object.keys(arrayed!).includes('stack')).toBe(false)
   })
@@ -358,7 +346,6 @@ describe('normalizeError', () => {
     createLogger('norm', 'info').error('failed', normalizeError(object))
     const [fromObject] = drain()
     expect(fromObject!.thrown).toEqual(object)
-    // the err slot would have collapsed the object to "[object Object]"
     expect(Object.keys(fromObject!).includes('err')).toBe(false)
     expect(Object.keys(fromObject!).includes('stack')).toBe(false)
 
@@ -413,7 +400,6 @@ describe('createLogger level parsing', () => {
     expect(out[0]!.msg).toBe('unknown log level requested, falling back to info')
     expect(out[0]!.requested).toBe('verbose')
 
-    // the fallback is really the info gate, not an open level
     log.info('kept')
     log.debug('suppressed')
     expect(drain().map((r) => r.msg)).toEqual(['kept'])
@@ -439,7 +425,6 @@ describe('parseLogLevel', () => {
     expect(parseLogLevel('verbose')).toBe('info')
     expect(parseLogLevel('warning')).toBe('info')
     expect(parseLogLevel('')).toBe('info')
-    // not trimmed: a padded value is a typo, not a level
     expect(parseLogLevel(' warn ')).toBe('info')
   })
 })

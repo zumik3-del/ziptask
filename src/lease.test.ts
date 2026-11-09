@@ -13,6 +13,7 @@ import {
 } from './mcp/task-tools'
 import { handleGetTimeline } from './mcp/comment-tools'
 import {
+  versionOf as versionIn,
   createTestDb,
   closeTestDb,
   insertTaskRow,
@@ -21,10 +22,6 @@ import {
   text,
   driveToDone
 } from './test-context'
-
-// F2 (#1065) lease heartbeat + F3 (#1066) attempts recovery, against the production symbols
-// (isValidTransition, TaskService, TaskRepo — never a local double) and through the real reap seam
-// TaskLifecycleService.reapExpiredLeases(), so the reaper is the thing under test rather than a stub.
 
 let db: Database
 let repo: TaskRepo
@@ -43,16 +40,9 @@ const HOLDER = 'developer'
 const HOUR_MS = 3600_000
 
 const row = (id: number) => getTaskRow(db, id)
-const versionOf = (id: number): number =>
-  json(handleGetTask(svc, { id, fields: ['version'] })).version
+const versionOf = (id: number) => versionIn(svc, id)
 const leaseMs = (id: number): number => new Date(row(id).lease_expires_at).getTime()
-// A full window from now: 14 min of slack under the 15 min lease_ttl_min. Comparing against the
-// clock instead of the previous deadline keeps the assertion free of millisecond races, and it is
-// strictly stronger than "changed": a stored deadline one second out can only become this if the
-// renewal recomputed the window instead of nudging it.
 const fullWindowFromNow = () => monotonicNowMs() + 14 * 60_000
-// Simulates an elapsed TTL without a clock seam: only lease_expires_at moves, so version and
-// attempts stay exactly where the production write left them.
 const expireLease = (id: number) => {
   db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [
     new Date(monotonicNowMs() - HOUR_MS).toISOString(),
@@ -76,7 +66,6 @@ const countAudit = (id: number, action: string): number =>
       .query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = ?')
       .get(id, action) as { n: number }
   ).n
-// get_timeline renders seq|type|agent|at|text, so the audit action lives in the text column.
 const timelineField = (
   id: number,
   action: string,
@@ -108,20 +97,15 @@ const claimOrThrow = (id: number, agent: string) => {
   if (!res.ok) throw new Error(`claimTask(${id}) failed: ${formatError(res.error)}`)
   return res.data
 }
-// the refusal text from the claim verb itself — the guard reuses it, so the two doors must agree
 const claimError = (id: number, agent: string): string | undefined => {
   const res = svc.claimTask({ agent, taskId: id })
   return res.ok ? undefined : formatError(res.error)
 }
-// one #1013 round: a claim that is never finished costs exactly one attempt on the next sweep
 const burnAttempt = (id: number, agent = 'developer') => {
   claimOrThrow(id, agent)
   expireLease(id)
   svc.lifecycle.reapExpiredLeases()
 }
-// A leased row the service can no longer produce: legacy, hand-edited, or rolled back. Written with
-// the production statement shape (transitionStatus sets status/assignee/lease_expires_at in one UPDATE),
-// so the sweep and the renewal guard meet a row the database could really hold.
 const seedLease = (id: number, holder: string, msFromNow: number) => {
   db.run(
     "UPDATE tasks SET status = 'in_progress', assignee = ?, lease_expires_at = ?, version = version + 1 WHERE id = ?",
@@ -157,10 +141,6 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     const id = createTaskRow('Heartbeat')
     claimOrThrow(id, HOLDER)
     const before = row(id)
-    // The stored deadline is one second out: a renewal that nudged or kept it could not reach a
-    // full window, so the post-condition below cannot be met by any clock coincidence. The
-    // not-equal is checked against the pinned value, not the claim's — the claim and the renewal
-    // share the now + lease_ttl_min formula and would agree to the millisecond.
     const pinned = pinLease(id, 1000)
 
     const res = handleUpdateStatus(svc, {
@@ -182,8 +162,6 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
   })
 
   test('the renewal window is recomputed from now, never added to the stored deadline', () => {
-    // A deadline far in the future is what unbounded creep (old + TTL per heartbeat) would
-    // produce; after a renewal the window must be ~now + lease_ttl_min instead.
     const id = createTaskRow('FixedWindow')
     claimOrThrow(id, HOLDER)
     const creeped = new Date(monotonicNowMs() + 10 * 24 * HOUR_MS).toISOString()
@@ -202,7 +180,6 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     const control = createTaskRow('Silent')
     claimOrThrow(id, HOLDER)
     claimOrThrow(control, HOLDER)
-    // The heartbeating task's window is already almost spent, as it would be at the end of a TTL.
     pinLease(id, 1000)
 
     for (let beat = 0; beat < 3; beat++) {
@@ -215,8 +192,6 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
       expect(countAudit(id, 'lease_renewed')).toBe(beat + 1)
     }
 
-    // Same sweep, same second: a task whose lease really did elapse is requeued and charged, so
-    // the survival above is the renewal's doing and not an inert sweep.
     expireLease(control)
     svc.lifecycle.reapExpiredLeases()
     expect(row(control).status).toBe('queued')
@@ -283,7 +258,6 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     expect(row(id).attempts).toBe(0)
     expect(countAudit(id, 'lease_renewed')).toBe(0)
 
-    // Same call, holder name: the guard discriminates on identity, not on the call shape.
     const own = leaseField(id, HOLDER, before.version)
     expect(own.isError).toBeUndefined()
     expect(json(own).status).toBe('in_progress')
@@ -313,8 +287,6 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
   })
 
   test('a late heartbeat cannot resurrect a reaped lease; it costs one attempt and the re-claim recovers', () => {
-    // The #1013 accident shape. _doReap() runs inside updateStatus, so the sweep happens before
-    // the transition is evaluated: the renewal is fenced, not merely late.
     const id = createTaskRow('Late')
     claimOrThrow(id, HOLDER)
     const held = versionOf(id)
@@ -616,8 +588,6 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
       'lease_expired'
     ])
 
-    // attempts never locks a task out: the budget is charged by the reap, so the task is one
-    // expiry from `failed` and still claimable.
     claimOrThrow(id, HOLDER)
     expireLease(id)
     svc.lifecycle.reapExpiredLeases()
@@ -745,8 +715,6 @@ describe('reaper policy: a heartbeat is liveness, not progress (D-F3-5)', () => 
 
   test('heartbeats do not extend the budget: a working-but-silent task still lands in failed', () => {
     const id = createTaskRow('Zombie')
-    // Four rounds of honest work + heartbeats, each followed by silence: the budget is four
-    // expiries deep and the fourth is fatal, heartbeats or not.
     for (let beat = 0; beat < 4; beat++) {
       claimOrThrow(id, HOLDER)
       leaseField(id, HOLDER, versionOf(id))
@@ -760,10 +728,6 @@ describe('reaper policy: a heartbeat is liveness, not progress (D-F3-5)', () => 
 })
 
 describe('a heartbeat must not cut the in_progress segment (D-F2-3)', () => {
-  // The regression signature: a lease_renewed row audited as update_status would carry an ISO
-  // lease timestamp as new_value — a "status" name that does not exist. Assert the audit rows
-  // directly instead of measuring segment minutes through them.
-  // Named apart from the shared driveToDone fixture: this one heartbeats `beats` times first.
   const driveToDoneWithHeartbeats = (id: number, beats: number) => {
     claimOrThrow(id, HOLDER)
     for (let beat = 0; beat < beats; beat++) leaseField(id, HOLDER, versionOf(id))
@@ -901,8 +865,6 @@ describe('reap invariants untouched by F2/F3 (D-F3-5: zero diff in _doReap)', ()
 describe('acquiring a lease: update_status → in_progress needs claim-grade eligibility', () => {
   const HOUR = 3600_000
 
-  // A dep-blocked pair: the dep is queued, so the dependant is invisible to list_queue and
-  // un-claimable, yet still queued/blocked — the exact shape the door used to exploit.
   const depBlockedPair = () => {
     const dep = createTaskRow('Dep')
     const blocked = createDepTask('Dependent', [dep])
@@ -931,22 +893,15 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     expect(after.lease_expires_at).toBeNull()
     expect(after.assignee).toBeNull()
     expect(countAudit(epic, 'update_status')).toBe(0)
-    // Both doors speak one sentence: the epic refusal is checked ahead of the status window on each
-    // of them (#1739), so an `open` epic cannot degrade into `CONFLICT: status=open` on the claim
-    // verb while update_status still names the reason.
     expect(claimError(epic, 'orchestrator')).toBe(`INVALID: #${epic} is an epic, not claimable`)
-    // and the claim refusal wrote nothing either: no version bump, no claim audit row, still no lease
     expect(row(epic).version).toBe(before.version)
     expect(row(epic).lease_expires_at).toBeNull()
     expect(countAudit(epic, 'claim')).toBe(0)
   })
 
   test('a legacy blocked epic row is refused on blocked → in_progress too (the guard is not open-only)', () => {
-    // An epic can no longer be parked: open refuses blocked outright, so this row is seeded
-    // directly — the shape a rolled-back deploy or a hand-edit leaves behind.
     const epic = seedBlockedEpic('LegacyBlockedEpic')
     const before = row(epic)
-    // the seed is a bare row write, so the baseline is the create audit alone
     const auditBefore = auditActions(epic)
     expect(auditBefore).toEqual(['create'])
 
@@ -983,7 +938,6 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     expect(after.assignee).toBeNull()
     expect(after.attempts).toBe(0)
     expect(countAudit(blocked, 'update_status')).toBe(0)
-    // the claim-verb agrees, word for word
     expect(claimError(blocked, HOLDER)).toBe('BLOCKED: dependencies not satisfied')
   })
 
@@ -1027,7 +981,6 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     expect(row(blocked).status).toBe('queued')
     expect(row(blocked).attempts).toBe(0)
     expect(row(blocked).lease_expires_at).toBeNull()
-    // and it is claimable the moment the dep closes — the door is closed, not the task
     driveToDone(svc, dep, HOLDER)
     expect(claimOrThrow(blocked, HOLDER).id).toBe(blocked)
   })
@@ -1071,7 +1024,6 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     // service now, so this row is seeded directly — the case a rolled-back deploy or a hand-edit makes.
     const epic = seedLeasedEpic('LegacyEpic', 'orchestrator', -HOUR)
     const before = row(epic)
-    // Control: a real task in the same state, so the sweep below is provably live, not inert.
     const control = seedLease(createTaskRow('Control'), HOLDER, -HOUR)
 
     svc.lifecycle.reapExpiredLeases()
@@ -1160,8 +1112,6 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
       expect(countAudit(id, 'lease_renewed')).toBe(0)
       expect(countAudit(id, 'attempts_reset')).toBe(0)
     }
-    // the timeline is the free detection surface for "acquired without claim": no claim row, no
-    // update_status row, and the row is not in_progress
     expect(text(handleGetTimeline(svc, { id: epic }))).not.toContain(
       'update_status: open->in_progress'
     )
@@ -1192,8 +1142,6 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
   })
 
   test('the acquisition guard sits above the refund branch, so the combined shape reports the acquisition', () => {
-    // update_status(epic, in_progress, reset_attempts) is two requests in one call and the
-    // acquisition is the stronger claim: it is refused for not being claimable, not for the refund.
     const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true }))
       .id as number
     const before = row(epic)
@@ -1210,7 +1158,6 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     expect(row(epic).status).toBe('open')
     expect(row(epic).version).toBe(before.version)
     expect(countAudit(epic, 'attempts_reset')).toBe(0)
-    // the refund refusal is still reachable on its own, from a status that is not an acquisition
     expect(
       text(
         handleUpdateStatus(svc, {
@@ -1348,7 +1295,6 @@ describe('review → in_progress: work sent back takes the lease', () => {
     expect(json(res).status).toBe('in_progress')
     expect(row(id).assignee).toBe('reviewer')
     expect(row(id).lease_expires_at).not.toBeNull()
-    // same agent and same call, from queued: refused by the same guard
     const queued = createDepTask('StillQueued', [dep])
     expect(
       text(

@@ -27,9 +27,6 @@ import {
   MAX_LEASE_TTL_MIN
 } from './core/tasks'
 
-// The configured default accepts the same shapes as create_task (the canonical "pN", the number N
-// and the digit string "N"): the normalizer in src/core/tasks.ts is the one mapping, and the
-// transform turns the accepted shape into the canonical string the settings carry.
 export const PRIORITY_INPUT = z
   .unknown()
   .refine((value) => value === undefined || isTaskPriorityInput(value), {
@@ -56,11 +53,9 @@ export const DEFAULTS = Object.freeze({
   auditLog: DEFAULT_AUDIT_LOG
 } as const)
 
-// Object-level partiality: each top-level key and the two nested groups may be omitted or
-// partial, exactly like the hand-written schema before.
 const partialGroup = <T extends z.ZodRawShape>(shape: T) => z.object(shape).partial()
 
-const boundaries = {
+const LEAF = {
   dbPath: z.string(),
   host: z.string(),
   port: z.number().int().nonnegative(),
@@ -68,16 +63,27 @@ const boundaries = {
   maxAttempts: z.number().int().positive(),
   reapCooldownSec: z.number().int().positive(),
   autoClaimCeiling: z.number().int().positive(),
-  http: partialGroup({
+  http: {
     maxSessions: z.number().int().positive(),
     sessionTtlMs: z.number().int().positive()
-  }),
-  defaults: partialGroup({
-    priority: PRIORITY_INPUT.optional().transform((value) => normalizePriority(value) ?? undefined),
+  },
+  defaults: {
     reporter: z.string(),
     listLimit: z.number().int().positive(),
     timelineLimit: z.number().int().positive(),
     queueLimit: z.number().int().positive()
+  },
+  auditLog: z.boolean()
+}
+
+const { auditLog, ...leaves } = LEAF
+
+const boundaries = {
+  ...leaves,
+  http: partialGroup(LEAF.http),
+  defaults: partialGroup({
+    priority: PRIORITY_INPUT.optional().transform((value) => normalizePriority(value) ?? undefined),
+    ...LEAF.defaults
   })
 }
 
@@ -85,43 +91,23 @@ const SettingsSchema = z
   .object({
     ...boundaries,
     logging: partialGroup({ level: z.enum(LEVELS) }),
-    auditLog: z.boolean()
+    auditLog
   })
   .partial()
 
-// The env layer is the last word, so the merged result is re-validated against the same
-// boundaries minus logging.level: that one stays a raw string on purpose (the logger parses
-// it and warns about an unknown level, see src/logger.ts).
-// The merged result is always complete (defaults filled in), so it is validated against a
-// required schema rather than the partial one: the type is derived from it, not hand-mirrored.
 const CompleteSettingsSchema = z.object({
-  dbPath: z.string(),
-  host: z.string(),
-  port: z.number().int().nonnegative(),
-  leaseTtlMin: z.number().int().positive().max(MAX_LEASE_TTL_MIN),
-  maxAttempts: z.number().int().positive(),
-  reapCooldownSec: z.number().int().positive(),
-  autoClaimCeiling: z.number().int().positive(),
-  http: z.object({
-    maxSessions: z.number().int().positive(),
-    sessionTtlMs: z.number().int().positive()
-  }),
+  ...leaves,
+  http: z.object(LEAF.http),
   defaults: z.object({
     priority: PRIORITY_INPUT.transform((value) => normalizePriority(value) ?? DEFAULT_PRIORITY),
-    reporter: z.string(),
-    listLimit: z.number().int().positive(),
-    timelineLimit: z.number().int().positive(),
-    queueLimit: z.number().int().positive()
+    ...LEAF.defaults
   }),
   logging: z.object({ level: z.string() }),
-  auditLog: z.boolean()
+  auditLog
 })
 
 export type Settings = z.infer<typeof CompleteSettingsSchema>
 
-// Level parsing is the logger's job: the raw ZIPTASK_LOG_LEVEL string reaches createLogger
-// so it can warn about an unknown level. settings.json keeps the closed enum instead, so a
-// bad value in the file still fails startup loudly.
 export type EnvType = 'string' | 'int' | 'bool'
 
 export interface EnvMapping {
@@ -149,9 +135,6 @@ export const ENV_MAPPINGS: EnvMapping[] = [
   { env: 'ZIPTASK_AUDIT_LOG', path: 'auditLog', type: 'bool' }
 ]
 
-// Strict on purpose: a value of the wrong shape is a typo, and reinterpreting it would change
-// behaviour silently (parseInt stops at the first non-digit, a bare boolean test turns every other
-// string into false). The caller warns and drops the override instead.
 const INT_VALUE_PATTERN = /^\d+$/
 
 function parseValue(raw: string, type: EnvType): string | number | boolean | undefined {
@@ -160,7 +143,6 @@ function parseValue(raw: string, type: EnvType): string | number | boolean | und
       return raw
     case 'int':
       return INT_VALUE_PATTERN.test(raw) ? parseInt(raw, 10) : undefined
-    // true/false are the same words in any case; `1`/`yes`/empty stay invalid instead of being guessed.
     case 'bool': {
       const value = raw.toLowerCase()
       return value === 'true' ? true : value === 'false' ? false : undefined
@@ -174,9 +156,6 @@ function formatIssues(error: z.ZodError): string {
     .join('; ')
 }
 
-// A bare `--settings` (no next argv, or a flag-like next argv) and the equals form with an empty
-// or flag-like value are user mistakes: returning undefined here would silently fall back to
-// ZIPTASK_SETTINGS/defaults.
 const SETTINGS_FLAG = '--settings'
 const SETTINGS_FLAG_PREFIX = `${SETTINGS_FLAG}=`
 
@@ -241,8 +220,6 @@ export function setNested(obj: Record<string, unknown>, path: string, value: unk
       }
     }
     const next = current[key]
-    // `next` is always a plain object here: missing/non-plain intermediates were
-    // replaced above, so the guard is intentionally omitted.
     current = next as Record<string, unknown>
   }
   const last = keys[keys.length - 1]
@@ -317,8 +294,6 @@ export function loadSettings(opts?: {
     if (raw === undefined) continue
     const value = parseValue(raw, type)
     if (value === undefined) {
-      // A typo in an env var must not silently vanish: keep the previous value
-      // (settings.json or default) but surface the ignored override to the caller's logger.
       opts?.warn?.(`ignoring invalid ${envName} value`, { value: raw })
       continue
     }

@@ -8,9 +8,6 @@ import { taskStoreStubs } from './test-context'
 
 const TMP = '/tmp/opencode'
 
-// Settings['logging']['level'] is an intersection of the settings.json enum and `string`, so
-// it narrows to the five file levels in the type system while the runtime value handed over by
-// loadSettings is the raw env string. Read it through here to pin what production passes on.
 const rawLevel = (s: Settings): string => s.logging.level
 
 function writeSettingsJson(dir: string, content: object): string {
@@ -134,7 +131,6 @@ describe('loadSettings env overrides', () => {
     expect(s.host).toBe('10.0.0.1')
     expect(s.port).toBe(7777)
     expect(s.leaseTtlMin).toBe(45)
-    // port from settings.json should be overridden by env
     expect(s.port).not.toBe(7000)
   })
 
@@ -243,7 +239,6 @@ describe('loadSettings env overrides', () => {
     expect(() =>
       loadSettings({ path: settingsPath, env: { ZIPTASK_DEFAULTS_PRIORITY: 'p9' }, argv: [] })
     ).toThrow(/Invalid configuration after env overrides: defaults\.priority: /)
-    // the same file without a bad override still loads
     expect(loadSettings({ path: settingsPath, env: { ZIPTASK_PORT: '8080' }, argv: [] }).port).toBe(
       8080
     )
@@ -283,21 +278,15 @@ describe('loadSettings env overrides', () => {
   })
 
   test('ZIPTASK_LOG_LEVEL is passed through raw, neither validated nor normalized', () => {
-    // Level parsing lives in the logger (parseLogLevel in src/logger.ts): config hands the
-    // env value over untouched, so an unknown level can reach createLogger and its warn,
-    // and case handling stays the logger's business (pinned in src/logger.test.ts).
     expect(rawLevel(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'warn' }, argv: [] }))).toBe('warn')
     expect(rawLevel(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'verbose' }, argv: [] }))).toBe(
       'verbose'
     )
     expect(rawLevel(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'WARN' }, argv: [] }))).toBe('WARN')
-    // unset stays at the default, the only normalization left here
     expect(rawLevel(loadSettings({ env: {}, argv: [] }))).toBe('info')
   })
 
   test('an unknown ZIPTASK_LOG_LEVEL still overrides settings.json rather than being skipped', () => {
-    // unlike an invalid int (skipped), any level string is applied as given — whether it
-    // is a level at all is decided by the logger, not by config
     const settingsPath = writeSettingsJson(testDir, { logging: { level: 'debug' } })
     const s = loadSettings({ path: settingsPath, env: { ZIPTASK_LOG_LEVEL: 'verbose' }, argv: [] })
     expect(rawLevel(s)).toBe('verbose')
@@ -334,16 +323,14 @@ describe('loadSettings env overrides', () => {
       argv: []
     })
     expect(s.http.maxSessions).toBe(1)
-    expect(s.http.sessionTtlMs).toBe(600_000) // not overridden
+    expect(s.http.sessionTtlMs).toBe(600_000)
     expect(s.defaults.priority).toBe('p1')
-    expect(s.defaults.reporter).toBe('system') // not overridden
+    expect(s.defaults.reporter).toBe('system')
   })
 })
 
 describe('strict env int parsing', () => {
   test('a decimal int with trailing junk is ignored, warned about, and the lower layer survives', () => {
-    // parseInt would stop at the first non-digit and read 3005: the strict pattern must refuse
-    // the whole value instead of silently reinterpreting a typo.
     const settingsPath = writeSettingsJson(testDir, { port: 7000 })
     const warnings: Array<{ message: string; fields: Record<string, unknown> }> = []
     const s = loadSettings({
@@ -406,7 +393,6 @@ describe('strict env bool parsing', () => {
   })
 
   test('ZIPTASK_AUDIT_LOG=TRUE parses, so audit stays on even over a false settings.json value', () => {
-    // a skipped override would let the file's false survive: audit staying on proves the parse
     const settingsPath = writeSettingsJson(testDir, { auditLog: false })
     const warnings: string[] = []
     const s = loadSettings({
@@ -451,7 +437,6 @@ describe('ZIPTASK_LOG_LEVEL hand-off to the logger', () => {
       const settings = loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'verbose' }, argv: [] })
       const log = createLogger('app', settings.logging.level)
 
-      // the warn about the unparsable level is emitted at construction, exactly once
       expect(
         records().map((r) => ({
           level: r.level,
@@ -468,7 +453,6 @@ describe('ZIPTASK_LOG_LEVEL hand-off to the logger', () => {
         }
       ])
 
-      // ...and the fallback is the real info gate, not an open level
       chunks.length = 0
       log.info('kept')
       log.debug('suppressed')
@@ -592,8 +576,6 @@ describe('loadSettings error cases', () => {
   })
 
   test('an unknown logging.level in settings.json is rejected (no silent info fallback)', () => {
-    // the file keeps the closed enum even though the env var is passed through raw:
-    // 'verbose' is accepted verbatim from the env and still fails startup from the file
     for (const level of ['warning', 'verbose']) {
       const badPath = writeSettingsJson(testDir, { logging: { level } })
       expect(() => loadSettings({ path: badPath, env: {}, argv: [] })).toThrow(
@@ -655,7 +637,6 @@ describe('maxAttempts flow', () => {
   test('maxAttempts from settings flows into TaskService insertTask', () => {
     const settingsPath = writeSettingsJson(testDir, { maxAttempts: 5 })
     const s = loadSettings({ path: settingsPath, env: {}, argv: [] })
-    // Build a minimal in-memory service to verify the value propagates
     const svc = new TaskService(
       taskStoreStubs({
         insertTask: (t) => {

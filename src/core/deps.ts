@@ -12,9 +12,6 @@ export function parseDeps(raw: string): number[] {
   return []
 }
 
-// Collapses duplicate ids, keeping the first occurrence in input order. Pure: the argument is never
-// rewritten, so a guard that calls it stays side-effect free and the caller normalizes its own copy
-// (the one it then stores and checks for cycles).
 export function collapseDeps(deps: number[]): number[] {
   return [...new Set(deps)]
 }
@@ -44,8 +41,6 @@ export function createsCycle(
   return false
 }
 
-// The single source of the dependency-satisfaction rule: a dep is blocking while it is unknown or
-// non-terminal. `depsSatisfied` and the `blocked_by` view are both derived from this list.
 export function blockingDeps(statuses: Map<number, TaskStatus>, dependsOn: number[]): number[] {
   return dependsOn.filter((depId) => {
     const status = statuses.get(depId)

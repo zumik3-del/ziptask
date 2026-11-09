@@ -15,7 +15,7 @@ Sources of truth: the wire protocol in `src/mcp/instructions.md`, the domain rul
 - `bun test` · `bunx biome check src/ scripts/` · `bunx tsc --noEmit` · smoke `bun run src/smoke.ts` (the tester's — once per batch, never in a dev task).
 
 ## 4. Code conventions
-- No comments unless truly necessary; extend or generalise an existing module before writing a new one.
+- No comments in code at all, except in very obvious and critical places where an explanation is strictly necessary; extend or generalise an existing module before writing a new one.
 - Name files after their contents — no `helpers`/`utils`/`common`/`misc` (`tasks.ts`, not `task-utils.ts`).
 - Token-minimalism: `description` only via explicit `fields`; omit-null in JSON; sanitize `|` in titles (`sanitizePipe`).
 - DB is pure state: no `task_path`/`result_path`/`parent_id` — paths live in description/comment text, task text is English. Carve-out: `epic_id`/`is_epic` are structural membership columns (single-level bounded).

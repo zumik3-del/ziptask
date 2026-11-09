@@ -24,7 +24,6 @@ export const TEST_PROJECT_SLUG = 'test'
 
 const TMP_DIR = '/tmp/opencode'
 
-// The seeded row every test-scoped service resolves through `scope`; a fresh DB has no projects.
 export function seedProject(db: Database, slug: string = TEST_PROJECT_SLUG): number {
   const now = nowIso()
   const result = db.run(
@@ -49,8 +48,6 @@ export function testProjectRow(): ProjectRow {
   }
 }
 
-// The project half of a hand-rolled TaskStore literal: only `test` resolves, so a fixture store
-// behaves like a seeded test DB without duplicating seven stubs per literal.
 export function projectStoreStubs(): ProjectStore {
   return {
     insertProject: () => 1,
@@ -63,9 +60,6 @@ export function projectStoreStubs(): ProjectStore {
   }
 }
 
-// A TaskStore whose every method is inert, so a test can hand a service a store without a DB
-// and override only the calls it is about. Callers describe behaviour, not twenty default stubs.
-// The stubs cover every store slice, so the narrowed service dependencies are satisfied by one.
 export function taskStoreStubs(overrides: Partial<Store> = {}): Store {
   return {
     getTaskRow: () => null,
@@ -94,7 +88,6 @@ export function taskStoreStubs(overrides: Partial<Store> = {}): Store {
   }
 }
 
-// Test DBs live under /tmp/opencode: SQLite fsyncs on /mnt/external are ~30x slower.
 export function makeTempDbPath(tag: string = 'test'): string {
   mkdirSync(TMP_DIR, { recursive: true })
   return join(TMP_DIR, `ziptask-${tag}-${Date.now()}-${Math.random().toString(36).slice(2)}.db`)
@@ -108,11 +101,6 @@ export function removeTempDb(path: string): void {
   }
 }
 
-// The template every per-test database is written from: the schema, migrated once per process,
-// plus the seeded `test` project. Building a fresh database per test cost ~22 ms (32 DDL
-// statements, two fsyncing commits and a WAL checkpoint on close); writing the finished
-// template's bytes costs ~0.4 ms. The bytes are a whole database file, so each test still owns
-// an isolated database - nothing is shared between tests.
 let templateBytes: Buffer | null = null
 
 function templateDbBytes(): Buffer {
@@ -120,7 +108,6 @@ function templateDbBytes(): Buffer {
     const path = makeTempDbPath('template')
     const db = openDatabase(path)
     seedProject(db)
-    // Fold the WAL into the main file: the bytes below are the .db file alone.
     db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
     db.close()
     templateBytes = readFileSync(path)
@@ -163,7 +150,6 @@ export function getTaskRow(db: Database, id: number) {
   return row ? { ...row, is_epic: row.is_epic !== 0 } : null
 }
 
-// The single `content[0].text` reader: every MCP tool result is unpacked through it.
 export function textOf(res: any): string {
   return (res.content as any[])[0].text
 }
@@ -174,6 +160,18 @@ export function text(res: any): string {
 
 export function json(res: any): any {
   return JSON.parse(textOf(res))
+}
+
+export function versionOf(svc: TaskService, id: number): number {
+  return json(handleGetTask(svc, { id, fields: ['version'] })).version
+}
+
+export type AuditRow = { action: string; old_value: string | null; new_value: string | null }
+
+export function auditRows(db: Database, id: number): AuditRow[] {
+  return db
+    .query('SELECT action, old_value, new_value FROM audit_log WHERE task_id = ? ORDER BY id')
+    .all(id) as AuditRow[]
 }
 
 export function driveToDone(svc: TaskService, id: number, agent: string) {
@@ -201,9 +199,6 @@ export type TestServer = {
   stop: () => void
 }
 
-// Boot/teardown for every HTTP test: temp DB + seeded project + service + logger + listener in
-// one call, and a stop() that reverses all of it. Tests pass only what they vary (a capture
-// logger, a session TTL, a session cap); everything else is the shared default.
 export function startTestServer(opts: TestServerOpts = {}): TestServer {
   const dbPath = makeTempDbPath(opts.tag ?? 'server-test')
   writeFileSync(dbPath, templateDbBytes())

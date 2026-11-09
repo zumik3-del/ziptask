@@ -19,6 +19,7 @@ import {
   handleListTasks
 } from './mcp/task-tools'
 import {
+  auditRows as auditRowsIn,
   createTestDb,
   closeTestDb,
   insertTaskRow,
@@ -42,6 +43,7 @@ afterEach(() => {
   closeTestDb(db)
 })
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
+const auditRows = (id: number) => auditRowsIn(db, id)
 
 describe('create_task', () => {
   test('creates task with defaults', () => {
@@ -65,7 +67,6 @@ describe('create_task', () => {
   })
 
   test('rejects forward-reference cycle pair', () => {
-    // The forward reference can no longer be written through the service, so the row is seeded.
     const a = createTaskRow({ title: 'A', reporter: 'dev', depends_on: [2] })
     const cycle = handleCreateTask(svc, { title: 'B', reporter: 'dev', depends_on: [a] })
     expect(text(cycle)).toContain('CYCLE')
@@ -183,7 +184,6 @@ describe('claim_task', () => {
     expect(json(res).status).toBe('review')
     const after = getTaskRow(db, id)
     expect(after.status).toBe('review')
-    // `assignee` is the lease holder: the row left in_progress, so the holder is cleared.
     expect(after.assignee).toBeNull()
   })
 
@@ -226,9 +226,7 @@ describe('update_status', () => {
     const id = createTaskRow({ title: 'Conflict', reporter: 'dev' })
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
-    // After claim, version bumped to 2
     expect(task.version).toBe(2)
-    // Update with correct (fresh) version succeeds
     const updateRes = handleUpdateStatus(svc, {
       id,
       agent: 'agent-1',
@@ -236,7 +234,6 @@ describe('update_status', () => {
       version: task.version
     })
     expect(json(updateRes).status).toBe('review')
-    // Stale version conflicts
     const conflictRes = handleUpdateStatus(svc, {
       id,
       agent: 'agent-1',
@@ -309,12 +306,10 @@ describe('lease expiry', () => {
     expect(task.status).toBe('queued')
     expect(task.attempts).toBe(1)
     expect(task.lease_expires_at).toBeNull()
-    const auditRows = db
-      .query('SELECT * FROM audit_log WHERE task_id = ? AND action = ?')
-      .all(id, 'lease_expired') as any[]
-    expect(auditRows.length).toBe(1)
-    expect(auditRows[0].old_value).toBe('in_progress')
-    expect(auditRows[0].new_value).toBe('queued')
+    const rows = auditRows(id).filter((r) => r.action === 'lease_expired')
+    expect(rows.length).toBe(1)
+    expect(rows[0].old_value).toBe('in_progress')
+    expect(rows[0].new_value).toBe('queued')
   })
 
   test('max attempts leads to failed', () => {
@@ -330,11 +325,9 @@ describe('lease expiry', () => {
     expect(task.attempts).toBe(4)
     expect(task.lease_expires_at).toBeNull()
     expect(task.completed_at).not.toBeNull()
-    const auditRows = db
-      .query('SELECT * FROM audit_log WHERE task_id = ? AND action = ?')
-      .all(id, 'lease_expired') as any[]
-    expect(auditRows.length).toBe(1)
-    expect(auditRows[0].new_value).toBe('failed')
+    const rows = auditRows(id).filter((r) => r.action === 'lease_expired')
+    expect(rows.length).toBe(1)
+    expect(rows[0].new_value).toBe('failed')
   })
 })
 
@@ -371,17 +364,13 @@ describe('version bump on claim and reap', () => {
 describe('version race regression', () => {
   test('regression S1: stale-version update after reap+re-claim conflicts', () => {
     const id = createTaskRow({ title: 'S1', reporter: 'dev' })
-    // Step 1: agent-1 claims (v1→v2)
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
-    // Step 2: expire and reap (v2→v3, status→queued)
     db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour') WHERE id = ?", [id])
     svc.lifecycle.reapExpiredLeases()
-    // Step 3: agent-2 re-claims (v3→v4)
     handleClaimTask(svc, { agent: 'agent-2', task_id: id })
     const task = getTaskRow(db, id)
     expect(task.version).toBe(4)
     expect(task.assignee).toBe('agent-2')
-    // Step 4: orchestrator (holding stale v1 from before any claim) tries update_status
     const conflictRes = handleUpdateStatus(svc, {
       id,
       agent: 'agent-1',
@@ -396,7 +385,6 @@ describe('version race regression', () => {
     const id = createTaskRow({ title: 'DoubleClaim', reporter: 'dev' })
     const row = getTaskRow(db, id)
     expect(row.version).toBe(1)
-    // First claim succeeds (v1→v2)
     const c1 = repo.markClaimed(
       id,
       1,
@@ -405,7 +393,6 @@ describe('version race regression', () => {
       new Date().toISOString()
     )
     expect(c1).toBe(1)
-    // Second claim with same expected version fails (0 changes)
     const c2 = repo.markClaimed(
       id,
       1,
@@ -414,7 +401,6 @@ describe('version race regression', () => {
       new Date().toISOString()
     )
     expect(c2).toBe(0)
-    // Original assignee retained
     const final = getTaskRow(db, id)
     expect(final.assignee).toBe('agent-a')
     expect(final.version).toBe(2)
@@ -423,24 +409,18 @@ describe('version race regression', () => {
   test('reap guard: concurrent holder write defeats reap', () => {
     const id = createTaskRow({ title: 'ReapGuard', reporter: 'dev' })
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
-    // v2 after claim
     const task = getTaskRow(db, id)
     expect(task.version).toBe(2)
-    // Force-expire the lease
     db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour') WHERE id = ?", [id])
-    // Simulate holder's concurrent write bumping version (but not changing status)
     db.run('UPDATE tasks SET version = version + 1, updated_at = ? WHERE id = ?', [
       new Date().toISOString(),
       id
     ])
-    // Reap with original expectedVersion=2; DB now has 3 → 0 changes
     const changes = repo.reapTransition(id, 2, 'queued', 2, new Date().toISOString())
     expect(changes).toBe(0)
-    // Status stays in_progress
     const final = getTaskRow(db, id)
     expect(final.status).toBe('in_progress')
     expect(final.version).toBe(3)
-    // No lease_expired audit row
     const audits = db
       .query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = ?')
       .get(id, 'lease_expired') as { n: number }
@@ -488,7 +468,6 @@ describe('terminal-status single source (#1445)', () => {
 
   test('TERMINAL_STATUSES is the explicit closed-for-work set, not the no-outgoing-edge set', () => {
     expect([...TERMINAL_STATUSES]).toEqual(['done', 'failed', 'canceled'])
-    // `failed` is the only closed status with an outgoing edge: the administrative withdrawal.
     const withEdge = TERMINAL_STATUSES.filter((status) =>
       TASK_STATUSES.some((to) => isValidTransition(status, to))
     )
@@ -604,7 +583,6 @@ describe('lease refresh on reopen (#431)', () => {
     const task = getTaskRow(db, id)
     expect(task.status).toBe('in_progress')
     expect(task.lease_expires_at).not.toBeNull()
-    // Should be in the future (leaseTtlMin = 15 min)
     const expires = new Date(task.lease_expires_at!).getTime()
     expect(expires).toBeGreaterThan(Date.now())
   })
@@ -629,7 +607,6 @@ describe('lease refresh on reopen (#431)', () => {
     handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: v1 })
     const v2 = json(handleGetTask(svc, { id, fields: ['version'] })).version
     handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'in_progress', version: v2 })
-    // Reap should not touch the freshly reopened task
     svc.lifecycle.reapExpiredLeases()
     const task = getTaskRow(db, id)
     expect(task.status).toBe('in_progress')
@@ -952,7 +929,7 @@ describe('lease_expires_at cleared on exit from in_progress (#767)', () => {
   })
 })
 
-describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
+describe('monotonicNowMs process-wide (#1608 supersedes #795)', () => {
   test("two TaskRepo instances share one monotonic clock, so repo B inherits repo A's advance", () => {
     const dbA = createTestDb()
     const repoA = new TaskRepo(dbA)
@@ -975,16 +952,12 @@ describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
         depends_on: '[]',
         now: '2020-01-01T00:00:00.000Z'
       }).id
-      // Inject 5 comments into both repos to establish baseline monotonicity.
-      // One transaction per repo: the burst below is 500 rows, and one WAL commit per row is what
-      // made this fixture the slowest test in the suite (a per-row commit, not a per-row clock tick).
       repoA.transaction(() => {
         for (let i = 0; i < 5; i++) repoA.insertComment(idA, 'a', `ca${i}`)
       })
       repoB.transaction(() => {
         for (let i = 0; i < 5; i++) repoB.insertComment(idB, 'b', `cb${i}`)
       })
-      // Advance the shared clock far ahead (≈500ms) with a burst through repoA
       repoA.transaction(() => {
         for (let i = 0; i < 500; i++) repoA.insertComment(idA, 'a', `ca-adv${i}`)
       })
@@ -996,14 +969,12 @@ describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
       // an independent wall clock ~500 ms behind it. Reading the stored created_at keeps this a
       // black-box check of the same property.
       repoB.insertComment(idB, 'b', 'cb-probe')
-      // Verify repo A's entries are internally monotonic
       const rowsA = dbA
         .query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC')
         .all(idA) as any[]
       for (let i = 1; i < rowsA.length; i++) {
         expect(rowsA[i].created_at > rowsA[i - 1].created_at).toBe(true)
       }
-      // Verify repo B's entries are internally monotonic
       const rowsB = dbB
         .query('SELECT created_at, content FROM comments WHERE task_id = ? ORDER BY id ASC')
         .all(idB) as any[]
@@ -1026,12 +997,9 @@ describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
 
 describe('TaskRepo port conformance (#812)', () => {
   test('TaskRepo implements all TaskStore methods', () => {
-    // Compile-time: this file imports TaskRepo and TaskStore; if TaskRepo did not
-    // implement TaskStore, tsc would fail. Runtime verification: call every method.
     const db3 = createTestDb()
     try {
       const repo3 = new TaskRepo(db3)
-      // All these calls must not throw — verifies method signatures match TaskStore
       expect(typeof repo3.getTaskRow).toBe('function')
       expect(typeof repo3.insertTask).toBe('function')
       expect(typeof repo3.deleteTask).toBe('function')
@@ -1053,7 +1021,6 @@ describe('TaskRepo port conformance (#812)', () => {
       expect(typeof repo3.childStatusCounts).toBe('function')
       expect(typeof repo3.promoteEpicWithMirror).toBe('function')
 
-      // Verify each method actually works
       const id = repo3.insertTask({
         title: 'PortTest',
         description: null,
@@ -1080,7 +1047,7 @@ describe('TaskRepo port conformance (#812)', () => {
       expect(repo3.transaction(() => 42)).toBe(42)
       expect(repo3.expiredLeases(nowIso())).toEqual([])
       repo3.deleteTask(id)
-      expect(repo3.queuedCandidates(10, testProjectId(repo3), 0)).toHaveLength(0) // no queued tasks after delete
+      expect(repo3.queuedCandidates(10, testProjectId(repo3), 0)).toHaveLength(0)
       expect(repo3.getTaskRow(id)).toBeNull()
     } finally {
       closeTestDb(db3)
@@ -1093,7 +1060,6 @@ describe('TaskRepo port conformance (#812)', () => {
 // points, the advertised schema and the service guard would drift apart at the boundary - which
 // is exactly what happened before the fix.
 describe('codePointLength (#1874)', () => {
-  // U+1F600: one code point, two UTF-16 units.
   const EMOJI = '\u{1F600}'
 
   test('an ASCII string counts one code point per unit', () => {
@@ -1113,8 +1079,6 @@ describe('codePointLength (#1874)', () => {
   })
 
   test('an unpaired surrogate counts as one code point, the way the schema layer counts it', () => {
-    // A lone surrogate is one unit in a JS string and one element when the string is spread, so
-    // the schema and the guard measure it the same way.
     expect(codePointLength('\uD800')).toBe(1)
     expect(codePointLength('\uD800\uD800')).toBe(2)
   })

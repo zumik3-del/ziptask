@@ -1,5 +1,4 @@
 export const MIGRATIONS = [
-  // 001: core tables (schema v2: no task_path/result_path/parent_id; comments.type)
   `CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY,
     title TEXT NOT NULL,
@@ -45,19 +44,14 @@ export const MIGRATIONS = [
     version INTEGER NOT NULL
   )`,
 
-  // 002: epic → sub-task mechanism (schema v3; additive over live DB)
   `ALTER TABLE tasks ADD COLUMN is_epic INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE tasks ADD COLUMN epic_id INTEGER REFERENCES tasks(id)`,
   `CREATE INDEX IF NOT EXISTS idx_tasks_epic_id ON tasks(epic_id)`,
 
-  // 003: query indexes for timeline and metrics
   `CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)`,
   `CREATE INDEX IF NOT EXISTS idx_comments_task_id ON comments(task_id)`,
   `CREATE INDEX IF NOT EXISTS idx_tasks_status_completed ON tasks(status, completed_at)`,
 
-  // 004: ON DELETE CASCADE on comments/audit_log (schema v4). SQLite cannot alter a FK in
-  // place, so each child table is rebuilt: recreate with the cascade, copy the rows, drop
-  // the old table, rename, and restore its task_id index (dropped with the old table).
   `CREATE TABLE comments_new (
     id INTEGER PRIMARY KEY,
     task_id INTEGER NOT NULL,
@@ -87,10 +81,6 @@ export const MIGRATIONS = [
   `ALTER TABLE audit_log_new RENAME TO audit_log`,
   `CREATE INDEX IF NOT EXISTS idx_audit_log_task_id ON audit_log(task_id)`,
 
-  // 005: projects (schema v5). `project` scopes enumeration; it is not an authorization token.
-  // `folder_path` is a client-side annotation, not a key (RL1, approved 2026-10-15): the server never resolves paths, so a
-  // global UNIQUE would only refuse legitimate setups; `slug` is the identity.
-  // project_id is nullable only for rows a pre-v5 DB may still hold; the backfill below claims them.
   `CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY,
     slug TEXT NOT NULL UNIQUE,
@@ -111,12 +101,10 @@ export const MIGRATIONS = [
   `UPDATE tasks SET project_id = (SELECT id FROM projects WHERE slug = 'legacy')
    WHERE project_id IS NULL`,
 
-  // 006: performance indexes (audit follow-up). Append-only.
   `CREATE INDEX IF NOT EXISTS idx_tasks_lease_expires_at ON tasks(lease_expires_at) WHERE status = 'in_progress' AND lease_expires_at IS NOT NULL`,
   `CREATE INDEX IF NOT EXISTS idx_tasks_queued_candidates ON tasks(project_id, priority, created_at, id) WHERE status = 'queued' AND is_epic = 0`,
   `CREATE INDEX IF NOT EXISTS idx_tasks_created_at_id ON tasks(created_at DESC, id DESC)`,
 
-  // 007: simplify epic lifecycle (ADR 0002) — data-only rewrite of non-terminal epics to 'open'.
   `UPDATE tasks SET status = 'open', lease_expires_at = NULL, assignee = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE is_epic = 1 AND status IN ('queued', 'in_progress', 'review', 'blocked')`,
   `UPDATE tasks SET lease_expires_at = NULL, assignee = NULL WHERE is_epic = 1 AND (lease_expires_at IS NOT NULL OR assignee IS NOT NULL)`
 ]

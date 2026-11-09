@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto'
 import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, Clock } from './tasks'
 import {
   TERMINAL_STATUSES,
-  nowIso,
-  monotonicNowMs,
+  clockNowIso,
+  clockNowMs,
   sanitizePipe,
   MAX_LEASE_TTL_MIN,
   LEASE_TTL_TOO_LARGE_MESSAGE,
@@ -17,7 +17,8 @@ import type {
   SvcResult,
   SvcError,
   UpdateStatusData,
-  UpdateTaskData
+  UpdateTaskData,
+  UpdateTaskPatch
 } from './types'
 import { createsCycle, collapseDeps } from './deps'
 import { readyCandidates } from './candidates'
@@ -33,12 +34,11 @@ import {
   epicTargetChangedError,
   epicPromotionRaceError
 } from './guards'
-import { agentError, commentError } from './validation'
+import { agentError, textError } from './validation'
 import { MINUTE_MS } from '../defaults'
 import type { ProjectService } from './project-service'
 import type { ResolvedOptions } from './service'
 
-// `priority` is the value as the caller wrote it, so it stays `unknown` here.
 export type CreateTaskArgs = {
   title: string
   description?: string
@@ -98,16 +98,18 @@ export class TaskLifecycleService {
     this.projects = projects
   }
 
-  private _nowMs(): number {
-    return this.clock ? this.clock.nowMs() : monotonicNowMs()
-  }
-
-  private _nowIso(): string {
-    return this.clock ? this.clock.nowIso() : nowIso()
-  }
-
   private _isoFromNow(offsetMs: number): string {
-    return new Date(this._nowMs() + offsetMs).toISOString()
+    return new Date(clockNowMs(this.clock) + offsetMs).toISOString()
+  }
+
+  private _audit(
+    taskId: number,
+    agent: string,
+    action: string,
+    oldValue?: string,
+    newValue?: string
+  ): void {
+    if (this.opts.auditLog) this.store.auditAppend(taskId, agent, action, oldValue, newValue)
   }
 
   private _leaseUntil(ttlMin: number = this.opts.leaseTtlMin): string {
@@ -140,7 +142,7 @@ export class TaskLifecycleService {
     if (priority === null) return fail({ code: 'INVALID', message: PRIORITY_INVALID_MESSAGE })
     const deps = dependsOn ?? []
     const reporter = args.reporter ?? this.opts.defaultReporter
-    const now = this._nowIso()
+    const now = clockNowIso(this.clock)
     const epicId = args.epic_id ?? null
     return this.store.transaction((): SvcResult<{ id: number; status: CreatedTaskStatus }> => {
       const created = this.store.insertTask({
@@ -160,8 +162,7 @@ export class TaskLifecycleService {
         this.store.deleteTask(id)
         return fail('CYCLE', 'dependency graph contains a cycle')
       }
-      if (this.opts.auditLog)
-        this.store.auditAppend(id, reporter, 'create', undefined, created.status)
+      this._audit(id, reporter, 'create', undefined, created.status)
 
       if (epicId !== null) {
         const target = this.store.getTaskRow(epicId)
@@ -223,7 +224,7 @@ export class TaskLifecycleService {
     if (!task) return fail('EMPTY', 'no claimable tasks')
     const claimedTask = task
 
-    const now = this._nowIso()
+    const now = clockNowIso(this.clock)
     const leaseUntil = this._leaseUntil(leaseTtlMin)
     return this.store.transaction(
       (): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> => {
@@ -236,14 +237,7 @@ export class TaskLifecycleService {
         )
         const updated = this.store.getTaskRow(claimedTask.id)
         if (changes !== 1 || !updated) return fail('CONFLICT', 'version mismatch')
-        if (this.opts.auditLog)
-          this.store.auditAppend(
-            claimedTask.id,
-            args.agent,
-            'claim',
-            claimedTask.status,
-            'in_progress'
-          )
+        this._audit(claimedTask.id, args.agent, 'claim', claimedTask.status, 'in_progress')
         return ok({ id: claimedTask.id, leaseTtlMin, task: updated })
       }
     )
@@ -253,7 +247,7 @@ export class TaskLifecycleService {
     const agentErr = agentError(args.agent)
     if (agentErr) return fail(agentErr)
     if (args.comment !== undefined) {
-      const commentErr = commentError(args.comment)
+      const commentErr = textError(args.comment, 'comment')
       if (commentErr) return fail(commentErr)
     }
     const refund = args.reset_attempts === true
@@ -267,7 +261,6 @@ export class TaskLifecycleService {
   }
 
   private _digestDescription(value: string | null): string {
-    // Prefix length of the sha256 hex digest stored in the audit trail.
     const DIGEST_PREFIX_LENGTH = 16
     const hash = createHash('sha256')
       .update(value ?? '', 'utf8')
@@ -280,7 +273,7 @@ export class TaskLifecycleService {
     const agentErr = agentError(args.agent)
     if (agentErr) return fail(agentErr)
     if (args.comment !== undefined) {
-      const commentErr = commentError(args.comment)
+      const commentErr = textError(args.comment, 'comment')
       if (commentErr) return fail(commentErr)
     }
     const task = this.store.getTaskRow(args.id)
@@ -292,12 +285,7 @@ export class TaskLifecycleService {
     if (guard) return fail(guard)
 
     const changed: ('title' | 'description' | 'priority' | 'depends_on')[] = []
-    const patch: {
-      title?: string
-      description?: string | null
-      priority?: TaskPriority
-      dependsOn?: string
-    } = {}
+    const patch: UpdateTaskPatch = {}
     let newPriority: TaskPriority | undefined
     if (args.title !== undefined && args.title !== task.title) {
       changed.push('title')
@@ -329,7 +317,7 @@ export class TaskLifecycleService {
       return ok({ id: args.id, version: task.version, changed: [] })
     }
 
-    const now = this._nowIso()
+    const now = clockNowIso(this.clock)
     return this.store.transaction((): SvcResult<UpdateTaskData> => {
       if (changed.includes('depends_on') && dependsOn !== undefined) {
         if (createsCycle((depId) => this.store.depsOf(depId), args.id, dependsOn)) {
@@ -347,35 +335,27 @@ export class TaskLifecycleService {
       }
       const updated = this.store.getTaskRow(args.id)
       if (!updated) return fail('CONFLICT', 'concurrent modification')
-      if (this.opts.auditLog) {
-        for (const field of changed) {
-          if (field === 'title') {
-            this.store.auditAppend(args.id, args.agent, 'update_task:title', task.title, args.title)
-          } else if (field === 'priority') {
-            this.store.auditAppend(
-              args.id,
-              args.agent,
-              'update_task:priority',
-              task.priority,
-              newPriority
-            )
-          } else if (field === 'depends_on') {
-            this.store.auditAppend(
-              args.id,
-              args.agent,
-              'update_task:depends_on',
-              task.depends_on,
-              JSON.stringify(dependsOn)
-            )
-          } else if (field === 'description') {
-            this.store.auditAppend(
-              args.id,
-              args.agent,
-              'update_task:description',
-              this._digestDescription(task.description),
-              this._digestDescription(args.description ?? null)
-            )
-          }
+      for (const field of changed) {
+        if (field === 'title') {
+          this._audit(args.id, args.agent, 'update_task:title', task.title, args.title)
+        } else if (field === 'priority') {
+          this._audit(args.id, args.agent, 'update_task:priority', task.priority, newPriority)
+        } else if (field === 'depends_on') {
+          this._audit(
+            args.id,
+            args.agent,
+            'update_task:depends_on',
+            task.depends_on,
+            JSON.stringify(dependsOn)
+          )
+        } else if (field === 'description') {
+          this._audit(
+            args.id,
+            args.agent,
+            'update_task:description',
+            this._digestDescription(task.description),
+            this._digestDescription(args.description ?? null)
+          )
         }
       }
       if (args.comment) {
@@ -392,7 +372,7 @@ export class TaskLifecycleService {
   ): SvcResult<UpdateStatusData> {
     const renewal =
       task.status === 'in_progress' && args.status === 'in_progress' && args.renew === true
-    const now = this._nowIso()
+    const now = clockNowIso(this.clock)
     const completedAt = TERMINAL_STATUSES.includes(args.status) ? now : null
     const leaseUntil = args.status === 'in_progress' ? this._leaseUntil() : null
     const subtaskMirror =
@@ -413,21 +393,18 @@ export class TaskLifecycleService {
       if (changes !== 1) return fail('CONFLICT', 'concurrent modification')
       const updated = this.store.getTaskRow(args.id)
       if (!updated) return fail('CONFLICT', 'concurrent modification')
-      if (this.opts.auditLog) {
-        if (renewal) {
-          this.store.auditAppend(
-            args.id,
-            args.agent,
-            'lease_renewed',
-            task.lease_expires_at ?? undefined,
-            updated.lease_expires_at ?? undefined
-          )
-        } else {
-          this.store.auditAppend(args.id, args.agent, 'update_status', task.status, args.status)
-        }
-        if (refund)
-          this.store.auditAppend(args.id, args.agent, 'attempts_reset', String(task.attempts), '0')
+      if (renewal) {
+        this._audit(
+          args.id,
+          args.agent,
+          'lease_renewed',
+          task.lease_expires_at ?? undefined,
+          updated.lease_expires_at ?? undefined
+        )
+      } else {
+        this._audit(args.id, args.agent, 'update_status', task.status, args.status)
       }
+      if (refund) this._audit(args.id, args.agent, 'attempts_reset', String(task.attempts), '0')
       if (args.comment) {
         const type: 'comment' | 'resolution' = TERMINAL_STATUSES.includes(args.status)
           ? 'resolution'
@@ -435,8 +412,8 @@ export class TaskLifecycleService {
         this.store.insertComment(args.id, args.agent, args.comment, type)
       }
 
-      if (task.epic_id !== null && subtaskMirror !== null && this.opts.auditLog) {
-        this.store.auditAppend(
+      if (task.epic_id !== null && subtaskMirror !== null) {
+        this._audit(
           task.epic_id,
           args.agent,
           subtaskMirror,

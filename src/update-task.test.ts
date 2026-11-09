@@ -10,7 +10,16 @@ import {
   handleUpdateStatus,
   handleUpdateTask
 } from './mcp/task-tools'
-import { createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text } from './test-context'
+import {
+  auditRows as auditRowsIn,
+  versionOf as versionIn,
+  createTestDb,
+  closeTestDb,
+  insertTaskRow,
+  getTaskRow,
+  json,
+  text
+} from './test-context'
 
 let db: Database
 let repo: TaskRepo
@@ -32,12 +41,8 @@ const createTaskRow = (opts: any = {}) =>
     depends_on: opts.depends_on
   })
 const row = (id: number) => getTaskRow(db, id)
-const versionOf = (id: number): number =>
-  json(handleGetTask(svc, { id, fields: ['version'] })).version
-const auditRows = (id: number) =>
-  db
-    .query('SELECT action, old_value, new_value FROM audit_log WHERE task_id = ? ORDER BY id')
-    .all(id) as Array<{ action: string; old_value: string | null; new_value: string | null }>
+const versionOf = (id: number) => versionIn(svc, id)
+const auditRows = (id: number) => auditRowsIn(db, id)
 const countAudit = (id: number, action: string): number =>
   (
     db
@@ -356,12 +361,10 @@ describe('update_task: validation', () => {
   })
 
   test('depends_on project mismatch refused', () => {
-    // create a second project and a task there
     db.run(
       "INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES ('other', '', ?, ?)",
       [new Date().toISOString(), new Date().toISOString()]
     )
-    // insert task in other project directly
     const otherProjectId = (db.query("SELECT id FROM projects WHERE slug='other'").get() as any).id
     const otherTaskId = repo.insertTask({
       title: 'Other',
@@ -382,7 +385,6 @@ describe('update_task: validation', () => {
     const a = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id as number
     const b = json(handleCreateTask(svc, { title: 'B', reporter: 'dev', depends_on: [a] }))
       .id as number
-    // make a depend on b -> cycle
     const beforeVersion = row(a).version
     const beforeDeps = row(a).depends_on
     const before = storeCounts()
@@ -396,8 +398,6 @@ describe('update_task: validation', () => {
 })
 
 describe('update_task: dependency validation (#2244)', () => {
-  // A boundary list needs real rows: an unknown id is refused on its own, so a length test seeded
-  // with fabricated ids would pass for the wrong reason.
   const seedDeps = (count: number): number[] =>
     repo.transaction(() =>
       Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' }))

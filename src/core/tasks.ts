@@ -1,5 +1,3 @@
-// The one status list: the union type, the enum, the codes, the terminal set and the SQL list
-// are all derived from it (the SQL text itself lives in src/db/sql.ts).
 export const TASK_STATUS_VALUES = Object.freeze([
   'queued',
   'in_progress',
@@ -13,30 +11,14 @@ export const TASK_STATUS_VALUES = Object.freeze([
 
 export type TaskStatus = (typeof TASK_STATUS_VALUES)[number]
 
-// The one priority list, next to the type it defines: the union type and the zod enum are both
-// derived from it, so the accepted values and the type can never drift.
 export const TASK_PRIORITIES = Object.freeze(['p0', 'p1', 'p2', 'p3'] as const)
 
 export type TaskPriority = (typeof TASK_PRIORITIES)[number]
 
-// The shapes a caller may write a priority in: the canonical "pN" string, the number N and the
-// digit string "N". They all resolve to the canonical string through normalizePriority below.
 export type TaskPriorityInput = TaskPriority | number | string
 
-// The one refusal text for a priority outside the accepted set. The set is derived from the list
-// above, so the message cannot drift from it.
-// The text is BARE, like every other service refusal (src/core/guards.ts): the service carries it
-// in a SvcError and formatError adds the code prefix (src/core/result.ts), while the schema layers
-// add the `INVALID: ` prefix themselves. A message that carried the prefix as well would read
-// "INVALID: INVALID: priority must be ..." on the service path.
 export const PRIORITY_INVALID_MESSAGE = `priority must be one of ${TASK_PRIORITIES.join(', ')} or the number 0..${TASK_PRIORITIES.length - 1}`
 
-// The one mapping from an accepted shape to the canonical string: "p2", 2 and "2" all become "p2".
-// Every other value is refused (out of range, fractional, an unknown string, another type), so no
-// caller can write a priority that breaks the queue order: the column is sorted lexicographically
-// and only the canonical "pN" strings keep that order (p0 first, p3 last).
-// The digit string is matched by shape (a single ASCII digit), never by parsing it: Number()
-// trims whitespace and reads other Unicode decimal digits, so " " would become 0 and "٣" 3.
 export function normalizePriority(value: unknown): TaskPriority | null {
   const last = TASK_PRIORITIES.length - 1
   if (typeof value === 'number') {
@@ -54,14 +36,10 @@ export function normalizePriority(value: unknown): TaskPriority | null {
   return null
 }
 
-// The type guard for the accepted shapes: the schema layers ask it, and it narrows an untrusted
-// value to the accepted set. An absent priority is not one of them — the default takes its place.
 export function isTaskPriorityInput(value: unknown): value is TaskPriorityInput {
   return normalizePriority(value) !== null
 }
 
-// The status a task is born with: a regular task starts queued, an epic starts open. The repo
-// owns that rule and reports the status it wrote (src/db/repo.ts).
 export type CreatedTaskStatus = 'queued' | 'open'
 
 export interface Task {
@@ -85,9 +63,6 @@ export interface Task {
   project: string | null
 }
 
-// Codes are the 1-based position in the canonical list; not_found is the only code outside it.
-// Object.fromEntries cannot carry the key union, so the assertion restores the type the source
-// list already proves (the keys are TASK_STATUS_VALUES plus not_found, nothing else).
 export const STATUS_CODES = Object.freeze(
   Object.fromEntries([
     ['not_found', 0],
@@ -97,16 +72,12 @@ export const STATUS_CODES = Object.freeze(
 
 export const TASK_STATUSES = TASK_STATUS_VALUES
 
-// The statuses in which a task may still be edited: the states in which nobody holds the contract yet.
-// One list, next to TERMINAL_STATUSES — the guard, the write and the docs all read it.
 export const EDITABLE_STATUSES: readonly TaskStatus[] = Object.freeze(['queued', 'open'])
 
 export function statusToCode(status: TaskStatus | 'not_found'): number {
   return STATUS_CODES[status]
 }
 
-// A pipe row is one line of N columns: a `|` in a value would add a column, a CR/LF a line, so a
-// value can never break the row it is rendered into.
 export function sanitizePipe(text: string): string {
   return text.replaceAll('|', '/').replace(/[\r\n]+/g, ' ')
 }
@@ -117,8 +88,6 @@ export function pipeJoin(...fields: Array<string | number>): string {
 
 export type CommentType = 'comment' | 'resolution'
 
-// The legality graph: which transition is legal from which status. It is not the definition of
-// "closed for work" — a status can carry one administrative edge out of it and still be closed.
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = Object.freeze({
   queued: ['in_progress', 'blocked', 'canceled'],
   in_progress: ['in_progress', 'review', 'failed', 'blocked', 'canceled'],
@@ -147,15 +116,11 @@ export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
   return VALID_TRANSITIONS[from]?.includes(to) ?? false
 }
 
-// Clock contract: a pluggable time source. The default implementation is the process-wide monotonic
-// clock below; tests may inject a deterministic clock or reset the global one.
 export interface Clock {
   nowMs(): number
   nowIso(): string
 }
 
-// The single time source: every stamp is strictly greater than the previous one, even when two
-// calls land in the same millisecond, so no ordering invariant depends on the wall clock ticking.
 let lastTimestampMs = 0
 
 export function monotonicNowMs(): number {
@@ -210,30 +175,25 @@ export function asClock(input: unknown): Clock | null {
   return null
 }
 
+export function clockNowMs(clock: Clock | null): number {
+  return clock ? clock.nowMs() : monotonicNowMs()
+}
+
+export function clockNowIso(clock: Clock | null): string {
+  return clock ? clock.nowIso() : nowIso()
+}
+
 export const MAX_TITLE_LENGTH = 200
 export const MAX_AGENT_LENGTH = 200
 export const MAX_CONTENT_LENGTH = 10000
-// A task description is the contract (goal, AC, constraints, deliverable), so it gets more room
-// than a comment; `depends_on` is a list of ids and stays inside one batch read.
 export const MAX_DESCRIPTION_LENGTH = 20000
 export const MAX_DEPENDS_ON = 100
 export const MAX_RESULT_LIMIT = 1000
-// A lease TTL is a policy, not a wall: a day is the longest lease worth honouring, and the cap
-// keeps `now + ttl` a valid Date instead of letting a schema-valid minute count throw a RangeError.
 export const MAX_LEASE_TTL_MIN = 1440
-// The one refusal text for a lease TTL above the cap. Like PRIORITY_INVALID_MESSAGE it is BARE:
-// formatError adds the code prefix on the service path, the schema layer adds `INVALID: ` itself.
 export const LEASE_TTL_TOO_LARGE_MESSAGE = 'lease_ttl_min too large'
 export const MAX_SAFE_TIMESTAMP_MS = 8_640_000_000_000_000
-// The ceiling of an internal pagination cursor (an OFFSET). A cursor must not be capped at the
-// result ceiling: a scan that re-reads the same page never reaches the tail of the queue.
 export const MAX_CURSOR_OFFSET = Number.MAX_SAFE_INTEGER
 
-// The one unit every string bound is measured in: Unicode code points. JSON Schema defines a
-// string's length in code points and zod v4 measures `maxLength` in code points too, so the
-// advertised schema and the service guard count a string the same way. A code point is one UTF-16
-// unit, except a surrogate pair (one code point, two units) — so the count is the unit count minus
-// the surrogate pairs.
 export function codePointLength(value: string): number {
   let count = value.length
   for (let i = 0; i < value.length - 1; i++) {
@@ -256,13 +216,10 @@ function clampValue(value: number | undefined, fallback: number, max: number): n
   return Math.min(n, max)
 }
 
-// A user-facing result limit: the ceiling is the result ceiling, so no call site can widen it by
-// accident and no cursor can be routed through it.
 export function clampLimit(value: number | undefined, fallback: number): number {
   return clampValue(value, fallback, MAX_RESULT_LIMIT)
 }
 
-// An internal pagination cursor: the ceiling is the cursor ceiling, never the result ceiling.
 export function clampCursor(value: number | undefined, fallback: number): number {
   return clampValue(value, fallback, MAX_CURSOR_OFFSET)
 }

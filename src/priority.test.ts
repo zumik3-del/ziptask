@@ -23,11 +23,7 @@ import {
 } from './test-context'
 import type { TestServer } from './test-context'
 
-// The refusal the service and the schema share, pinned as the literal text the contract
-// publishes: one `INVALID:` prefix, then the accepted set. `formatError` adds the code prefix
-// (src/core/result.ts), so the message the service carries must not carry it as well.
 const PRIORITY_REFUSAL = 'INVALID: priority must be one of p0, p1, p2, p3 or the number 0..3'
-// The message the service carries: bare, like every other service refusal in src/core/guards.ts.
 const PRIORITY_MESSAGE = 'priority must be one of p0, p1, p2, p3 or the number 0..3'
 
 let db: Database
@@ -42,8 +38,6 @@ afterEach(() => {
   closeTestDb(db)
 })
 
-// The create_task inputSchema as the MCP layer registers it: the shape the wire validates
-// against and advertises, so a schema/service disagreement shows up here and not only over the wire.
 function createTaskShape(): any {
   let shape: any
   registerAllTools(
@@ -57,17 +51,10 @@ function createTaskShape(): any {
   return shape
 }
 
-// The advertised priority property: the JSON Schema the registered shape converts to. This is
-// what tools/list publishes (the MCP SDK's converter and z.toJSONSchema publish the same
-// anyOf), so a disagreement between the advertisement and the runtime shows up here.
 function advertisedPriority(): any {
   return (z.toJSONSchema(createTaskShape()) as any).properties.priority
 }
 
-// A tiny JSON-Schema matcher for the shapes the advertisement uses: a string enum, an integer
-// range and the digit-string branch (an enum of the digit strings, or a pattern over them).
-// It answers "does the published schema accept this value" - the question the advertisement
-// and the runtime refusal must agree on.
 function branchAccepts(branch: any, value: unknown): boolean {
   if (branch?.type === 'string') {
     if (typeof value !== 'string') return false
@@ -84,23 +71,16 @@ function branchAccepts(branch: any, value: unknown): boolean {
   return false
 }
 
-// The value set the published schema accepts.
 function advertises(property: any, value: unknown): boolean {
   const branches: any[] = Array.isArray(property?.anyOf) ? property.anyOf : [property]
   return branches.some((branch) => branchAccepts(branch, value))
 }
 
-// The accepted shapes, derived from the canonical list: the canonical "pN", the number N and
-// the digit string "N". A new priority would extend this set with it.
 const ACCEPTED_PRIORITIES: unknown[] = [
   ...TASK_PRIORITIES,
   ...TASK_PRIORITIES.map((_, index) => index),
   ...TASK_PRIORITIES.map((_, index) => String(index))
 ]
-// The refused shapes: a look-alike digit string, an unknown canonical form, a number out of
-// range and a value of another type. The digit strings "4" and "9" are in the list because the
-// runtime refuses every digit outside 0..3, so an advertisement that accepts any single digit
-// would over-state the accepted set.
 const REFUSED_PRIORITIES: unknown[] = [
   ' ',
   'p4',
@@ -128,8 +108,6 @@ const REFUSED_PRIORITIES: unknown[] = [
 const createWith = (title: string, priority: unknown) =>
   handleCreateTask(svc, { title, reporter: 'dev', priority: priority as any })
 
-// The row counts a refusal must not move: a refused call writes no task row, no audit row and
-// no comment, so the three counts are the evidence that nothing was written.
 function storeCounts(): { tasks: number; audit: number; comments: number } {
   const count = (table: string) =>
     (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
@@ -151,8 +129,6 @@ describe('the numeric priority input (#1908)', () => {
     expect(getTaskRow(db, asDigitString).priority).toBe('p2')
     expect(getTaskRow(db, asCanonical).priority).toBe('p2')
 
-    // The read-back is part of the contract: every accepted shape comes back as the canonical
-    // string, from the task view and from the queue line alike.
     for (const [id, title] of [
       [asNumber, 'Number'],
       [asDigitString, 'DigitString'],
@@ -279,9 +255,6 @@ describe('the refused priority shapes', () => {
   })
 
   test('a value of another type is refused too, and never falls back to the default', () => {
-    // Only an absent priority takes the configured default; `null` and every other unusable
-    // value is refused, so a caller cannot write a task whose priority is the default by
-    // accident (the stored value would not be the one the caller asked for).
     const otherTypes: unknown[] = [null, true, false, {}, [], Number.NaN]
     for (const input of otherTypes) {
       const res = createWith(`Other ${JSON.stringify(input)}`, input)
@@ -294,8 +267,6 @@ describe('the refused priority shapes', () => {
   })
 
   test('the refusal carries the code prefix exactly once', () => {
-    // `formatError` is what the tool layer turns a service error into (src/core/result.ts), so
-    // the service message must not repeat the code the formatter adds.
     const result = svc.createTask({ title: 'Once', reporter: 'dev', priority: 'p4' as any })
     expect(result.ok).toBe(false)
     if (!result.ok) {
@@ -306,8 +277,6 @@ describe('the refused priority shapes', () => {
   })
 
   test('no shape is refused by one layer and accepted by the other', () => {
-    // The schema and the service ask the same guard, so a shape the schema rejects is never
-    // accepted further down: the two layers cannot disagree about what a priority is.
     for (const input of refused) {
       expect(createTaskShape().safeParse({ title: 'Schema', priority: input }).success).toBe(false)
       const result = svc.createTask({ title: 'Service', reporter: 'dev', priority: input as any })
@@ -363,10 +332,6 @@ describe('the service path without the schema', () => {
 })
 
 describe('the priority at the schema layer', () => {
-  // The schema is the gate the wire validates against. The tests above reach the handler
-  // directly and therefore never touch it, so a schema-level regression on the digit string
-  // (or on the canonical form) would pass every other test in this file. It is pinned here.
-
   test('the schema accepts the canonical form, the number and the digit string', () => {
     const shape = createTaskShape()
     expect(shape.safeParse({ title: 'Canonical', priority: 'p2' }).success).toBe(true)
@@ -385,8 +350,6 @@ describe('the priority at the schema layer', () => {
   })
 
   test('the schema refuses with the one INVALID message, on the priority field', () => {
-    // The schema layer adds the `INVALID: ` prefix itself (the service carries the bare
-    // message, src/core/guards.ts), so the two layers end up with the same published text.
     const shape = createTaskShape()
     for (const value of [' ', 'p4', 5]) {
       const result = shape.safeParse({ title: 'Refused', priority: value })
@@ -432,9 +395,6 @@ describe('the configured default accepts the same shapes', () => {
   })
 
   test('the loaded default is the priority of a task created without one', () => {
-    // The boot path (src/index.ts) hands `settings.defaults.priority` to the service as its
-    // defaultPriority; there is no server harness that boots from a settings file, so the
-    // handoff is covered here: the loaded default is what the service writes.
     const path = writeSettingsJson({ defaults: { priority: 2 } })
     const settings = loadSettings({ path, env: {}, argv: [] })
     const configured = new TaskService(repo, {
@@ -468,18 +428,12 @@ describe('the configured default accepts the same shapes', () => {
 
 describe('the create_task schema stays JSON-Schema-convertible', () => {
   test('the registered shape converts to JSON Schema', () => {
-    // A transform on the shape would make `z.toJSONSchema` throw ("Transforms cannot be
-    // represented in JSON Schema"), so the schema validates and the service normalizes.
     expect(() => z.toJSONSchema(createTaskShape())).not.toThrow()
   })
 
   test('the advertised priority is not a closed enum and no longer free-form', () => {
-    // A closed enum cannot express the number 2, so advertising one would refuse the numeric
-    // form on the wire while the service accepts it: the two layers would disagree.
     const schema = z.toJSONSchema(createTaskShape()) as any
     expect(schema.properties.priority.enum).toBeUndefined()
-    // But the field is no longer free-form either: it states the accepted set in three
-    // branches, so a client reads the constraint instead of guessing it from the prose.
     const branches = schema.properties.priority.anyOf as any[]
     expect(Array.isArray(branches)).toBe(true)
     expect(branches).toHaveLength(3)
@@ -490,17 +444,12 @@ describe('the create_task schema stays JSON-Schema-convertible', () => {
 
   test('the advertised priority states the accepted set', () => {
     const branches = advertisedPriority().anyOf as any[]
-    // The canonical branch: the canonical list itself, so the advertisement cannot drift
-    // from the list the service accepts.
     expect(branches).toContainEqual({ type: 'string', enum: [...TASK_PRIORITIES] })
-    // The number branch: the integers 0..3.
     expect(branches).toContainEqual({
       type: 'integer',
       minimum: 0,
       maximum: TASK_PRIORITIES.length - 1
     })
-    // The digit-string branch: exactly the four digit strings and nothing else. The branch
-    // may state them as an enum or as a pattern, so the pin is on the set it accepts.
     const digitBranch = branches.find(
       (branch) => branch.type === 'string' && !(branch.enum ?? []).includes(TASK_PRIORITIES[0])
     )
@@ -514,9 +463,6 @@ describe('the create_task schema stays JSON-Schema-convertible', () => {
   })
 
   test('the advertisement and the runtime refusal agree on every shape', () => {
-    // The advertisement is what a client reads, the schema is what the wire validates and the
-    // service is what writes the row. On every shape the three must answer the same way, or
-    // the published contract and the enforced one have drifted apart.
     const property = advertisedPriority()
     for (const value of [...ACCEPTED_PRIORITIES, ...REFUSED_PRIORITIES]) {
       const expected = ACCEPTED_PRIORITIES.includes(value)
@@ -580,8 +526,6 @@ describe('the create_task priority over the wire', () => {
   })
 
   test('the digit string is accepted over the wire and stored as "p2"', async () => {
-    // The number is pinned above; the digit string is the shape a client sends when it
-    // stringifies the priority, so it travels the same path.
     const res: any = await client.callTool({
       name: 'create_task',
       arguments: { title: 'WireDigitString', reporter: 'dev', priority: '2', project: 'test' }
@@ -592,8 +536,6 @@ describe('the create_task priority over the wire', () => {
   })
 
   test('the tools/list advertisement states the accepted set', async () => {
-    // The advertisement the MCP SDK publishes for create_task: a client reads the accepted
-    // set from it, so it must carry the same three branches as the registered shape.
     const list: any = await client.listTools()
     const tool = list.tools.find((entry: any) => entry.name === 'create_task')
     const property = tool.inputSchema.properties.priority

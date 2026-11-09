@@ -48,10 +48,8 @@ describe('pipe formats (v2)', () => {
     const a = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'worker-1', task_id: a })
     const b = json(handleCreateTask(svc, { title: 'B', reporter: 'dev' })).id
-    // c stays unclaimed → assignee is null
     const c = json(handleCreateTask(svc, { title: 'C', reporter: 'dev' })).id
     const out = text(handleListTasks(svc, { ids: [a, b, c, 999], fields: ['assignee'] }))
-    // a: claimed → has assignee; b: queued → null → '-'; c: queued → null → '-'; 999: not found → '-'
     expect(out).toBe(`${a}|2|worker-1\n${b}|1|-\n${c}|1|-\n999|0|-`)
   })
 
@@ -290,7 +288,6 @@ describe('get_timeline', () => {
     const id = json(handleCreateTask(svc, { title: 'Window', reporter: 'dev' })).id
     for (const content of ['e2', 'e3', 'e4', 'e5', 'e6'])
       handleAddComment(svc, { id, agent: 'a', content })
-    // Six events exist (the create audit plus five comments); limit 3 must drop the three oldest.
     const lines = text(handleGetTimeline(svc, { id, limit: 3 })).split('\n')
     expect(lines).toHaveLength(3)
     expect(lines.map((l) => l.split('|')[1])).toEqual(['comment', 'comment', 'comment'])
@@ -313,8 +310,6 @@ describe('get_timeline', () => {
       .split('\n')
       .map((l) => l.split('|'))
     expect(events).toHaveLength(3)
-    // Every row shares created_at, so the type/rowid tie-break alone decides: actions first, then
-    // comments, and insertion order inside one type.
     expect(events.map((cols) => cols[1])).toEqual(['action', 'action', 'comment'])
     expect(events.map((cols) => cols[4])).toEqual([
       'create: null->queued',

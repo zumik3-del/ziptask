@@ -104,8 +104,6 @@ try {
     'instructions carry the client lifecycle markers (claim_task, CONFLICT)'
   )
 
-  // A fresh smoke DB has no projects (the migration seeds `legacy` only when tasks exist) and every
-  // enumerating call needs a slug, so the harness declares its own project before it enumerates.
   parseToolResult(
     await client.callTool({
       name: 'create_project',
@@ -149,9 +147,6 @@ try {
     `claim_task fields → {id, lease_ttl_min, description}: ${JSON.stringify(claim)}`
   )
 
-  // ── F2 lease heartbeat + F3 attempts recovery (F2 #1065 / F3 #1066) ─────────
-  // Runs while idA is still in_progress and held by smoke-agent: the heartbeat is the
-  // in_progress → in_progress self-edge and it re-arms only the caller's own lease.
   const leaseField = async (id: number) =>
     parseToolResult(
       await client.callTool({ name: 'get_task', arguments: { id, fields: ['lease_expires_at'] } })
@@ -162,10 +157,6 @@ try {
     new Date(leaseBefore).getTime() > Date.now() + 14 * 60_000,
     `claim_task armed lease_expires_at a full window out: ${leaseBefore}`
   )
-  // The claim and the heartbeat both stamp now + lease_ttl_min, so comparing the two deadlines
-  // directly is a millisecond race. The stored deadline is pinned one second out: a heartbeat that
-  // only nudged or kept it could not reach a full window, so the post-conditions below hold by
-  // construction instead of by luck.
   const pinned = new Date(Date.now() + 1000).toISOString()
   db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [pinned, idA])
 
@@ -222,8 +213,6 @@ try {
     `a non-holder heartbeat → CONFLICT: ${textOf(foreign)}`
   )
 
-  // The refund needs a spent budget; the setup is direct SQL (a 15-minute lease cannot be
-  // waited out in a smoke run), every assertion below goes over the wire.
   const refundCreate = parseToolResult(
     await client.callTool({
       name: 'create_task',
@@ -411,7 +400,6 @@ try {
   })
   assert(tplUnknown.isError === true, 'get_template unknown name → error')
 
-  // ── epic → sub-task mechanism ──────────────────────────────────────────────
   const epicCreate = parseToolResult(
     await client.callTool({
       name: 'create_task',
@@ -437,9 +425,6 @@ try {
     arguments: { agent: 'smoke', task_id: epicId }
   })
   assert(epicClaim.isError === true, 'claim epic → error (not claimable)')
-  // ADR 0002 keeps the epic refusal ahead of the status window (src/core/service.ts:185), so the
-  // claim names the real reason on an epic whatever its status — the same sentence the update_status
-  // acquisition guard uses two blocks below, and the one docs/epics.md documents for this door.
   assert(
     textOf(epicClaim) === `INVALID: #${epicId} is an epic, not claimable`,
     `claim error is the epic refusal: ${textOf(epicClaim)}`
@@ -484,7 +469,6 @@ try {
   assert(!listQueue.includes(`${epicId}|`), `list_queue excludes epic`)
   assert(listQueue.includes(`${subId}|`), `list_queue includes sub`)
 
-  // Drive sub to done; verify subtask_done mirror on epic
   parseToolResult(
     await client.callTool({ name: 'claim_task', arguments: { agent: 'smoke', task_id: subId } })
   )
@@ -511,7 +495,6 @@ try {
   assert(epicTl.includes('subtask_done'), `epic timeline has subtask_done mirror: ${epicTl}`)
   assert(epicTl.includes(`#${subId}`), `epic timeline mirror references sub id: ${epicTl}`)
 
-  // Terminal guard: fresh epic+sub to keep a child open while testing the guard
   const epic2 = parseToolResult(
     await client.callTool({
       name: 'create_task',
@@ -525,12 +508,6 @@ try {
       arguments: { title: 'Guard sub', reporter: 'smoke', epic_id: epic2Id, project: 'smoke' }
     })
   )
-  // ── lease acquisition guard: in_progress needs claim-grade eligibility (#1075) ─
-  // An epic holds no work, so it is never leased: update_status must refuse the acquisition, and
-  // since ADR 0002 an epic never parks either — `open` refuses blocked/review/queued, so its only
-  // exits are the terminal outcomes. Both refusal strings are wire-visible, and on a
-  // pre-redeploy build the failure mode is a silent success, so they are asserted over MCP rather
-  // than left to the unit suite.
   const e2v1 = parseToolResult(
     await client.callTool({ name: 'get_task', arguments: { id: epic2Id, fields: ['version'] } })
   )
@@ -559,8 +536,6 @@ try {
     `refused epic acquisition left the row untouched: ${JSON.stringify(epicAfterRefusal)}`
   )
 
-  // the retired on-ramp: an epic can no longer be parked, so the hop that used to reach review is
-  // refused outright and the row stays `open`
   const epicPark = await client.callTool({
     name: 'update_status',
     arguments: { id: epic2Id, agent: 'smoke', status: 'blocked', version: e2v1.version }
@@ -611,7 +586,6 @@ try {
     `refused dep acquisition left the row untouched: ${JSON.stringify(depAfter)}`
   )
 
-  // the terminal guard, straight off `open` — no on-ramp needed any more
   const guardDone = await client.callTool({
     name: 'update_status',
     arguments: { id: epic2Id, agent: 'smoke', status: 'done', version: e2v1.version }
@@ -622,9 +596,6 @@ try {
     `rejection mentions children: ${textOf(guardDone)}`
   )
 
-  // ── argument contract: claim_task id alias + unknown-key rejection (F1 #1040) ─
-  // Order-independent: the rejection probes run on a still-queued task, and the
-  // conflict probe claims nothing, so it can sit at the end of the flow.
   const aliasCreate = parseToolResult(
     await client.callTool({
       name: 'create_task',
