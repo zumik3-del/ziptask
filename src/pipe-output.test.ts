@@ -3,7 +3,10 @@ import type { Database } from 'bun:sqlite'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
-  handleCreateTask, handleListTasks, handleClaimTask, handleListQueue
+  handleCreateTask,
+  handleListTasks,
+  handleClaimTask,
+  handleListQueue
 } from './mcp/task-tools'
 import { handleAddComment, handleGetTimeline } from './mcp/comment-tools'
 import { handleCreateProject, handleListProjects } from './mcp/project-tools'
@@ -16,15 +19,21 @@ import { createTestDb, closeTestDb, json, text } from './test-context'
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
-afterEach(() => { closeTestDb(db) })
+beforeEach(() => {
+  db = createTestDb()
+  repo = new TaskRepo(db)
+  svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' })
+})
+afterEach(() => {
+  closeTestDb(db)
+})
 
 // `|` becomes `/`; every run of CR/LF collapses to one space (the old sanitizePipe left them intact).
 const NASTY = 'line1\r\n|line2\nline3\r'
 const NASTY_SAFE = 'line1 /line2 line3 '
 
 function rows(out: string): string[][] {
-  return out.split('\n').map(line => line.split('|'))
+  return out.split('\n').map((line) => line.split('|'))
 }
 
 describe('pipe output cannot be broken by a value (#2243)', () => {
@@ -73,7 +82,7 @@ describe('pipe output cannot be broken by a value (#2243)', () => {
     const lines = rows(out)
     expect(lines).toHaveLength(2)
     for (const cols of lines) expect(cols).toHaveLength(3)
-    const evil = lines.find(cols => cols[0] === 'evil')
+    const evil = lines.find((cols) => cols[0] === 'evil')
     expect(evil).toBeDefined()
     expect(evil![1]).toBe('/tmp/x /y z')
     expect(out).not.toContain('\r')

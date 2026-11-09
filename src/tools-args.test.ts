@@ -4,7 +4,11 @@ import { TaskRepo } from './db/repo'
 import { monotonicNowMs } from './core/tasks'
 import { TaskService } from './core/service'
 import {
-  handleCreateTask, handleGetTask, handleListTasks, handleClaimTask, handleUpdateStatus,
+  handleCreateTask,
+  handleGetTask,
+  handleListTasks,
+  handleClaimTask,
+  handleUpdateStatus,
   handleListQueue
 } from './mcp/task-tools'
 import { handleAddComment, handleGetTimeline } from './mcp/comment-tools'
@@ -13,15 +17,25 @@ import { createTestDb, closeTestDb, getTaskRow, json, text } from './test-contex
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
-afterEach(() => { closeTestDb(db) })
+beforeEach(() => {
+  db = createTestDb()
+  repo = new TaskRepo(db)
+  svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' })
+})
+afterEach(() => {
+  closeTestDb(db)
+})
 
 type Snapshot = { tasks: unknown[]; audit: unknown; comments: unknown; leases: unknown }
 
 function snapshot(): Snapshot {
   return {
-    tasks: db.query('SELECT id, status, version, assignee, attempts, max_attempts FROM tasks ORDER BY id').all(),
-    audit: db.query('SELECT id, task_id, agent, action, old_value, new_value FROM audit_log ORDER BY id').all(),
+    tasks: db
+      .query('SELECT id, status, version, assignee, attempts, max_attempts FROM tasks ORDER BY id')
+      .all(),
+    audit: db
+      .query('SELECT id, task_id, agent, action, old_value, new_value FROM audit_log ORDER BY id')
+      .all(),
     comments: db.query('SELECT id, task_id, agent, content, type FROM comments ORDER BY id').all(),
     leases: db.query('SELECT id, lease_expires_at FROM tasks ORDER BY id').all()
   }
@@ -38,7 +52,9 @@ describe('claim_task id alias removed (task #1963)', () => {
     const target = createTask('Alias target', 'p3')
     const res = handleClaimTask(svc, { agent: 'dev', id: target } as any)
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: unknown argument id on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe(
+      'INVALID: unknown argument id on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)'
+    )
     expect(getTaskRow(db, target).status).toBe('queued')
   })
 
@@ -53,7 +69,9 @@ describe('claim_task id alias removed (task #1963)', () => {
 
   test('task_id on a blocked-by-deps task is BLOCKED, not EMPTY', () => {
     const dep = createTask('Dep')
-    const target = json(handleCreateTask(svc, { title: 'Target', reporter: 'dev', depends_on: [dep] })).id as number
+    const target = json(
+      handleCreateTask(svc, { title: 'Target', reporter: 'dev', depends_on: [dep] })
+    ).id as number
     const res = handleClaimTask(svc, { agent: 'dev', task_id: target })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('BLOCKED')
@@ -67,7 +85,9 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
 
     const res = handleClaimTask(svc, { agent: 'dev', id_typo: first } as any)
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: unknown argument id_typo on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe(
+      'INVALID: unknown argument id_typo on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)'
+    )
 
     const queue = text(handleListQueue(svc, {}))
     expect(queue).toContain(`${first}|p0|Intended`)
@@ -79,7 +99,9 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
     const id = createTask('Bait', 'p0')
     const res = handleClaimTask(svc, { agent: 'dev', b: 1, a: 2 } as any)
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: unknown arguments a, b on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe(
+      'INVALID: unknown arguments a, b on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)'
+    )
     expect(getTaskRow(db, id).status).toBe('queued')
   })
 
@@ -87,7 +109,9 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
     createTask('Bait', 'p0')
     const first = text(handleClaimTask(svc, { agent: 'dev', zebra: 1, alpha: 2, mike: 3 } as any))
     const second = text(handleClaimTask(svc, { agent: 'dev', mike: 3, zebra: 1, alpha: 2 } as any))
-    expect(first).toBe('INVALID: unknown arguments alpha, mike, zebra on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)')
+    expect(first).toBe(
+      'INVALID: unknown arguments alpha, mike, zebra on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)'
+    )
     expect(second).toBe(first)
   })
 
@@ -95,7 +119,9 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
     const id = createTask('Guarded', 'p0')
     const res = handleClaimTask(svc, { agent: 'dev', task_id: id, id_typo: 1 } as any)
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: unknown argument id_typo on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe(
+      'INVALID: unknown argument id_typo on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)'
+    )
     expect(getTaskRow(db, id).status).toBe('queued')
   })
 
@@ -113,8 +139,15 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
     const countingRepo = new TaskRepo(db)
     let reaps = 0
     const original = countingRepo.expiredLeases.bind(countingRepo)
-    countingRepo.expiredLeases = (now: string) => { reaps++; return original(now) }
-    const countingSvc = new TaskService(countingRepo, { leaseTtlMin: 15, reapCooldownSec: 0, scope: 'test' })
+    countingRepo.expiredLeases = (now: string) => {
+      reaps++
+      return original(now)
+    }
+    const countingSvc = new TaskService(countingRepo, {
+      leaseTtlMin: 15,
+      reapCooldownSec: 0,
+      scope: 'test'
+    })
 
     expect(reaps).toBe(0)
     countingSvc.claimTask({ agent: 'dev', taskId: 1 })
@@ -134,7 +167,6 @@ describe('task_id 0 must not auto-pick (F1 #1040)', () => {
     expect(getTaskRow(db, bait).status).toBe('queued')
     expect(getTaskRow(db, bait).lease_expires_at).toBeNull()
   })
-
 
   test('service.claimTask with taskId 0 returns NOT_FOUND, never an auto-claim', () => {
     const bait = createTask('Bait', 'p0')
@@ -159,28 +191,41 @@ describe('unknown-argument rejection on the other handlers (F1 #1040)', () => {
   function rows(): Array<{ expected: string; call: (id: number) => any }> {
     return [
       {
-        expected: 'INVALID: unknown argument bogus on create_task (accepted: assignee, depends_on, description, epic, epic_id, priority, project, reporter, title)',
-        call: () => handleCreateTask(svc, { title: 'Should not exist', reporter: 'dev', bogus: 1 } as any)
+        expected:
+          'INVALID: unknown argument bogus on create_task (accepted: assignee, depends_on, description, epic, epic_id, priority, project, reporter, title)',
+        call: () =>
+          handleCreateTask(svc, { title: 'Should not exist', reporter: 'dev', bogus: 1 } as any)
       },
       {
         expected: 'INVALID: unknown argument field on get_task (accepted: fields, id)',
         call: (id: number) => handleGetTask(svc, { id, field: 'x' } as any)
       },
       {
-        expected: 'INVALID: unknown argument sort on list_tasks (accepted: assignee, epic_id, fields, ids, is_epic, limit, project, status, updated_since)',
+        expected:
+          'INVALID: unknown argument sort on list_tasks (accepted: assignee, epic_id, fields, ids, is_epic, limit, project, status, updated_since)',
         call: () => handleListTasks(svc, { status: 'queued', limit: 5, sort: 'id' } as any)
       },
       {
-        expected: 'INVALID: unknown argument task on update_status (accepted: agent, comment, id, renew, reset_attempts, status, version)',
-        call: (id: number) => handleUpdateStatus(svc, { id, agent: 'dev', status: 'review', version: 1, task: 'review' } as any)
+        expected:
+          'INVALID: unknown argument task on update_status (accepted: agent, comment, id, renew, reset_attempts, status, version)',
+        call: (id: number) =>
+          handleUpdateStatus(svc, {
+            id,
+            agent: 'dev',
+            status: 'review',
+            version: 1,
+            task: 'review'
+          } as any)
       },
       {
         expected: 'INVALID: unknown argument agent on list_queue (accepted: limit, project)',
         call: () => handleListQueue(svc, { limit: 5, agent: 'dev' } as any)
       },
       {
-        expected: 'INVALID: unknown argument body on add_comment (accepted: agent, comment, content, id, text)',
-        call: (id: number) => handleAddComment(svc, { id, agent: 'dev', content: 'nope', body: 'nope' } as any)
+        expected:
+          'INVALID: unknown argument body on add_comment (accepted: agent, comment, content, id, text)',
+        call: (id: number) =>
+          handleAddComment(svc, { id, agent: 'dev', content: 'nope', body: 'nope' } as any)
       },
       {
         expected: 'INVALID: unknown argument order on get_timeline (accepted: id, limit)',
@@ -205,13 +250,21 @@ describe('unknown-argument rejection on the other handlers (F1 #1040)', () => {
     createTask('Existing', 'p0')
     const res = handleCreateTask(svc, { title: 'Ghost', reporter: 'dev', bogus: 1 } as any)
     expect(res.isError).toBe(true)
-    const titles = (db.query('SELECT title FROM tasks ORDER BY id').all() as Array<{ title: string }>).map(r => r.title)
+    const titles = (
+      db.query('SELECT title FROM tasks ORDER BY id').all() as Array<{ title: string }>
+    ).map((r) => r.title)
     expect(titles).toEqual(['Existing'])
   })
 
   test('update_status rejection does not transition the task', () => {
     const id = createTask('Target', 'p0')
-    const res = handleUpdateStatus(svc, { id, agent: 'dev', status: 'review', version: 1, task: 'review' } as any)
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'dev',
+      status: 'review',
+      version: 1,
+      task: 'review'
+    } as any)
     expect(res.isError).toBe(true)
     expect(getTaskRow(db, id).status).toBe('queued')
     expect(getTaskRow(db, id).version).toBe(1)
@@ -248,7 +301,13 @@ describe('renew / reset_attempts argument contract (F2 #1065 + F3 #1066)', () =>
     const pinned = new Date(monotonicNowMs() + 1000).toISOString()
     db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [pinned, id])
 
-    const res = handleUpdateStatus(svc, { id, agent: 'dev', status: 'in_progress', renew: true, version: before.version })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'dev',
+      status: 'in_progress',
+      renew: true,
+      version: before.version
+    })
     expect(res.isError).toBeUndefined()
     expect(json(res)).toEqual({ id, status: 'in_progress', version: before.version + 1 })
 
@@ -256,14 +315,24 @@ describe('renew / reset_attempts argument contract (F2 #1065 + F3 #1066)', () =>
     expect(after.lease_expires_at).not.toBe(pinned)
     // 14 min of slack under the 15 min lease_ttl_min. Strictly stronger than "changed": a deadline
     // one second out can only reach a full window if the renewal recomputed it from now.
-    expect(new Date(after.lease_expires_at).getTime()).toBeGreaterThan(monotonicNowMs() + 14 * 60_000)
-    const renewed = db.query("SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = 'lease_renewed'").get(id) as { n: number }
+    expect(new Date(after.lease_expires_at).getTime()).toBeGreaterThan(
+      monotonicNowMs() + 14 * 60_000
+    )
+    const renewed = db
+      .query("SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = 'lease_renewed'")
+      .get(id) as { n: number }
     expect(renewed.n).toBe(1)
   })
 
   test('renew: false is an accepted no-op argument, not an unknown key', () => {
     const id = claimed()
-    const res = handleUpdateStatus(svc, { id, agent: 'dev', status: 'review', renew: false, version: version(id) })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'dev',
+      status: 'review',
+      renew: false,
+      version: version(id)
+    })
     expect(res.isError).toBeUndefined()
     expect(json(res).status).toBe('review')
   })
@@ -272,7 +341,12 @@ describe('renew / reset_attempts argument contract (F2 #1065 + F3 #1066)', () =>
     const id = claimed()
     db.run('UPDATE tasks SET attempts = 2 WHERE id = ?', [id])
     const res = handleUpdateStatus(svc, {
-      id, agent: 'dev', status: 'blocked', version: version(id), reset_attempts: true, comment: 'spent on a typo'
+      id,
+      agent: 'dev',
+      status: 'blocked',
+      version: version(id),
+      reset_attempts: true,
+      comment: 'spent on a typo'
     })
     expect(res.isError).toBeUndefined()
     expect(json(res).attempts).toBe(0)
@@ -283,22 +357,39 @@ describe('renew / reset_attempts argument contract (F2 #1065 + F3 #1066)', () =>
   test('renew: true on claim_task → exact unknown-argument text, nothing claimed', () => {
     const id = createTask('Untouched', 'p0')
     const res = handleClaimTask(svc, { agent: 'dev', task_id: id, renew: true } as any)
-    expect(text(res)).toBe('INVALID: unknown argument renew on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)')
+    expect(text(res)).toBe(
+      'INVALID: unknown argument renew on claim_task (accepted: agent, fields, lease_ttl_min, project, task_id)'
+    )
     expect(getTaskRow(db, id).status).toBe('queued')
     expect(getTaskRow(db, id).lease_expires_at).toBeNull()
   })
 
   test('reset_attempts: true on add_comment → exact unknown-argument text, no comment row', () => {
     const id = createTask('Untouched', 'p0')
-    const res = handleAddComment(svc, { id, agent: 'dev', content: 'hi', reset_attempts: true } as any)
-    expect(text(res)).toBe('INVALID: unknown argument reset_attempts on add_comment (accepted: agent, comment, content, id, text)')
+    const res = handleAddComment(svc, {
+      id,
+      agent: 'dev',
+      content: 'hi',
+      reset_attempts: true
+    } as any)
+    expect(text(res)).toBe(
+      'INVALID: unknown argument reset_attempts on add_comment (accepted: agent, comment, content, id, text)'
+    )
     const comments = db.query('SELECT COUNT(*) AS n FROM comments').get() as { n: number }
     expect(comments.n).toBe(0)
   })
 
   test('the flags are additive: the accepted list is exactly the seven update_status keys', () => {
     const id = claimed()
-    const res = handleUpdateStatus(svc, { id, agent: 'dev', status: 'review', version: version(id), extra_key: 1 } as any)
-    expect(text(res)).toBe('INVALID: unknown argument extra_key on update_status (accepted: agent, comment, id, renew, reset_attempts, status, version)')
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'dev',
+      status: 'review',
+      version: version(id),
+      extra_key: 1
+    } as any)
+    expect(text(res)).toBe(
+      'INVALID: unknown argument extra_key on update_status (accepted: agent, comment, id, renew, reset_attempts, status, version)'
+    )
   })
 })

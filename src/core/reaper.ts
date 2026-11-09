@@ -44,7 +44,8 @@ export class LeaseReaper {
       const newAttempts = task.attempts + 1
       const newStatus: TaskStatus = newAttempts > task.max_attempts ? 'failed' : 'queued'
       const changes = this.store.reapTransition(task.id, task.version, newStatus, newAttempts, now)
-      if (changes === 1 && this.auditLog) this.store.auditAppend(task.id, 'system', 'lease_expired', 'in_progress', newStatus)
+      if (changes === 1 && this.auditLog)
+        this.store.auditAppend(task.id, 'system', 'lease_expired', 'in_progress', newStatus)
     }
     this.lastReapAt = this._nowMs()
   }

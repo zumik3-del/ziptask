@@ -1,22 +1,46 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
-import { isValidTransition, STATUS_CODES, TASK_STATUSES, TERMINAL_STATUSES, nowIso, codePointLength } from './core/tasks'
+import {
+  isValidTransition,
+  STATUS_CODES,
+  TASK_STATUSES,
+  TERMINAL_STATUSES,
+  nowIso,
+  codePointLength
+} from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { TERMINAL_STATUSES_SQL } from './db/sql'
 import {
-  handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus, handleListTasks
+  handleCreateTask,
+  handleGetTask,
+  handleClaimTask,
+  handleUpdateStatus,
+  handleListTasks
 } from './mcp/task-tools'
 import {
-  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, testProjectId, driveToDone,
+  createTestDb,
+  closeTestDb,
+  insertTaskRow,
+  getTaskRow,
+  json,
+  text,
+  testProjectId,
+  driveToDone,
   type CreateTaskRowOpts
 } from './test-context'
 
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
-afterEach(() => { closeTestDb(db) })
+beforeEach(() => {
+  db = createTestDb()
+  repo = new TaskRepo(db)
+  svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' })
+})
+afterEach(() => {
+  closeTestDb(db)
+})
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
 describe('create_task', () => {
@@ -32,7 +56,9 @@ describe('create_task', () => {
 
   test('creates queued even with unsatisfied deps (v2)', () => {
     const dep = json(handleCreateTask(svc, { title: 'Dep', reporter: 'dev' })).id
-    const res = json(handleCreateTask(svc, { title: 'Dependent', reporter: 'dev', depends_on: [dep] }))
+    const res = json(
+      handleCreateTask(svc, { title: 'Dependent', reporter: 'dev', depends_on: [dep] })
+    )
     expect(res.status).toBe('queued')
     const task = getTaskRow(db, res.id)
     expect(task.status).toBe('queued')
@@ -49,18 +75,31 @@ describe('create_task', () => {
 
   test('cycle rejection leaks no audit or comment rows', () => {
     createTaskRow({ title: 'A', reporter: 'dev', depends_on: [2] })
-    handleCreateTask(svc, { title: 'B', reporter: 'dev', depends_on: [1], description: 'leak check' })
-    const audit = db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = 2').get() as { n: number }
-    const comments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = 2').get() as { n: number }
+    handleCreateTask(svc, {
+      title: 'B',
+      reporter: 'dev',
+      depends_on: [1],
+      description: 'leak check'
+    })
+    const audit = db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = 2').get() as {
+      n: number
+    }
+    const comments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = 2').get() as {
+      n: number
+    }
     expect(audit.n).toBe(0)
     expect(comments.n).toBe(0)
   })
 
   test('manual blocked and back to queued (v2)', () => {
     const id = json(handleCreateTask(svc, { title: 'Manual', reporter: 'dev' })).id
-    const blocked = json(handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: 1 }))
+    const blocked = json(
+      handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: 1 })
+    )
     expect(blocked.status).toBe('blocked')
-    const unblocked = json(handleUpdateStatus(svc, { id, agent: 'dev', status: 'queued', version: 2 }))
+    const unblocked = json(
+      handleUpdateStatus(svc, { id, agent: 'dev', status: 'queued', version: 2 })
+    )
     expect(unblocked.status).toBe('queued')
   })
 
@@ -93,8 +132,12 @@ describe('claim_task', () => {
   })
 
   test('fields returns requested fields with lease_ttl_min (v2)', () => {
-    const id = json(handleCreateTask(svc, { title: 'With desc', reporter: 'dev', description: 'Do the thing' })).id
-    const res = json(handleClaimTask(svc, { agent: 'agent-1', task_id: id, fields: ['description'] }))
+    const id = json(
+      handleCreateTask(svc, { title: 'With desc', reporter: 'dev', description: 'Do the thing' })
+    ).id
+    const res = json(
+      handleClaimTask(svc, { agent: 'agent-1', task_id: id, fields: ['description'] })
+    )
     expect(res.id).toBe(id)
     expect(res.lease_ttl_min).toBe(15)
     expect(res.lease_until).toBeUndefined()
@@ -103,7 +146,9 @@ describe('claim_task', () => {
 
   test('fields omits null fields (v2)', () => {
     const id = json(handleCreateTask(svc, { title: 'No desc', reporter: 'dev' })).id
-    const res = json(handleClaimTask(svc, { agent: 'agent-1', task_id: id, fields: ['description'] }))
+    const res = json(
+      handleClaimTask(svc, { agent: 'agent-1', task_id: id, fields: ['description'] })
+    )
     expect('description' in res).toBe(false)
     expect(res.lease_ttl_min).toBe(15)
   })
@@ -129,7 +174,12 @@ describe('claim_task', () => {
     handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: 1 })
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
-    const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'review',
+      version: task.version
+    })
     expect(json(res).status).toBe('review')
     const after = getTaskRow(db, id)
     expect(after.status).toBe('review')
@@ -141,7 +191,12 @@ describe('claim_task', () => {
     const id = createTaskRow({ title: 'BlockNoClaim', reporter: 'dev' })
     handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: 1 })
     const task = getTaskRow(db, id)
-    const res = handleUpdateStatus(svc, { id, agent: 'other-agent', status: 'review', version: task.version })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'other-agent',
+      status: 'review',
+      version: task.version
+    })
     expect(json(res).status).toBe('review')
   })
 })
@@ -151,7 +206,12 @@ describe('update_status', () => {
     const id = createTaskRow({ title: 'Transition', reporter: 'dev' })
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
-    const updateRes = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version })
+    const updateRes = handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'review',
+      version: task.version
+    })
     expect(json(updateRes).status).toBe('review')
   })
 
@@ -169,10 +229,20 @@ describe('update_status', () => {
     // After claim, version bumped to 2
     expect(task.version).toBe(2)
     // Update with correct (fresh) version succeeds
-    const updateRes = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version })
+    const updateRes = handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'review',
+      version: task.version
+    })
     expect(json(updateRes).status).toBe('review')
     // Stale version conflicts
-    const conflictRes = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'done', version: 1 })
+    const conflictRes = handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'done',
+      version: 1
+    })
     expect(conflictRes.isError).toBe(true)
     expect(text(conflictRes)).toContain('CONFLICT')
   })
@@ -181,10 +251,24 @@ describe('update_status', () => {
     const id = json(handleCreateTask(svc, { title: 'Typed', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1' })
     const v1 = json(handleGetTask(svc, { id, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: v1, comment: 'check please' })
+    handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'review',
+      version: v1,
+      comment: 'check please'
+    })
     const v2 = json(handleGetTask(svc, { id, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'done', version: v2, comment: 'result at result-x.md' })
-    const rows = db.query('SELECT type, content FROM comments WHERE task_id = ? ORDER BY id').all(id) as any[]
+    handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'done',
+      version: v2,
+      comment: 'result at result-x.md'
+    })
+    const rows = db
+      .query('SELECT type, content FROM comments WHERE task_id = ? ORDER BY id')
+      .all(id) as any[]
     expect(rows.length).toBe(2)
     expect(rows[0].type).toBe('comment')
     expect(rows[0].content).toBe('check please')
@@ -196,7 +280,13 @@ describe('update_status', () => {
     const id = json(handleCreateTask(svc, { title: 'Fail', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1' })
     const v1 = json(handleGetTask(svc, { id, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'failed', version: v1, comment: 'broken' })
+    handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'failed',
+      version: v1,
+      comment: 'broken'
+    })
     const rows = db.query('SELECT type FROM comments WHERE task_id = ?').all(id) as any[]
     expect(rows[0].type).toBe('resolution')
   })
@@ -219,7 +309,9 @@ describe('lease expiry', () => {
     expect(task.status).toBe('queued')
     expect(task.attempts).toBe(1)
     expect(task.lease_expires_at).toBeNull()
-    const auditRows = db.query('SELECT * FROM audit_log WHERE task_id = ? AND action = ?').all(id, 'lease_expired') as any[]
+    const auditRows = db
+      .query('SELECT * FROM audit_log WHERE task_id = ? AND action = ?')
+      .all(id, 'lease_expired') as any[]
     expect(auditRows.length).toBe(1)
     expect(auditRows[0].old_value).toBe('in_progress')
     expect(auditRows[0].new_value).toBe('queued')
@@ -228,14 +320,19 @@ describe('lease expiry', () => {
   test('max attempts leads to failed', () => {
     const id = createTaskRow({ title: 'Max attempts', reporter: 'dev' })
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
-    db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour'), attempts = 3 WHERE id = ?", [id])
+    db.run(
+      "UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour'), attempts = 3 WHERE id = ?",
+      [id]
+    )
     svc.lifecycle.reapExpiredLeases()
     const task = getTaskRow(db, id)
     expect(task.status).toBe('failed')
     expect(task.attempts).toBe(4)
     expect(task.lease_expires_at).toBeNull()
     expect(task.completed_at).not.toBeNull()
-    const auditRows = db.query('SELECT * FROM audit_log WHERE task_id = ? AND action = ?').all(id, 'lease_expired') as any[]
+    const auditRows = db
+      .query('SELECT * FROM audit_log WHERE task_id = ? AND action = ?')
+      .all(id, 'lease_expired') as any[]
     expect(auditRows.length).toBe(1)
     expect(auditRows[0].new_value).toBe('failed')
   })
@@ -285,7 +382,12 @@ describe('version race regression', () => {
     expect(task.version).toBe(4)
     expect(task.assignee).toBe('agent-2')
     // Step 4: orchestrator (holding stale v1 from before any claim) tries update_status
-    const conflictRes = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: 1 })
+    const conflictRes = handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'review',
+      version: 1
+    })
     expect(conflictRes.isError).toBe(true)
     expect(text(conflictRes)).toContain('expected version')
   })
@@ -295,10 +397,22 @@ describe('version race regression', () => {
     const row = getTaskRow(db, id)
     expect(row.version).toBe(1)
     // First claim succeeds (v1→v2)
-    const c1 = repo.markClaimed(id, 1, 'agent-a', new Date(Date.now() + 60_000).toISOString(), new Date().toISOString())
+    const c1 = repo.markClaimed(
+      id,
+      1,
+      'agent-a',
+      new Date(Date.now() + 60_000).toISOString(),
+      new Date().toISOString()
+    )
     expect(c1).toBe(1)
     // Second claim with same expected version fails (0 changes)
-    const c2 = repo.markClaimed(id, 1, 'agent-b', new Date(Date.now() + 60_000).toISOString(), new Date().toISOString())
+    const c2 = repo.markClaimed(
+      id,
+      1,
+      'agent-b',
+      new Date(Date.now() + 60_000).toISOString(),
+      new Date().toISOString()
+    )
     expect(c2).toBe(0)
     // Original assignee retained
     const final = getTaskRow(db, id)
@@ -315,7 +429,10 @@ describe('version race regression', () => {
     // Force-expire the lease
     db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour') WHERE id = ?", [id])
     // Simulate holder's concurrent write bumping version (but not changing status)
-    db.run("UPDATE tasks SET version = version + 1, updated_at = ? WHERE id = ?", [new Date().toISOString(), id])
+    db.run('UPDATE tasks SET version = version + 1, updated_at = ? WHERE id = ?', [
+      new Date().toISOString(),
+      id
+    ])
     // Reap with original expectedVersion=2; DB now has 3 → 0 changes
     const changes = repo.reapTransition(id, 2, 'queued', 2, new Date().toISOString())
     expect(changes).toBe(0)
@@ -324,7 +441,9 @@ describe('version race regression', () => {
     expect(final.status).toBe('in_progress')
     expect(final.version).toBe(3)
     // No lease_expired audit row
-    const audits = db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = ?').get(id, 'lease_expired') as { n: number }
+    const audits = db
+      .query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = ?')
+      .get(id, 'lease_expired') as { n: number }
     expect(audits.n).toBe(0)
   })
 })
@@ -370,31 +489,40 @@ describe('terminal-status single source (#1445)', () => {
   test('TERMINAL_STATUSES is the explicit closed-for-work set, not the no-outgoing-edge set', () => {
     expect([...TERMINAL_STATUSES]).toEqual(['done', 'failed', 'canceled'])
     // `failed` is the only closed status with an outgoing edge: the administrative withdrawal.
-    const withEdge = TERMINAL_STATUSES.filter(status => TASK_STATUSES.some(to => isValidTransition(status, to)))
+    const withEdge = TERMINAL_STATUSES.filter((status) =>
+      TASK_STATUSES.some((to) => isValidTransition(status, to))
+    )
     expect(withEdge).toEqual(['failed'])
-    expect(TASK_STATUSES.filter(to => isValidTransition('failed', to))).toEqual(['canceled'])
+    expect(TASK_STATUSES.filter((to) => isValidTransition('failed', to))).toEqual(['canceled'])
   })
 })
 
 describe('listTasks deterministic ordering (#1445)', () => {
   const TIE_NOW = '2026-01-01T00:00:00.000Z'
-  const insertAt = (title: string, now: string) => repo.insertTask({
-    title, description: null, priority: 'p2', reporter: 'dev', depends_on: '[]', now, projectId: testProjectId(repo)
-  }).id
+  const insertAt = (title: string, now: string) =>
+    repo.insertTask({
+      title,
+      description: null,
+      priority: 'p2',
+      reporter: 'dev',
+      depends_on: '[]',
+      now,
+      projectId: testProjectId(repo)
+    }).id
 
   test('same-millisecond created_at ties break by id DESC, not by scan order', () => {
     const ids = [insertAt('tie-1', TIE_NOW), insertAt('tie-2', TIE_NOW), insertAt('tie-3', TIE_NOW)]
     const { rows, total } = repo.listTasks({ limit: 50 })
     expect(total).toBe(3)
-    expect(rows.map(r => r.id)).toEqual([...ids].reverse())
-    expect(rows.map(r => r.created_at)).toEqual(ids.map(() => TIE_NOW))
+    expect(rows.map((r) => r.id)).toEqual([...ids].reverse())
+    expect(rows.map((r) => r.created_at)).toEqual(ids.map(() => TIE_NOW))
   })
 
   test('created_at DESC dominates: an older row never precedes a newer one regardless of id', () => {
     const older = insertAt('older', '2026-01-01T00:00:00.000Z')
     const newer = insertAt('newer', '2026-01-01T00:00:01.000Z')
     const { rows } = repo.listTasks({ limit: 50 })
-    expect(rows.map(r => r.id)).toEqual([newer, older])
+    expect(rows.map((r) => r.id)).toEqual([newer, older])
   })
 
   test('the deterministic order surfaces through the list_tasks tool', () => {
@@ -523,7 +651,10 @@ describe('assignee release on reap and cancel (#431)', () => {
   test('reap → failed clears assignee', () => {
     const id = createTaskRow({ title: 'ReapKeep', reporter: 'dev' })
     handleClaimTask(svc, { agent: 'agent-a', task_id: id })
-    db.run("UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour'), attempts = 3 WHERE id = ?", [id])
+    db.run(
+      "UPDATE tasks SET lease_expires_at = datetime('now', '-1 hour'), attempts = 3 WHERE id = ?",
+      [id]
+    )
     svc.lifecycle.reapExpiredLeases()
     const task = getTaskRow(db, id)
     expect(task.status).toBe('failed')
@@ -574,8 +705,12 @@ describe('assignee is the lease holder (#1857)', () => {
     expect(before.assignee).toBe(HOLDER)
 
     const res = handleUpdateStatus(svc, {
-      id, agent: 'dev', status: 'queued', version: before.version,
-      reset_attempts: true, comment: 'spent on accidental claims'
+      id,
+      agent: 'dev',
+      status: 'queued',
+      version: before.version,
+      reset_attempts: true,
+      comment: 'spent on accidental claims'
     })
     expect(res.isError).toBeUndefined()
     expect(json(res).attempts).toBe(0)
@@ -589,8 +724,12 @@ describe('assignee is the lease holder (#1857)', () => {
     const refunded = claimed('RefundParity')
     parkBlockedWithHolder(refunded)
     handleUpdateStatus(svc, {
-      id: refunded, agent: 'dev', status: 'queued', version: getTaskRow(db, refunded).version,
-      reset_attempts: true, comment: 'spent on accidental claims'
+      id: refunded,
+      agent: 'dev',
+      status: 'queued',
+      version: getTaskRow(db, refunded).version,
+      reset_attempts: true,
+      comment: 'spent on accidental claims'
     })
 
     const reaped = claimed('ReapParity')
@@ -625,8 +764,9 @@ describe('assignee is the lease holder (#1857)', () => {
     const observe = (label: string) => {
       const row = getTaskRow(db, id)!
       holders.push([label, row.assignee])
-      expect(`${label}: ${row.status} carries ${row.assignee ?? 'no holder'}`)
-        .toBe(`${label}: ${row.status} carries ${row.status === 'in_progress' ? HOLDER : 'no holder'}`)
+      expect(`${label}: ${row.status} carries ${row.assignee ?? 'no holder'}`).toBe(
+        `${label}: ${row.status} carries ${row.status === 'in_progress' ? HOLDER : 'no holder'}`
+      )
     }
     const version = () => getTaskRow(db, id).version
 
@@ -639,12 +779,25 @@ describe('assignee is the lease holder (#1857)', () => {
     observe('sent back')
     handleUpdateStatus(svc, { id, agent: HOLDER, status: 'blocked', version: version() })
     observe('blocked')
-    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'queued', version: version(), reset_attempts: true, comment: 'spent on accidents' })
+    handleUpdateStatus(svc, {
+      id,
+      agent: HOLDER,
+      status: 'queued',
+      version: version(),
+      reset_attempts: true,
+      comment: 'spent on accidents'
+    })
     observe('refunded')
     handleClaimTask(svc, { agent: HOLDER, task_id: id })
     observe('claimed again')
     handleUpdateStatus(svc, { id, agent: HOLDER, status: 'review', version: version() })
-    handleUpdateStatus(svc, { id, agent: HOLDER, status: 'done', version: version(), comment: 'shipped' })
+    handleUpdateStatus(svc, {
+      id,
+      agent: HOLDER,
+      status: 'done',
+      version: version(),
+      comment: 'shipped'
+    })
     observe('done')
 
     expect(holders).toEqual([
@@ -666,7 +819,9 @@ describe('assignee is the lease holder (#1857)', () => {
     const refused = handleCreateTask(svc, { title: 'NeverBorn', reporter: 'dev', assignee: HOLDER })
     expect(refused.isError).toBe(true)
 
-    const queued = db.query('SELECT COUNT(*) AS n FROM tasks WHERE status = ? AND assignee IS NOT NULL').get('queued') as { n: number }
+    const queued = db
+      .query('SELECT COUNT(*) AS n FROM tasks WHERE status = ? AND assignee IS NOT NULL')
+      .get('queued') as { n: number }
     expect(queued.n).toBe(0)
   })
 
@@ -798,14 +953,28 @@ describe('lease_expires_at cleared on exit from in_progress (#767)', () => {
 })
 
 describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
-  test('two TaskRepo instances share one monotonic clock, so repo B inherits repo A\'s advance', () => {
+  test("two TaskRepo instances share one monotonic clock, so repo B inherits repo A's advance", () => {
     const dbA = createTestDb()
     const repoA = new TaskRepo(dbA)
     const dbB = createTestDb()
     const repoB = new TaskRepo(dbB)
     try {
-      const idA = repoA.insertTask({ title: 'A', description: null, priority: 'p2', reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' }).id
-      const idB = repoB.insertTask({ title: 'B', description: null, priority: 'p2', reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z' }).id
+      const idA = repoA.insertTask({
+        title: 'A',
+        description: null,
+        priority: 'p2',
+        reporter: 'dev',
+        depends_on: '[]',
+        now: '2020-01-01T00:00:00.000Z'
+      }).id
+      const idB = repoB.insertTask({
+        title: 'B',
+        description: null,
+        priority: 'p2',
+        reporter: 'dev',
+        depends_on: '[]',
+        now: '2020-01-01T00:00:00.000Z'
+      }).id
       // Inject 5 comments into both repos to establish baseline monotonicity.
       // One transaction per repo: the burst below is 500 rows, and one WAL commit per row is what
       // made this fixture the slowest test in the suite (a per-row commit, not a per-row clock tick).
@@ -828,12 +997,16 @@ describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
       // black-box check of the same property.
       repoB.insertComment(idB, 'b', 'cb-probe')
       // Verify repo A's entries are internally monotonic
-      const rowsA = dbA.query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC').all(idA) as any[]
+      const rowsA = dbA
+        .query('SELECT created_at FROM comments WHERE task_id = ? ORDER BY id ASC')
+        .all(idA) as any[]
       for (let i = 1; i < rowsA.length; i++) {
         expect(rowsA[i].created_at > rowsA[i - 1].created_at).toBe(true)
       }
       // Verify repo B's entries are internally monotonic
-      const rowsB = dbB.query('SELECT created_at, content FROM comments WHERE task_id = ? ORDER BY id ASC').all(idB) as any[]
+      const rowsB = dbB
+        .query('SELECT created_at, content FROM comments WHERE task_id = ? ORDER BY id ASC')
+        .all(idB) as any[]
       for (let i = 1; i < rowsB.length; i++) {
         expect(rowsB[i].created_at > rowsB[i - 1].created_at).toBe(true)
       }
@@ -841,7 +1014,8 @@ describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
       // The shared-clock probe: the counter is strictly increasing process-wide, so repoB's
       // last stamp lands strictly after repoA's last burst stamp (a per-instance clock would
       // put it ~500 ms earlier here).
-      const bMinusA = new Date(rowsB.at(-1)!.created_at).getTime() - new Date(rowsA.at(-1)!.created_at).getTime()
+      const bMinusA =
+        new Date(rowsB.at(-1)!.created_at).getTime() - new Date(rowsA.at(-1)!.created_at).getTime()
       expect(bMinusA).toBeGreaterThan(0)
     } finally {
       closeTestDb(dbA)
@@ -881,8 +1055,12 @@ describe('TaskRepo port conformance (#812)', () => {
 
       // Verify each method actually works
       const id = repo3.insertTask({
-        title: 'PortTest', description: null, priority: 'p2',
-        reporter: 'dev', depends_on: '[]', now: nowIso()
+        title: 'PortTest',
+        description: null,
+        priority: 'p2',
+        reporter: 'dev',
+        depends_on: '[]',
+        now: nowIso()
       }).id
       expect(repo3.getTaskRow(id)!.title).toBe('PortTest')
       expect(repo3.depsOf(id)).toBe('[]')

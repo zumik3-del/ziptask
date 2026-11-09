@@ -3,20 +3,36 @@ import type { Database } from 'bun:sqlite'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
-  handleCreateTask, handleGetTask, handleListTasks, handleClaimTask,
-  handleListQueue, handleUpdateStatus
+  handleCreateTask,
+  handleGetTask,
+  handleListTasks,
+  handleClaimTask,
+  handleListQueue,
+  handleUpdateStatus
 } from './mcp/task-tools'
 import { handleAddComment, handleGetTimeline } from './mcp/comment-tools'
 import {
-  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, driveToDone,
+  createTestDb,
+  closeTestDb,
+  insertTaskRow,
+  getTaskRow,
+  json,
+  text,
+  driveToDone,
   type CreateTaskRowOpts
 } from './test-context'
 
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
-afterEach(() => { closeTestDb(db) })
+beforeEach(() => {
+  db = createTestDb()
+  repo = new TaskRepo(db)
+  svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' })
+})
+afterEach(() => {
+  closeTestDb(db)
+})
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
 describe('pipe formats (v2)', () => {
@@ -58,10 +74,10 @@ describe('pipe formats (v2)', () => {
     json(handleCreateTask(svc, { title: 'P0', reporter: 'dev', priority: 'p0' }))
     json(handleCreateTask(svc, { title: 'P1', reporter: 'dev', priority: 'p1' }))
     const out = text(handleListQueue(svc, {}))
-    const ids = out.split('\n').map(line => Number(line.split('|')[0]))
-    const p0 = out.split('\n').findIndex(l => l.includes('|p0|'))
-    const p1 = out.split('\n').findIndex(l => l.includes('|p1|'))
-    const p2 = out.split('\n').findIndex(l => l.includes('|p2|'))
+    const ids = out.split('\n').map((line) => Number(line.split('|')[0]))
+    const p0 = out.split('\n').findIndex((l) => l.includes('|p0|'))
+    const p1 = out.split('\n').findIndex((l) => l.includes('|p1|'))
+    const p2 = out.split('\n').findIndex((l) => l.includes('|p2|'))
     expect(p0).toBeLessThan(p1)
     expect(p1).toBeLessThan(p2)
     expect(ids.length).toBe(3)
@@ -70,14 +86,24 @@ describe('pipe formats (v2)', () => {
   test('STATUS_CODES legend', async () => {
     const { STATUS_CODES } = await import('./core/tasks')
     expect(STATUS_CODES).toEqual({
-      not_found: 0, queued: 1, in_progress: 2, review: 3, done: 4, failed: 5, blocked: 6, canceled: 7, open: 8
+      not_found: 0,
+      queued: 1,
+      in_progress: 2,
+      review: 3,
+      done: 4,
+      failed: 5,
+      blocked: 6,
+      canceled: 7,
+      open: 8
     })
   })
 })
 
 describe('get_task / list_tasks fields (v2)', () => {
   test('brief default excludes description', () => {
-    const id = json(handleCreateTask(svc, { title: 'Brief', reporter: 'dev', description: 'secret content' })).id
+    const id = json(
+      handleCreateTask(svc, { title: 'Brief', reporter: 'dev', description: 'secret content' })
+    ).id
     const brief = json(handleGetTask(svc, { id }))
     expect('description' in brief).toBe(false)
     expect(brief.title).toBe('Brief')
@@ -85,20 +111,26 @@ describe('get_task / list_tasks fields (v2)', () => {
   })
 
   test('description only via explicit fields', () => {
-    const id = json(handleCreateTask(svc, { title: 'Explicit', reporter: 'dev', description: 'full text' })).id
+    const id = json(
+      handleCreateTask(svc, { title: 'Explicit', reporter: 'dev', description: 'full text' })
+    ).id
     const full = json(handleGetTask(svc, { id, fields: ['id', 'description'] }))
     expect(full.description).toBe('full text')
   })
 
   test('removed fields are absent even when requested', () => {
     const id = json(handleCreateTask(svc, { title: 'No paths', reporter: 'dev' })).id
-    const res = json(handleGetTask(svc, { id, fields: ['task_path', 'result_path', 'parent_id', 'status'] }))
+    const res = json(
+      handleGetTask(svc, { id, fields: ['task_path', 'result_path', 'parent_id', 'status'] })
+    )
     expect(res).toEqual({ status: 'queued' })
   })
 
   test('omit-null in get_task', () => {
     const id = json(handleCreateTask(svc, { title: 'Nulls', reporter: 'dev' })).id
-    const res = json(handleGetTask(svc, { id, fields: ['assignee', 'completed_at', 'lease_expires_at', 'status'] }))
+    const res = json(
+      handleGetTask(svc, { id, fields: ['assignee', 'completed_at', 'lease_expires_at', 'status'] })
+    )
     expect(res).toEqual({ status: 'queued' })
   })
 
@@ -128,13 +160,17 @@ describe('get_task / list_tasks fields (v2)', () => {
 
 describe('create_task description no longer seeds comment (#431)', () => {
   test('description argument does not create a comment row', () => {
-    const id = json(handleCreateTask(svc, { title: 'NoSeed', reporter: 'dev', description: 'my desc' })).id
+    const id = json(
+      handleCreateTask(svc, { title: 'NoSeed', reporter: 'dev', description: 'my desc' })
+    ).id
     const comments = db.query('SELECT * FROM comments WHERE task_id = ?').all(id) as any[]
     expect(comments.length).toBe(0)
   })
 
   test('timeline for task with description contains only create audit, not a comment', () => {
-    const id = json(handleCreateTask(svc, { title: 'TLNoSeed', reporter: 'dev', description: 'hidden desc' })).id
+    const id = json(
+      handleCreateTask(svc, { title: 'TLNoSeed', reporter: 'dev', description: 'hidden desc' })
+    ).id
     const out = text(handleGetTimeline(svc, { id }))
     const lines = out.split('\n')
     expect(lines.length).toBe(1)
@@ -158,7 +194,9 @@ describe('audit_log', () => {
 
   test('create_task audits queued status (v2)', () => {
     const id = json(handleCreateTask(svc, { title: 'Audit v2', reporter: 'dev' })).id
-    const logs = db.query("SELECT * FROM audit_log WHERE task_id = ? AND action = 'create'").all(id) as any[]
+    const logs = db
+      .query("SELECT * FROM audit_log WHERE task_id = ? AND action = 'create'")
+      .all(id) as any[]
     expect(logs.length).toBe(1)
     expect(logs[0].new_value).toBe('queued')
   })
@@ -210,7 +248,13 @@ describe('get_timeline', () => {
     const id = json(handleCreateTask(svc, { title: 'TL', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const v = json(handleGetTask(svc, { id, fields: ['version'] })).version
-    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: v, comment: 'check | this' })
+    handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'review',
+      version: v,
+      comment: 'check | this'
+    })
     handleAddComment(svc, { id, agent: 'other', content: 'side note' })
     const out = text(handleGetTimeline(svc, { id }))
     const lines = out.split('\n')
@@ -221,7 +265,7 @@ describe('get_timeline', () => {
     const last = lines[lines.length - 1].split('|')
     expect(last[1]).toBe('comment')
     expect(last[4]).toContain('side note')
-    const reviewLine = lines.find(l => l.includes('check / this'))
+    const reviewLine = lines.find((l) => l.includes('check / this'))
     expect(reviewLine).toBeDefined()
   })
 
@@ -244,29 +288,42 @@ describe('get_timeline', () => {
 
   test('a limit returns the newest N events, still in ascending order (#2243)', () => {
     const id = json(handleCreateTask(svc, { title: 'Window', reporter: 'dev' })).id
-    for (const content of ['e2', 'e3', 'e4', 'e5', 'e6']) handleAddComment(svc, { id, agent: 'a', content })
+    for (const content of ['e2', 'e3', 'e4', 'e5', 'e6'])
+      handleAddComment(svc, { id, agent: 'a', content })
     // Six events exist (the create audit plus five comments); limit 3 must drop the three oldest.
     const lines = text(handleGetTimeline(svc, { id, limit: 3 })).split('\n')
     expect(lines).toHaveLength(3)
-    expect(lines.map(l => l.split('|')[1])).toEqual(['comment', 'comment', 'comment'])
-    expect(lines.map(l => l.split('|')[4])).toEqual(['e4', 'e5', 'e6'])
-    expect(lines.map(l => l.split('|')[0])).toEqual(['1', '2', '3'])
+    expect(lines.map((l) => l.split('|')[1])).toEqual(['comment', 'comment', 'comment'])
+    expect(lines.map((l) => l.split('|')[4])).toEqual(['e4', 'e5', 'e6'])
+    expect(lines.map((l) => l.split('|')[0])).toEqual(['1', '2', '3'])
   })
 
   test('a frozen-clock tie between an audit row and a comment has a deterministic order (#2243)', () => {
     const frozen = '2026-01-01T00:00:00.000Z'
     const clock = { nowMs: () => Date.parse(frozen), nowIso: () => frozen }
-    const frozenSvc = new TaskService(new TaskRepo(db, clock), { leaseTtlMin: 15, scope: 'test', clock })
+    const frozenSvc = new TaskService(new TaskRepo(db, clock), {
+      leaseTtlMin: 15,
+      scope: 'test',
+      clock
+    })
     const id = json(handleCreateTask(frozenSvc, { title: 'Tie', reporter: 'dev' })).id
     handleAddComment(frozenSvc, { id, agent: 'a', content: 'note' })
     handleClaimTask(frozenSvc, { agent: 'a', task_id: id })
-    const events = text(handleGetTimeline(frozenSvc, { id })).split('\n').map(l => l.split('|'))
+    const events = text(handleGetTimeline(frozenSvc, { id }))
+      .split('\n')
+      .map((l) => l.split('|'))
     expect(events).toHaveLength(3)
     // Every row shares created_at, so the type/rowid tie-break alone decides: actions first, then
     // comments, and insertion order inside one type.
-    expect(events.map(cols => cols[1])).toEqual(['action', 'action', 'comment'])
-    expect(events.map(cols => cols[4])).toEqual(['create: null->queued', 'claim: queued->in_progress', 'note'])
-    expect(text(handleGetTimeline(frozenSvc, { id }))).toBe(text(handleGetTimeline(frozenSvc, { id })))
+    expect(events.map((cols) => cols[1])).toEqual(['action', 'action', 'comment'])
+    expect(events.map((cols) => cols[4])).toEqual([
+      'create: null->queued',
+      'claim: queued->in_progress',
+      'note'
+    ])
+    expect(text(handleGetTimeline(frozenSvc, { id }))).toBe(
+      text(handleGetTimeline(frozenSvc, { id }))
+    )
   })
 
   test('default limit caps results when many entries exist', () => {
@@ -298,14 +355,24 @@ describe('update_status response shape (F2 #1065 + F3 #1066)', () => {
 
   test('a plain transition keeps the {id, status, version} shape and adds no attempts', () => {
     const id = claimed()
-    const res = json(handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: version(id) }))
+    const res = json(
+      handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: version(id) })
+    )
     expect(Object.keys(res).sort()).toEqual(['id', 'status', 'version'])
     expect('attempts' in res).toBe(false)
   })
 
   test('a renewal keeps the {id, status, version} shape too (no lease field, token economy)', () => {
     const id = claimed()
-    const res = json(handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'in_progress', renew: true, version: version(id) }))
+    const res = json(
+      handleUpdateStatus(svc, {
+        id,
+        agent: 'agent-1',
+        status: 'in_progress',
+        renew: true,
+        version: version(id)
+      })
+    )
     expect(Object.keys(res).sort()).toEqual(['id', 'status', 'version'])
     expect('lease_expires_at' in res).toBe(false)
     expect('lease_until' in res).toBe(false)
@@ -314,9 +381,16 @@ describe('update_status response shape (F2 #1065 + F3 #1066)', () => {
   test('a refund adds attempts — the in-band signal that the flag reached the server', () => {
     const id = claimed()
     db.run('UPDATE tasks SET attempts = 2 WHERE id = ?', [id])
-    const res = json(handleUpdateStatus(svc, {
-      id, agent: 'agent-1', status: 'blocked', version: version(id), reset_attempts: true, comment: 'spent on accidents'
-    }))
+    const res = json(
+      handleUpdateStatus(svc, {
+        id,
+        agent: 'agent-1',
+        status: 'blocked',
+        version: version(id),
+        reset_attempts: true,
+        comment: 'spent on accidents'
+      })
+    )
     expect(Object.keys(res).sort()).toEqual(['attempts', 'id', 'status', 'version'])
     expect(res.attempts).toBe(0)
   })
@@ -324,9 +398,16 @@ describe('update_status response shape (F2 #1065 + F3 #1066)', () => {
   test('reset_attempts: false keeps the plain shape (the echo keys off the request, not the value)', () => {
     const id = claimed()
     db.run('UPDATE tasks SET attempts = 2 WHERE id = ?', [id])
-    const res = json(handleUpdateStatus(svc, {
-      id, agent: 'agent-1', status: 'blocked', version: version(id), reset_attempts: false, comment: 'parking'
-    }))
+    const res = json(
+      handleUpdateStatus(svc, {
+        id,
+        agent: 'agent-1',
+        status: 'blocked',
+        version: version(id),
+        reset_attempts: false,
+        comment: 'parking'
+      })
+    )
     expect(Object.keys(res).sort()).toEqual(['id', 'status', 'version'])
     expect(getTaskRow(db, id).attempts).toBe(2)
   })

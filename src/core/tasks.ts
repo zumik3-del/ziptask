@@ -29,8 +29,7 @@ export type TaskPriorityInput = TaskPriority | number | string
 // in a SvcError and formatError adds the code prefix (src/core/result.ts), while the schema layers
 // add the `INVALID: ` prefix themselves. A message that carried the prefix as well would read
 // "INVALID: INVALID: priority must be ..." on the service path.
-export const PRIORITY_INVALID_MESSAGE =
-  `priority must be one of ${TASK_PRIORITIES.join(', ')} or the number 0..${TASK_PRIORITIES.length - 1}`
+export const PRIORITY_INVALID_MESSAGE = `priority must be one of ${TASK_PRIORITIES.join(', ')} or the number 0..${TASK_PRIORITIES.length - 1}`
 
 // The one mapping from an accepted shape to the canonical string: "p2", 2 and "2" all become "p2".
 // Every other value is refused (out of range, fractional, an unknown string, another type), so no
@@ -45,7 +44,7 @@ export function normalizePriority(value: unknown): TaskPriority | null {
     return `p${value}` as TaskPriority
   }
   if (typeof value === 'string') {
-    const canonical = TASK_PRIORITIES.find(priority => priority === value)
+    const canonical = TASK_PRIORITIES.find((priority) => priority === value)
     if (canonical) return canonical
     if (!/^[0-9]$/.test(value)) return null
     const digit = Number(value)
@@ -138,7 +137,11 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = Object.freeze({
 // written out and NOT derived from the transition table: `failed` belongs here although the table
 // gives it one outgoing edge (the administrative withdrawal), and deriving the set from "no
 // outgoing edge" would silently drop `failed` and change every behaviour that reads this list.
-export const TERMINAL_STATUSES: readonly TaskStatus[] = Object.freeze(['done', 'failed', 'canceled'])
+export const TERMINAL_STATUSES: readonly TaskStatus[] = Object.freeze([
+  'done',
+  'failed',
+  'canceled'
+])
 
 export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
   return VALID_TRANSITIONS[from]?.includes(to) ?? false
@@ -194,9 +197,10 @@ export function asClock(input: unknown): Clock | null {
   if (typeof o.clock !== 'undefined') return asClock(o.clock)
   if (typeof o.nowIso === 'function') {
     const nowIsoFn = (o.nowIso as () => string).bind(o)
-    const nowMsFn = typeof o.nowMs === 'function'
-      ? (o.nowMs as () => number).bind(o)
-      : () => Date.parse(nowIsoFn())
+    const nowMsFn =
+      typeof o.nowMs === 'function'
+        ? (o.nowMs as () => number).bind(o)
+        : () => Date.parse(nowIsoFn())
     return { nowMs: nowMsFn, nowIso: nowIsoFn }
   }
   if (typeof o.nowMs === 'function') {

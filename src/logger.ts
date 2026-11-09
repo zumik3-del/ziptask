@@ -41,7 +41,9 @@ type LogLevelResolution =
 
 function resolveLogLevel(raw: string): LogLevelResolution {
   const level = matchLogLevel(raw)
-  return level === undefined ? { matched: false, level: DEFAULT_LOG_LEVEL, requested: raw } : { matched: true, level }
+  return level === undefined
+    ? { matched: false, level: DEFAULT_LOG_LEVEL, requested: raw }
+    : { matched: true, level }
 }
 
 // Recognised level, or the info fallback for callers that only want the level.
@@ -94,7 +96,12 @@ function errFields(err: unknown): LogFields {
 }
 
 function isFieldsObject(value: unknown): value is LogFields {
-  return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Error)
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    !(value instanceof Error)
+  )
 }
 
 function writeRecord(record: LogRecord): void {
@@ -145,7 +152,9 @@ export function createLogger(name: string, level: string): Logger {
 
   const logger = build({})
   if (!resolved.matched) {
-    logger.warn('unknown log level requested, falling back to info', { requested: resolved.requested })
+    logger.warn('unknown log level requested, falling back to info', {
+      requested: resolved.requested
+    })
   }
   return logger
 }

@@ -11,9 +11,7 @@ import { createLogger } from './logger'
 import type { Logger } from './logger'
 import { startHttp } from './server'
 import type { StartHttpOptions } from './server'
-import {
-  handleClaimTask, handleGetTask, handleUpdateStatus
-} from './mcp/task-tools'
+import { handleClaimTask, handleGetTask, handleUpdateStatus } from './mcp/task-tools'
 
 export type CreateTaskRowOpts = {
   title: string
@@ -41,7 +39,14 @@ export function testProjectId(repo: TaskRepo): number {
 }
 
 export function testProjectRow(): ProjectRow {
-  return { id: 1, slug: TEST_PROJECT_SLUG, folder_path: '', created_at: '', updated_at: '', archived_at: null }
+  return {
+    id: 1,
+    slug: TEST_PROJECT_SLUG,
+    folder_path: '',
+    created_at: '',
+    updated_at: '',
+    archived_at: null
+  }
 }
 
 // The project half of a hand-rolled TaskStore literal: only `test` resolves, so a fixture store
@@ -49,7 +54,7 @@ export function testProjectRow(): ProjectRow {
 export function projectStoreStubs(): ProjectStore {
   return {
     insertProject: () => 1,
-    projectBySlug: (slug: string) => slug === TEST_PROJECT_SLUG ? testProjectRow() : null,
+    projectBySlug: (slug: string) => (slug === TEST_PROJECT_SLUG ? testProjectRow() : null),
     projectSlugs: () => [TEST_PROJECT_SLUG],
     listProjects: () => [],
     updateProject: () => 0,
@@ -97,7 +102,9 @@ export function makeTempDbPath(tag: string = 'test'): string {
 
 export function removeTempDb(path: string): void {
   for (const suffix of ['', '-wal', '-shm']) {
-    try { rmSync(path + suffix) } catch {}
+    try {
+      rmSync(path + suffix)
+    } catch {}
   }
 }
 
@@ -203,7 +210,13 @@ export function startTestServer(opts: TestServerOpts = {}): TestServer {
   const db = openDatabase(dbPath)
   const svc = new TaskService(new TaskRepo(db), { leaseTtlMin: 15, scope: TEST_PROJECT_SLUG })
   const logger = opts.logger ?? createLogger('test', 'off')
-  const httpOpts: StartHttpOptions = { svc, port: 0, host: opts.host ?? '127.0.0.1', dbPath, logger }
+  const httpOpts: StartHttpOptions = {
+    svc,
+    port: 0,
+    host: opts.host ?? '127.0.0.1',
+    dbPath,
+    logger
+  }
   if (opts.sessionTtlMs !== undefined) httpOpts.sessionTtlMs = opts.sessionTtlMs
   if (opts.maxSessions !== undefined) httpOpts.maxSessions = opts.maxSessions
   const server = startHttp(httpOpts)

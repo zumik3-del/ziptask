@@ -7,24 +7,44 @@ import { TaskService } from './core/service'
 import { openDatabase } from './db/db'
 import { MIGRATIONS } from './db/migrations'
 import {
-  handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus,
-  handleListQueue, handleListTasks
+  handleCreateTask,
+  handleGetTask,
+  handleClaimTask,
+  handleUpdateStatus,
+  handleListQueue,
+  handleListTasks
 } from './mcp/task-tools'
 import {
-  createTestDb, closeTestDb, getTaskRow, json, text, driveToDone, makeTempDbPath, removeTempDb, testProjectId, seedProject
+  createTestDb,
+  closeTestDb,
+  getTaskRow,
+  json,
+  text,
+  driveToDone,
+  makeTempDbPath,
+  removeTempDb,
+  testProjectId,
+  seedProject
 } from './test-context'
 
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
-afterEach(() => { closeTestDb(db) })
+beforeEach(() => {
+  db = createTestDb()
+  repo = new TaskRepo(db)
+  svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' })
+})
+afterEach(() => {
+  closeTestDb(db)
+})
 
 // A refusal writes nothing — not the row, not the audit log (docs/epics.md). Every no-write case
 // below reads this before and after, so "the row did not move" is an assertion, not an assumption.
 const auditCount = (id: number): number =>
   (db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n
-const versionOf = (id: number): number => json(handleGetTask(svc, { id, fields: ['version'] })).version
+const versionOf = (id: number): number =>
+  json(handleGetTask(svc, { id, fields: ['version'] })).version
 
 describe('epic creation', () => {
   test('epic: true creates non-claimable task with is_epic=1', () => {
@@ -82,14 +102,24 @@ describe('epic creation', () => {
 describe('epic constraints', () => {
   test('epic + epic_id rejected (cannot have parent epic)', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
-    const res = handleCreateTask(svc, { title: 'Bad', reporter: 'dev', epic: true, epic_id: epicId })
+    const res = handleCreateTask(svc, {
+      title: 'Bad',
+      reporter: 'dev',
+      epic: true,
+      epic_id: epicId
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('parent epic')
   })
 
   test('epic + depends_on rejected', () => {
     const depId = json(handleCreateTask(svc, { title: 'Dep', reporter: 'dev' })).id
-    const res = handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true, depends_on: [depId] })
+    const res = handleCreateTask(svc, {
+      title: 'Epic',
+      reporter: 'dev',
+      epic: true,
+      depends_on: [depId]
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('depends_on')
   })
@@ -148,9 +178,9 @@ describe('subtask_add mirror', () => {
   test('attach sub-task creates subtask_add mirror on epic', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
     const subRes = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId }))
-    const mirrors = db.query(
-      "SELECT action, new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
-    ).all(epicId) as any[]
+    const mirrors = db
+      .query("SELECT action, new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_add'")
+      .all(epicId) as any[]
     expect(mirrors.length).toBe(1)
     expect(mirrors[0].new_value).toContain(`#${subRes.id}`)
     expect(mirrors[0].new_value).toContain('Sub')
@@ -159,9 +189,9 @@ describe('subtask_add mirror', () => {
   test('mirror uses sanitized pipe in title', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
     json(handleCreateTask(svc, { title: 'Fix | bug', reporter: 'dev', epic_id: epicId }))
-    const mirrors = db.query(
-      "SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
-    ).all(epicId) as any[]
+    const mirrors = db
+      .query("SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_add'")
+      .all(epicId) as any[]
     expect(mirrors[0].new_value).toContain('Fix / bug')
     expect(mirrors[0].new_value).not.toContain('|')
   })
@@ -175,7 +205,12 @@ describe('epic terminal guard', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
     json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId }))
     const epicTask = getTaskRow(db, epicId)
-    const guard = handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'done', version: epicTask.version })
+    const guard = handleUpdateStatus(svc, {
+      id: epicId,
+      agent: 'dev',
+      status: 'done',
+      version: epicTask.version
+    })
     expect(guard.isError).toBe(true)
     expect(text(guard)).toContain('CHILDREN')
   })
@@ -184,7 +219,12 @@ describe('epic terminal guard', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
     json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId }))
     const epicTask = getTaskRow(db, epicId)
-    const guard = handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'failed', version: epicTask.version })
+    const guard = handleUpdateStatus(svc, {
+      id: epicId,
+      agent: 'dev',
+      status: 'failed',
+      version: epicTask.version
+    })
     expect(guard.isError).toBe(true)
     expect(text(guard)).toContain('CHILDREN')
   })
@@ -195,7 +235,14 @@ describe('epic terminal guard', () => {
     // asserted, not assumed: a plain task would be `queued` and `queued → done` an unrelated refusal,
     // so the direct terminal hop below must start from a real `open` epic
     expect(epicTask.status).toBe('open')
-    const done = json(handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'done', version: epicTask.version }))
+    const done = json(
+      handleUpdateStatus(svc, {
+        id: epicId,
+        agent: 'dev',
+        status: 'done',
+        version: epicTask.version
+      })
+    )
     expect(done.status).toBe('done')
     expect(done.version).toBe(epicTask.version + 1)
   })
@@ -228,7 +275,12 @@ describe('epic-only open status (ADR 0002)', () => {
     const id = json(handleCreateTask(svc, { title: 'Regular', reporter: 'dev' })).id
     const before = getTaskRow(db, id)
 
-    const res = handleUpdateStatus(svc, { id, agent: 'dev', status: 'open', version: before.version })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'dev',
+      status: 'open',
+      version: before.version
+    })
     expect(text(res)).toBe('INVALID: queued → open')
     const after = getTaskRow(db, id)
     expect(after.status).toBe('queued')
@@ -238,7 +290,9 @@ describe('epic-only open status (ADR 0002)', () => {
 
   test('an epic never holds queued, review or blocked', () => {
     for (const status of ['queued', 'review', 'blocked'] as const) {
-      const id = json(handleCreateTask(svc, { title: `Epic ${status}`, reporter: 'dev', epic: true })).id
+      const id = json(
+        handleCreateTask(svc, { title: `Epic ${status}`, reporter: 'dev', epic: true })
+      ).id
       const before = getTaskRow(db, id)
 
       const res = handleUpdateStatus(svc, { id, agent: 'dev', status, version: before.version })
@@ -256,7 +310,9 @@ describe('epic-only open status (ADR 0002)', () => {
     const id = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
     const before = getTaskRow(db, id)
 
-    const res = json(handleUpdateStatus(svc, { id, agent: 'dev', status: 'canceled', version: before.version }))
+    const res = json(
+      handleUpdateStatus(svc, { id, agent: 'dev', status: 'canceled', version: before.version })
+    )
     expect(res.status).toBe('canceled')
     const after = getTaskRow(db, id)
     expect(after.completed_at).not.toBeNull()
@@ -279,7 +335,10 @@ describe('claim_task refusal order: epic → status window → deps', () => {
 
   // The row is the other half of every refusal: nothing moved, and no attempt was spent on a call
   // that never leased anything.
-  const expectUntouched = (id: number, before: { status: string; version: number; attempts: number; audit: number }) => {
+  const expectUntouched = (
+    id: number,
+    before: { status: string; version: number; attempts: number; audit: number }
+  ) => {
     const after = getTaskRow(db, id)
     expect(after.status).toBe(before.status)
     expect(after.version).toBe(before.version)
@@ -298,14 +357,18 @@ describe('claim_task refusal order: epic → status window → deps', () => {
   // an epic" without qualifying the status, so all three terminal outcomes must say the same thing.
   test('a terminal epic keeps the epic refusal, whichever outcome closed it', () => {
     for (const terminal of ['done', 'failed', 'canceled'] as const) {
-      const id = json(handleCreateTask(svc, { title: `Epic ${terminal}`, reporter: 'dev', epic: true })).id
+      const id = json(
+        handleCreateTask(svc, { title: `Epic ${terminal}`, reporter: 'dev', epic: true })
+      ).id
       const open = getTaskRow(db, id)
       expect(`${terminal}: ${open.status}`).toBe(`${terminal}: open`)
       json(handleUpdateStatus(svc, { id, agent: 'dev', status: terminal, version: open.version }))
 
       const before = baseline(id)
       expect(`${terminal}: ${before.status}`).toBe(`${terminal}: ${terminal}`)
-      expect(`${terminal}: ${claimRefusal(id, 'dev')}`).toBe(`${terminal}: INVALID: #${id} is an epic, not claimable`)
+      expect(`${terminal}: ${claimRefusal(id, 'dev')}`).toBe(
+        `${terminal}: INVALID: #${id} is an epic, not claimable`
+      )
       expectUntouched(id, before)
     }
   })
@@ -317,14 +380,37 @@ describe('claim_task refusal order: epic → status window → deps', () => {
     const done = json(handleCreateTask(svc, { title: 'Done', reporter: 'dev' })).id
     driveToDone(svc, done, 'dev')
     const failed = json(handleCreateTask(svc, { title: 'Failed', reporter: 'dev' })).id
-    json(handleUpdateStatus(svc, { id: failed, agent: 'dev', status: 'in_progress', version: versionOf(failed) }))
-    json(handleUpdateStatus(svc, { id: failed, agent: 'dev', status: 'failed', version: versionOf(failed) }))
+    json(
+      handleUpdateStatus(svc, {
+        id: failed,
+        agent: 'dev',
+        status: 'in_progress',
+        version: versionOf(failed)
+      })
+    )
+    json(
+      handleUpdateStatus(svc, {
+        id: failed,
+        agent: 'dev',
+        status: 'failed',
+        version: versionOf(failed)
+      })
+    )
     const canceled = json(handleCreateTask(svc, { title: 'Canceled', reporter: 'dev' })).id
-    json(handleUpdateStatus(svc, { id: canceled, agent: 'dev', status: 'canceled', version: versionOf(canceled) }))
+    json(
+      handleUpdateStatus(svc, {
+        id: canceled,
+        agent: 'dev',
+        status: 'canceled',
+        version: versionOf(canceled)
+      })
+    )
 
     for (const id of [done, failed, canceled]) {
       const before = baseline(id)
-      expect(`${before.status}: ${claimRefusal(id, 'dev')}`).toBe(`${before.status}: CONFLICT: status=${before.status}`)
+      expect(`${before.status}: ${claimRefusal(id, 'dev')}`).toBe(
+        `${before.status}: CONFLICT: status=${before.status}`
+      )
       expectUntouched(id, before)
     }
   })
@@ -333,14 +419,23 @@ describe('claim_task refusal order: epic → status window → deps', () => {
   // refuse — the wording the lease guard reuses for update_status → in_progress.
   test('a dep-blocked non-epic answers the dependency refusal, from queued and from blocked', () => {
     const dep = json(handleCreateTask(svc, { title: 'Dep', reporter: 'dev' })).id
-    const blocked = json(handleCreateTask(svc, { title: 'Dependent', reporter: 'dev', depends_on: [dep] })).id
+    const blocked = json(
+      handleCreateTask(svc, { title: 'Dependent', reporter: 'dev', depends_on: [dep] })
+    ).id
     expect(getTaskRow(db, blocked).status).toBe('queued')
 
     const queued = baseline(blocked)
     expect(claimRefusal(blocked, 'dev')).toBe('BLOCKED: dependencies not satisfied')
     expectUntouched(blocked, queued)
 
-    json(handleUpdateStatus(svc, { id: blocked, agent: 'dev', status: 'blocked', version: versionOf(blocked) }))
+    json(
+      handleUpdateStatus(svc, {
+        id: blocked,
+        agent: 'dev',
+        status: 'blocked',
+        version: versionOf(blocked)
+      })
+    )
     const parked = baseline(blocked)
     expect(claimRefusal(blocked, 'dev')).toBe('BLOCKED: dependencies not satisfied')
     expectUntouched(blocked, parked)
@@ -351,12 +446,23 @@ describe('claim_task refusal order: epic → status window → deps', () => {
   // so waiting for the dependency would be advice that leads nowhere.
   test('a terminal non-epic with an open dep is refused by the status window, not by the deps', () => {
     const dep = json(handleCreateTask(svc, { title: 'Open dep', reporter: 'dev' })).id
-    const withdrawn = json(handleCreateTask(svc, { title: 'Withdrawn dependent', reporter: 'dev', depends_on: [dep] })).id
+    const withdrawn = json(
+      handleCreateTask(svc, { title: 'Withdrawn dependent', reporter: 'dev', depends_on: [dep] })
+    ).id
     // queued → canceled is the withdraw path, and it leaves the dependency open on purpose
-    json(handleUpdateStatus(svc, { id: withdrawn, agent: 'dev', status: 'canceled', version: versionOf(withdrawn) }))
+    json(
+      handleUpdateStatus(svc, {
+        id: withdrawn,
+        agent: 'dev',
+        status: 'canceled',
+        version: versionOf(withdrawn)
+      })
+    )
     // asserted, not assumed: a closed dep would turn this into the dep case above for the wrong reason
     expect(getTaskRow(db, dep).status).toBe('queued')
-    expect(json(handleGetTask(svc, { id: withdrawn, fields: ['blocked_by'] })).blocked_by).toEqual([dep])
+    expect(json(handleGetTask(svc, { id: withdrawn, fields: ['blocked_by'] })).blocked_by).toEqual([
+      dep
+    ])
 
     const before = baseline(withdrawn)
     expect(claimRefusal(withdrawn, 'dev')).toBe('CONFLICT: status=canceled')
@@ -370,12 +476,14 @@ describe('migration 007: a legacy epic row becomes open', () => {
   // Both locate the pair by SQL identity, never by a positional tail — appending a migration 008
   // must not silently re-point them, and deleting 007a or 007b must fail the lookup, not pass.
   const OPEN_MARKER = "SET status = 'open', lease_expires_at = NULL, assignee = NULL"
-  const CLEAR_MARKER = "SET lease_expires_at = NULL, assignee = NULL WHERE is_epic = 1"
+  const CLEAR_MARKER = 'SET lease_expires_at = NULL, assignee = NULL WHERE is_epic = 1'
   const locate007 = (): { openIdx: number; clearIdx: number } => {
-    const openIdx = MIGRATIONS.findIndex(stmt => stmt.includes(OPEN_MARKER))
-    const clearIdx = MIGRATIONS.findIndex(stmt => stmt.includes(CLEAR_MARKER))
+    const openIdx = MIGRATIONS.findIndex((stmt) => stmt.includes(OPEN_MARKER))
+    const clearIdx = MIGRATIONS.findIndex((stmt) => stmt.includes(CLEAR_MARKER))
     if (openIdx < 0 || clearIdx !== openIdx + 1) {
-      throw new Error(`migration 007 statements not located as a pair (open=${openIdx}, clear=${clearIdx})`)
+      throw new Error(
+        `migration 007 statements not located as a pair (open=${openIdx}, clear=${clearIdx})`
+      )
     }
     return { openIdx, clearIdx }
   }
@@ -396,8 +504,15 @@ describe('migration 007: a legacy epic row becomes open', () => {
         "INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES ('legacy-epics', '', ?, ?)",
         [SEED_TIME, SEED_TIME]
       )
-      const projectId = (raw.query('SELECT id FROM projects WHERE slug = ?').get('legacy-epics') as { id: number }).id
-      const seedEpic = (title: string, status: string, assignee: string | null, lease: string | null) =>
+      const projectId = (
+        raw.query('SELECT id FROM projects WHERE slug = ?').get('legacy-epics') as { id: number }
+      ).id
+      const seedEpic = (
+        title: string,
+        status: string,
+        assignee: string | null,
+        lease: string | null
+      ) =>
         raw.run(
           `INSERT INTO tasks (title, reporter, status, assignee, lease_expires_at, is_epic, project_id, created_at, updated_at)
            VALUES (?, 'dev', ?, ?, ?, 1, ?, ?, ?)`,
@@ -420,11 +535,18 @@ describe('migration 007: a legacy epic row becomes open', () => {
       seedPre007Db(path, openIdx)
 
       const upgraded = openDatabase(path)
-      expect((upgraded.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number }).version).toBe(MIGRATIONS.length)
-      const rows = upgraded.query('SELECT title, status, assignee, lease_expires_at, updated_at FROM tasks ORDER BY id').all() as any[]
+      expect(
+        (upgraded.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number })
+          .version
+      ).toBe(MIGRATIONS.length)
+      const rows = upgraded
+        .query(
+          'SELECT title, status, assignee, lease_expires_at, updated_at FROM tasks ORDER BY id'
+        )
+        .all() as any[]
       upgraded.close()
 
-      const byTitle = Object.fromEntries(rows.map(r => [r.title, r]))
+      const byTitle = Object.fromEntries(rows.map((r) => [r.title, r]))
       expect(byTitle.QueuedEpic.status).toBe('open')
       expect(byTitle.LeasedEpic.status).toBe('open')
       // the rewritten rows are visibly stamped, not silently relabelled
@@ -435,7 +557,9 @@ describe('migration 007: a legacy epic row becomes open', () => {
       expect(byTitle.DoneEpic.status).toBe('done')
       expect(byTitle.DoneEpic.assignee).toBeNull()
       expect(byTitle.DoneEpic.lease_expires_at).toBeNull()
-    } finally { removeTempDb(path) }
+    } finally {
+      removeTempDb(path)
+    }
   })
 
   // ADR 0002 claims the rewrite is idempotent ("re-running it matches zero rows after the first
@@ -457,8 +581,14 @@ describe('migration 007: a legacy epic row becomes open', () => {
       const rows = upgraded.query('SELECT title, status FROM tasks ORDER BY id').all() as any[]
       upgraded.close()
       // the re-run moved nothing: the rewritten rows stay open and the closed epic stays closed
-      expect(rows.map(r => `${r.title}=${r.status}`)).toEqual(['QueuedEpic=open', 'LeasedEpic=open', 'DoneEpic=done'])
-    } finally { removeTempDb(path) }
+      expect(rows.map((r) => `${r.title}=${r.status}`)).toEqual([
+        'QueuedEpic=open',
+        'LeasedEpic=open',
+        'DoneEpic=done'
+      ])
+    } finally {
+      removeTempDb(path)
+    }
   })
 })
 
@@ -467,9 +597,9 @@ describe('subtask_done / subtask_failed mirrors', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
     const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
     driveToDone(svc, subId, 'dev')
-    const mirrors = db.query(
-      "SELECT action FROM audit_log WHERE task_id = ? AND action = 'subtask_done'"
-    ).all(epicId) as any[]
+    const mirrors = db
+      .query("SELECT action FROM audit_log WHERE task_id = ? AND action = 'subtask_done'")
+      .all(epicId) as any[]
     expect(mirrors.length).toBe(1)
   })
 
@@ -479,19 +609,21 @@ describe('subtask_done / subtask_failed mirrors', () => {
     handleClaimTask(svc, { agent: 'dev', task_id: subId })
     const subTask = getTaskRow(db, subId)
     handleUpdateStatus(svc, { id: subId, agent: 'dev', status: 'failed', version: subTask.version })
-    const mirrors = db.query(
-      "SELECT action FROM audit_log WHERE task_id = ? AND action = 'subtask_failed'"
-    ).all(epicId) as any[]
+    const mirrors = db
+      .query("SELECT action FROM audit_log WHERE task_id = ? AND action = 'subtask_failed'")
+      .all(epicId) as any[]
     expect(mirrors.length).toBe(1)
   })
 
   test('mirror includes task id and subtask title', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Big Epic', reporter: 'dev' })).id
-    const subId = json(handleCreateTask(svc, { title: 'Small Sub', reporter: 'dev', epic_id: epicId })).id
+    const subId = json(
+      handleCreateTask(svc, { title: 'Small Sub', reporter: 'dev', epic_id: epicId })
+    ).id
     driveToDone(svc, subId, 'dev')
-    const mirrors = db.query(
-      "SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_done'"
-    ).all(epicId) as any[]
+    const mirrors = db
+      .query("SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_done'")
+      .all(epicId) as any[]
     expect(mirrors[0].new_value).toContain(`#${subId}`)
     expect(mirrors[0].new_value).toContain('Small Sub')
     expect(mirrors[0].new_value).not.toContain('Big Epic')
@@ -505,7 +637,9 @@ describe('derived roll-up (subtasks field)', () => {
     json(handleCreateTask(svc, { title: 'Sub2', reporter: 'dev', epic_id: epicId }))
     driveToDone(svc, sub1, 'dev')
     // sub2 still queued
-    const view = json(handleGetTask(svc, { id: epicId, fields: ['id', 'title', 'status', 'subtasks'] }))
+    const view = json(
+      handleGetTask(svc, { id: epicId, fields: ['id', 'title', 'status', 'subtasks'] })
+    )
     expect(view.subtasks).toBeDefined()
     expect(view.subtasks.total).toBe(2)
     expect(view.subtasks.done).toBe(1)
@@ -550,7 +684,8 @@ describe('list_tasks epic_id filter', () => {
 })
 
 describe('canceled children do not block epic closure (#112)', () => {
-  const cancelChild = (id: number) => handleUpdateStatus(svc, { id, agent: 'dev', status: 'canceled', version: 1 })
+  const cancelChild = (id: number) =>
+    handleUpdateStatus(svc, { id, agent: 'dev', status: 'canceled', version: 1 })
 
   test('nonTerminalChildCount ignores canceled children', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
@@ -584,7 +719,9 @@ describe('canceled children do not block epic closure (#112)', () => {
     cancelChild(subId)
     // epics go directly to terminal outcomes
     const t1 = getTaskRow(db, epicId)
-    const done = json(handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'done', version: t1.version }))
+    const done = json(
+      handleUpdateStatus(svc, { id: epicId, agent: 'dev', status: 'done', version: t1.version })
+    )
     expect(done.status).toBe('done')
   })
 
@@ -606,9 +743,11 @@ describe('canceled children do not block epic closure (#112)', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id
     const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id
     cancelChild(subId)
-    const mirrors = db.query(
-      "SELECT action FROM audit_log WHERE task_id = ? AND action IN ('subtask_done', 'subtask_failed')"
-    ).all(epicId) as any[]
+    const mirrors = db
+      .query(
+        "SELECT action FROM audit_log WHERE task_id = ? AND action IN ('subtask_done', 'subtask_failed')"
+      )
+      .all(epicId) as any[]
     expect(mirrors.length).toBe(0)
   })
 })
@@ -621,9 +760,9 @@ describe('atomic epic promotion (#108)', () => {
     const epic = getTaskRow(db, epicId)
     expect(epic.is_epic).toBe(true)
 
-    const mirrors = db.query(
-      "SELECT action, new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
-    ).all(epicId) as any[]
+    const mirrors = db
+      .query("SELECT action, new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_add'")
+      .all(epicId) as any[]
     expect(mirrors.length).toBe(1)
     expect(mirrors[0].new_value).toContain(`#${subId}`)
     expect(mirrors[0].new_value).toContain('Sub')
@@ -631,14 +770,12 @@ describe('atomic epic promotion (#108)', () => {
 
   test('direct promoteEpicWithMirror call is atomic (both or neither)', () => {
     const epicId = json(handleCreateTask(svc, { title: 'DirectEpic', reporter: 'dev' })).id
-    ;repo.promoteEpicWithMirror(
-      epicId, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true
-    )
+    repo.promoteEpicWithMirror(epicId, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
     const epic = getTaskRow(db, epicId)
     expect(epic.is_epic).toBe(true)
-    const mirrors = db.query(
-      "SELECT action FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
-    ).all(epicId) as any[]
+    const mirrors = db
+      .query("SELECT action FROM audit_log WHERE task_id = ? AND action = 'subtask_add'")
+      .all(epicId) as any[]
     expect(mirrors.length).toBe(1)
   })
 })
@@ -650,13 +787,27 @@ describe('promotion cannot destroy in-flight work (review #1740 P1)', () => {
   // The task is born without a holder (#1872): a creation-time `assignee` is refused, the claim
   // writes the holder and every other status clears it again. The seeded rows are therefore the
   // same rows the old creation-time assignee produced - only the way the holder gets there changed.
-  function seedTask(title: string, status: 'queued' | 'in_progress' | 'review' | 'blocked', holder?: string): number {
+  function seedTask(
+    title: string,
+    status: 'queued' | 'in_progress' | 'review' | 'blocked',
+    holder?: string
+  ): number {
     const id = json(handleCreateTask(svc, { title, reporter: 'dev' })).id
     if (status === 'in_progress') {
       handleClaimTask(svc, { agent: holder ?? 'dev', task_id: id })
     } else if (status === 'review') {
-      handleUpdateStatus(svc, { id, agent: holder ?? 'dev', status: 'in_progress', version: versionOf(id) })
-      handleUpdateStatus(svc, { id, agent: holder ?? 'dev', status: 'review', version: versionOf(id) })
+      handleUpdateStatus(svc, {
+        id,
+        agent: holder ?? 'dev',
+        status: 'in_progress',
+        version: versionOf(id)
+      })
+      handleUpdateStatus(svc, {
+        id,
+        agent: holder ?? 'dev',
+        status: 'review',
+        version: versionOf(id)
+      })
     } else if (status === 'blocked') {
       handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: versionOf(id) })
     }
@@ -691,7 +842,11 @@ describe('promotion cannot destroy in-flight work (review #1740 P1)', () => {
     expect(getTaskRow(db, target)!.lease_expires_at).toBe(leaseBefore)
     // the holder can still heartbeat: the refusal left no trace at all
     const res = handleUpdateStatus(svc, {
-      id: target, agent: 'worker', status: 'in_progress', version: versionOf(target), renew: true
+      id: target,
+      agent: 'worker',
+      status: 'in_progress',
+      version: versionOf(target),
+      renew: true
     })
     expect(res.isError).toBeFalsy()
   })
@@ -707,9 +862,13 @@ describe('promotion cannot destroy in-flight work (review #1740 P1)', () => {
 
   test('attaching further children to an existing epic is still allowed', () => {
     const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id
-    expect(handleCreateTask(svc, { title: 'C1', reporter: 'dev', epic_id: epic }).isError).toBeFalsy()
+    expect(
+      handleCreateTask(svc, { title: 'C1', reporter: 'dev', epic_id: epic }).isError
+    ).toBeFalsy()
     // the epic is `open`, not `queued`, and no promotion happens, so this must not be refused
-    expect(handleCreateTask(svc, { title: 'C2', reporter: 'dev', epic_id: epic }).isError).toBeFalsy()
+    expect(
+      handleCreateTask(svc, { title: 'C2', reporter: 'dev', epic_id: epic }).isError
+    ).toBeFalsy()
   })
 })
 
@@ -741,7 +900,7 @@ describe('promoteEpicWithMirror is a no-op off the queued path (#1745)', () => {
       expect(before.assignee).toBe(status === 'in_progress' ? 'worker' : null)
       if (status === 'in_progress') expect(before.lease_expires_at).not.toBeNull()
 
-      ;repo.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
+      repo.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
 
       const after = getTaskRow(db, target)!
       expect(after.is_epic).toBe(false)
@@ -760,16 +919,16 @@ describe('promoteEpicWithMirror is a no-op off the queued path (#1745)', () => {
     expect(before.assignee).toBeNull()
     expect(before.lease_expires_at).toBeNull()
 
-    ;repo.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
+    repo.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
 
     const after = getTaskRow(db, target)!
     expect(after.is_epic).toBe(true)
     expect(after.status).toBe('open')
     expect(after.assignee).toBeNull()
     expect(after.lease_expires_at).toBeNull()
-    const mirrors = db.query(
-      "SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_add'"
-    ).all(target) as any[]
+    const mirrors = db
+      .query("SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'subtask_add'")
+      .all(target) as any[]
     expect(mirrors.length).toBe(1)
     expect(mirrors[0].new_value).toBe('#99 Some Sub')
   })
@@ -786,20 +945,34 @@ describe('epic promotion race (#1853)', () => {
   const LEASE_UNTIL = '2099-01-01T00:00:00.000Z'
 
   // The invariant the race must never break: no task row may point at a parent that is not an epic.
-  const orphanChildren = (): number[] => (db.query(
-    'SELECT c.id AS id FROM tasks c JOIN tasks p ON p.id = c.epic_id WHERE p.is_epic = 0'
-  ).all() as any[]).map(r => r.id)
+  const orphanChildren = (): number[] =>
+    (
+      db
+        .query(
+          'SELECT c.id AS id FROM tasks c JOIN tasks p ON p.id = c.epic_id WHERE p.is_epic = 0'
+        )
+        .all() as any[]
+    ).map((r) => r.id)
   // ...and no audit row may outlive its task: a refusal leaves no row behind, the child's own
   // create row included (comments and audit_log carry ON DELETE CASCADE, schema v4).
-  const orphanAuditRows = (): number[] => (db.query(
-    'SELECT a.rowid AS rowid FROM audit_log a LEFT JOIN tasks t ON t.id = a.task_id WHERE t.id IS NULL'
-  ).all() as any[]).map(r => r.rowid)
+  const orphanAuditRows = (): number[] =>
+    (
+      db
+        .query(
+          'SELECT a.rowid AS rowid FROM audit_log a LEFT JOIN tasks t ON t.id = a.task_id WHERE t.id IS NULL'
+        )
+        .all() as any[]
+    ).map((r) => r.rowid)
   const childCount = (epicId: number): number =>
     (db.query('SELECT COUNT(*) AS n FROM tasks WHERE epic_id = ?').get(epicId) as { n: number }).n
   const mirrorCount = (taskId: number): number =>
-    (db.query("SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = 'subtask_add'")
-      .get(taskId) as { n: number }).n
-  const taskCount = (): number => (db.query('SELECT COUNT(*) AS n FROM tasks').get() as { n: number }).n
+    (
+      db
+        .query("SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = 'subtask_add'")
+        .get(taskId) as { n: number }
+    ).n
+  const taskCount = (): number =>
+    (db.query('SELECT COUNT(*) AS n FROM tasks').get() as { n: number }).n
 
   test('a target claimed between the guard read and the write is refused, and no child row is left', () => {
     const target = json(handleCreateTask(svc, { title: 'Target', reporter: 'dev' })).id
@@ -820,7 +993,9 @@ describe('epic promotion race (#1853)', () => {
     }
 
     const res = handleCreateTask(new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }), {
-      title: 'Child', reporter: 'dev', epic_id: target
+      title: 'Child',
+      reporter: 'dev',
+      epic_id: target
     })
 
     // non-vacuity: the guard really read the target as queued, and the rival really took it
@@ -852,12 +1027,15 @@ describe('epic promotion race (#1853)', () => {
     const insert = raced.insertTask.bind(raced)
     raced.insertTask = (args) => {
       const id = insert(args)
-      if (args.epicId === target) raced.markClaimed(target, before.version, 'rival', LEASE_UNTIL, nowIso())
+      if (args.epicId === target)
+        raced.markClaimed(target, before.version, 'rival', LEASE_UNTIL, nowIso())
       return id
     }
 
     const res = handleCreateTask(new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }), {
-      title: 'Child', reporter: 'dev', epic_id: target
+      title: 'Child',
+      reporter: 'dev',
+      epic_id: target
     })
 
     expect(res.isError).toBe(true)
@@ -883,7 +1061,9 @@ describe('epic promotion race (#1853)', () => {
     }
 
     const res = handleCreateTask(new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }), {
-      title: 'Child', reporter: 'dev', epic_id: target
+      title: 'Child',
+      reporter: 'dev',
+      epic_id: target
     })
 
     expect(res.isError).toBe(true)
@@ -900,7 +1080,14 @@ describe('epic promotion race (#1853)', () => {
 
     // The store-level defence, called directly: the promotion matched no row, so the mirror that
     // belongs to an epic must not be written either.
-    const changes = repo.promoteEpicWithMirror(target, 'dev', 'subtask_add', '#99 Some Sub', nowIso(), true)
+    const changes = repo.promoteEpicWithMirror(
+      target,
+      'dev',
+      'subtask_add',
+      '#99 Some Sub',
+      nowIso(),
+      true
+    )
 
     expect(changes).toBe(0)
     expect(mirrorCount(target)).toBe(0)
@@ -925,7 +1112,12 @@ describe('epic promotion race (#1853)', () => {
     json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: target }))
 
     // the optimistic lock sees the rewrite: a holder's stale version cannot match the promoted row
-    const res = handleUpdateStatus(svc, { id: target, agent: 'dev', status: 'done', version: stale })
+    const res = handleUpdateStatus(svc, {
+      id: target,
+      agent: 'dev',
+      status: 'done',
+      version: stale
+    })
     expect(text(res)).toBe(`CONFLICT: expected version ${stale + 1}, got ${stale}`)
   })
 
@@ -958,7 +1150,9 @@ describe('epic promotion race (#1853)', () => {
     }
 
     const res = handleCreateTask(new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }), {
-      title: 'Child', reporter: 'dev', epic_id: target
+      title: 'Child',
+      reporter: 'dev',
+      epic_id: target
     })
 
     expect(res.isError).toBeFalsy()
@@ -973,7 +1167,12 @@ describe('epic promotion race (#1853)', () => {
 // task, which is born `queued` and holds no lease either.
 describe('an epic takes no assignee (review #1740 P2)', () => {
   test('create_task(epic, assignee) is refused', () => {
-    const res: any = handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true, assignee: 'boss' })
+    const res: any = handleCreateTask(svc, {
+      title: 'Epic',
+      reporter: 'dev',
+      epic: true,
+      assignee: 'boss'
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toBe('INVALID: an epic takes no assignee: it holds no lease')
   })
@@ -983,8 +1182,14 @@ describe('an epic takes no assignee (review #1740 P2)', () => {
     // so only a direct store call exercises repo.ts:63 — the last line of defence behind that guard,
     // which a bypass or a cross-process race would reach with a value in hand.
     const id = repo.insertTask({
-      title: 'Epic', description: null, priority: 'p2', reporter: 'dev',
-      depends_on: '[]', now: nowIso(), isEpic: true, projectId: testProjectId(repo)
+      title: 'Epic',
+      description: null,
+      priority: 'p2',
+      reporter: 'dev',
+      depends_on: '[]',
+      now: nowIso(),
+      isEpic: true,
+      projectId: testProjectId(repo)
     }).id
     const task = getTaskRow(db, id)
     expect(task.status).toBe('open')
@@ -999,7 +1204,9 @@ describe('an epic takes no assignee (review #1740 P2)', () => {
     // the same state task #1857 removed everywhere else. The value is refused, not stored.
     const res: any = handleCreateTask(svc, { title: 'Task', reporter: 'dev', assignee: 'worker' })
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+    expect(text(res)).toBe(
+      'INVALID: assignee is refused at creation: a task holds a lease only from in_progress'
+    )
 
     // And the born row carries no holder and no lease: the claim is what binds a task to an agent.
     const id = json(handleCreateTask(svc, { title: 'Task', reporter: 'dev' })).id
@@ -1066,9 +1273,15 @@ describe('list_tasks is_epic filter', () => {
 
   test('is_epic filter respects project scoping', () => {
     seedProject(db, 'alpha')
-    const alphaEpic = json(handleCreateTask(svc, { title: 'AlphaEpic', reporter: 'dev', project: 'alpha', epic: true })).id
-    const alphaRegular = json(handleCreateTask(svc, { title: 'AlphaReg', reporter: 'dev', project: 'alpha' })).id
-    const testEpic = json(handleCreateTask(svc, { title: 'TestEpic', reporter: 'dev', epic: true })).id
+    const alphaEpic = json(
+      handleCreateTask(svc, { title: 'AlphaEpic', reporter: 'dev', project: 'alpha', epic: true })
+    ).id
+    const alphaRegular = json(
+      handleCreateTask(svc, { title: 'AlphaReg', reporter: 'dev', project: 'alpha' })
+    ).id
+    const testEpic = json(
+      handleCreateTask(svc, { title: 'TestEpic', reporter: 'dev', epic: true })
+    ).id
     const r = json(handleListTasks(svc, { project: 'alpha', is_epic: true }))
     const ids = r.tasks.map((t: any) => t.id)
     expect(ids).toContain(alphaEpic)

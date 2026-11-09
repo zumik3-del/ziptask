@@ -16,19 +16,24 @@ beforeEach(() => {
   svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' })
   projectId = testProjectId(repo)
 })
-afterEach(() => { closeTestDb(db) })
+afterEach(() => {
+  closeTestDb(db)
+})
 
 // The queue order is (priority, created_at ASC, id ASC): one shared timestamp makes the seeded
 // order the queue order, so the position of a row is the offset it is reached at.
 const CREATED_AT = '2026-01-01T00:00:00.000Z'
 const CREATED_AT_LATER = '2026-01-01T00:00:01.000Z'
 
-function seedQueued(title: string, opts: { dependsOn?: number[]; createdAt?: string } = {}): number {
+function seedQueued(
+  title: string,
+  opts: { dependsOn?: number[]; createdAt?: string } = {}
+): number {
   return repo.insertTask({
     title,
     description: null,
     priority: 'p2',
-        reporter: 'dev',
+    reporter: 'dev',
     depends_on: JSON.stringify(opts.dependsOn ?? []),
     now: opts.createdAt ?? CREATED_AT,
     projectId

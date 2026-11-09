@@ -23,7 +23,8 @@ export function normalizeFolderPath(input: string): SvcResult<string> {
 
 // The single slug validation point: pattern, then the reserved word.
 function slugError(slug: string): SvcError | null {
-  if (!PROJECT_SLUG_PATTERN.test(slug)) return { code: 'INVALID', message: `slug must match ${PROJECT_SLUG_PATTERN.source}` }
+  if (!PROJECT_SLUG_PATTERN.test(slug))
+    return { code: 'INVALID', message: `slug must match ${PROJECT_SLUG_PATTERN.source}` }
   if (slug === RESERVED_PROJECT_SLUG) {
     return { code: 'INVALID', message: `'${RESERVED_PROJECT_SLUG}' is a reserved project slug` }
   }
@@ -38,7 +39,10 @@ export function resolveProject(store: ProjectStore, slug?: string): SvcResult<Pr
   if (project) return ok(project)
   const known = store.projectSlugs()
   if (known.length === 0) {
-    return fail('INVALID', `unknown project '${slug}' (no projects defined; create one with create_project)`)
+    return fail(
+      'INVALID',
+      `unknown project '${slug}' (no projects defined; create one with create_project)`
+    )
   }
   return fail('INVALID', `unknown project '${slug}' (known: ${known.join(', ')})`)
 }
@@ -49,7 +53,10 @@ function requireProject(store: ProjectStore, slug: string): SvcResult<ProjectRow
   return project ? ok(project) : fail('NOT_FOUND')
 }
 
-export function createProject(store: ProjectStore, args: { slug?: string; folder_path?: string }): SvcResult<{ slug: string }> {
+export function createProject(
+  store: ProjectStore,
+  args: { slug?: string; folder_path?: string }
+): SvcResult<{ slug: string }> {
   const folderPath = args.folder_path ?? ''
   const folderErr = requiredError(folderPath, 'folder_path')
   if (folderErr) return fail(folderErr)
@@ -69,9 +76,14 @@ export function createProject(store: ProjectStore, args: { slug?: string; folder
   return ok({ slug })
 }
 
-export function updateProject(store: ProjectStore, args: {
-  project: string; folder_path?: string; archived?: boolean
-}): SvcResult<{ slug: string }> {
+export function updateProject(
+  store: ProjectStore,
+  args: {
+    project: string
+    folder_path?: string
+    archived?: boolean
+  }
+): SvcResult<{ slug: string }> {
   const found = requireProject(store, args.project)
   if (!found.ok) return fail(found.error)
   if (args.folder_path === undefined && args.archived === undefined) {
@@ -90,11 +102,15 @@ export function updateProject(store: ProjectStore, args: {
   return ok({ slug: found.data.slug })
 }
 
-export function deleteProject(store: ProjectStore, project: string): SvcResult<{ deleted: string }> {
+export function deleteProject(
+  store: ProjectStore,
+  project: string
+): SvcResult<{ deleted: string }> {
   const found = requireProject(store, project)
   if (!found.ok) return fail(found.error)
   const count = store.projectTaskCount(found.data.id)
-  if (count > 0) return fail('CONFLICT', `project '${found.data.slug}' has ${count} tasks; archive it instead`)
+  if (count > 0)
+    return fail('CONFLICT', `project '${found.data.slug}' has ${count} tasks; archive it instead`)
   store.deleteProject(found.data.id)
   return ok({ deleted: found.data.slug })
 }

@@ -1,34 +1,74 @@
 import type { Task, TaskStatus } from './tasks'
-import { isValidTransition, TERMINAL_STATUSES, EDITABLE_STATUSES, MAX_TITLE_LENGTH, MAX_AGENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON, normalizePriority, PRIORITY_INVALID_MESSAGE } from './tasks'
+import {
+  isValidTransition,
+  TERMINAL_STATUSES,
+  EDITABLE_STATUSES,
+  MAX_TITLE_LENGTH,
+  MAX_AGENT_LENGTH,
+  MAX_DESCRIPTION_LENGTH,
+  MAX_DEPENDS_ON,
+  normalizePriority,
+  PRIORITY_INVALID_MESSAGE
+} from './tasks'
 import type { TaskStore, SvcError } from './types'
 import { parseDeps, depsSatisfied, collapseDeps } from './deps'
-import { requiredError, tooLongError, optionalFieldError, epicError, commentError } from './validation'
+import {
+  requiredError,
+  tooLongError,
+  optionalFieldError,
+  epicError,
+  commentError
+} from './validation'
 import { RESERVED_PROJECT_SLUG } from './project-slug'
 
 // Only the reads a guard performs: a guard never writes, so it cannot reach the mutating half.
-type GuardStore = Pick<TaskStore, 'batchTasks' | 'getTaskRow' | 'statusesOf' | 'nonTerminalChildCount'>
+type GuardStore = Pick<
+  TaskStore,
+  'batchTasks' | 'getTaskRow' | 'statusesOf' | 'nonTerminalChildCount'
+>
 type DepsStore = Pick<TaskStore, 'statusesOf'>
 
 export type CreateTaskInput = {
-  title: string; description?: string | null; priority?: unknown; assignee?: string | null
-  depends_on?: number[]; reporter?: string; epic?: boolean; epic_id?: number
+  title: string
+  description?: string | null
+  priority?: unknown
+  assignee?: string | null
+  depends_on?: number[]
+  reporter?: string
+  epic?: boolean
+  epic_id?: number
   defaultReporter: string
-  project: string; projectArchived: boolean
+  project: string
+  projectArchived: boolean
 }
 
 export type UpdateStatusInput = {
-  id: number; agent: string; status: TaskStatus; version?: number
-  comment?: string; renew?: boolean; reset_attempts?: boolean
+  id: number
+  agent: string
+  status: TaskStatus
+  version?: number
+  comment?: string
+  renew?: boolean
+  reset_attempts?: boolean
 }
 
 export type UpdateTaskInput = {
-  id: number; agent: string; version?: number
-  title?: string; description?: string | null; priority?: unknown; depends_on?: number[]; comment?: string
+  id: number
+  agent: string
+  version?: number
+  title?: string
+  description?: string | null
+  priority?: unknown
+  depends_on?: number[]
+  comment?: string
 }
 
 export function editableWindowError(task: Task): SvcError | null {
   if (!EDITABLE_STATUSES.includes(task.status)) {
-    return { code: 'INVALID', message: `cannot edit #${task.id} in status=${task.status}: only a queued task (or an open epic) is editable` }
+    return {
+      code: 'INVALID',
+      message: `cannot edit #${task.id} in status=${task.status}: only a queued task (or an open epic) is editable`
+    }
   }
   if (task.assignee !== null || task.lease_expires_at !== null) {
     return { code: 'INVALID', message: `task #${task.id} holds a lease and is not editable` }
@@ -46,7 +86,8 @@ export function claimEligibilityError(task: Task, store: DepsStore): SvcError | 
   const epicErr = epicNotClaimableError(task)
   if (epicErr) return epicErr
   const deps = parseDeps(task.depends_on)
-  if (!depsSatisfied(store.statusesOf(deps), deps)) return { code: 'BLOCKED', message: 'dependencies not satisfied' }
+  if (!depsSatisfied(store.statusesOf(deps), deps))
+    return { code: 'BLOCKED', message: 'dependencies not satisfied' }
   return null
 }
 
@@ -78,40 +119,62 @@ export function epicTargetRefusal(target: Task | null, project: string): EpicTar
   // task nobody has started. Promoting an in_progress/review/blocked row would silently destroy
   // live work: the holder loses its lease and the status change leaves no audit row of its own.
   // Attaching to an epic that already exists promotes nothing, so the existing statuses stay legal.
-  if (!target.is_epic && target.status !== 'queued') return { kind: 'not-promotable', status: target.status }
+  if (!target.is_epic && target.status !== 'queued')
+    return { kind: 'not-promotable', status: target.status }
   return null
 }
 
 // The up-front mapping: a refusal here is the caller's mistake, so it names what the caller must fix.
 export function epicTargetGuardError(refusal: EpicTargetRefusal, epicId: number): SvcError {
   switch (refusal.kind) {
-    case 'missing': return { code: 'NOT_FOUND', message: '' }
-    case 'terminal': return { code: 'INVALID', message: 'cannot attach to a terminal task' }
-    case 'nested': return { code: 'INVALID', message: 'cannot attach to a sub-task (no nesting)' }
-    case 'project': return { code: 'INVALID', message: `epic #${epicId} belongs to project '${refusal.project}'` }
+    case 'missing':
+      return { code: 'NOT_FOUND', message: '' }
+    case 'terminal':
+      return { code: 'INVALID', message: 'cannot attach to a terminal task' }
+    case 'nested':
+      return { code: 'INVALID', message: 'cannot attach to a sub-task (no nesting)' }
+    case 'project':
+      return { code: 'INVALID', message: `epic #${epicId} belongs to project '${refusal.project}'` }
     case 'not-promotable': {
-      return { code: 'INVALID', message: `cannot promote #${epicId} from ${refusal.status}: only a queued task can become an epic` }
+      return {
+        code: 'INVALID',
+        message: `cannot promote #${epicId} from ${refusal.status}: only a queued task can become an epic`
+      }
     }
   }
 }
 
 // One home for the dependency-list validation: "not found / is an epic / other project". Both
 // call sites (create_task and update_task) read it so the three refusal strings cannot drift.
-export function depsGuardError(store: GuardStore, deps: number[], project: string): SvcError | null {
+export function depsGuardError(
+  store: GuardStore,
+  deps: number[],
+  project: string
+): SvcError | null {
   const batch = store.batchTasks(deps)
   for (const d of deps) {
     const t = batch.get(d)
     if (!t) return { code: 'INVALID', message: `dependency #${d} not found` }
-    if (t.is_epic) return { code: 'INVALID', message: `dependencies on epic tasks not allowed (#${d})` }
-    if (t.project !== project) return { code: 'INVALID', message: `dependency #${d} belongs to project '${t.project ?? ''}'` }
+    if (t.is_epic)
+      return { code: 'INVALID', message: `dependencies on epic tasks not allowed (#${d})` }
+    if (t.project !== project)
+      return {
+        code: 'INVALID',
+        message: `dependency #${d} belongs to project '${t.project ?? ''}'`
+      }
   }
   return null
 }
 
 export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcError | null {
-  const titleErr = requiredError(args.title, 'title') ?? tooLongError(args.title, MAX_TITLE_LENGTH, 'title')
+  const titleErr =
+    requiredError(args.title, 'title') ?? tooLongError(args.title, MAX_TITLE_LENGTH, 'title')
   if (titleErr) return titleErr
-  const reporterErr = tooLongError(args.reporter ?? args.defaultReporter, MAX_AGENT_LENGTH, 'reporter')
+  const reporterErr = tooLongError(
+    args.reporter ?? args.defaultReporter,
+    MAX_AGENT_LENGTH,
+    'reporter'
+  )
   if (reporterErr) return reporterErr
   const assigneeErr = optionalFieldError(args.assignee, MAX_AGENT_LENGTH, 'assignee')
   if (assigneeErr) return assigneeErr
@@ -124,8 +187,10 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   // this local: the stored list is the service's own normalized copy.
   const deps = args.depends_on === undefined ? [] : collapseDeps(args.depends_on)
   if (deps.length > MAX_DEPENDS_ON) return { code: 'INVALID', message: 'depends_on too long' }
-  if (args.epic && args.epic_id !== undefined) return { code: 'INVALID', message: 'epic cannot have a parent epic' }
-  if (args.epic && deps.length > 0) return { code: 'INVALID', message: 'epic cannot have depends_on' }
+  if (args.epic && args.epic_id !== undefined)
+    return { code: 'INVALID', message: 'epic cannot have a parent epic' }
+  if (args.epic && deps.length > 0)
+    return { code: 'INVALID', message: 'epic cannot have depends_on' }
   // An epic is never leased, so it never has a holder; `assignee` means exactly "lease holder"
   // everywhere else. Refuse rather than silently drop the caller's value — the repo also hard-writes
   // NULL for epics, so the invariant holds even if this guard is ever bypassed.
@@ -138,14 +203,21 @@ export function createTaskGuard(args: CreateTaskInput, store: GuardStore): SvcEr
   // refused rather than silently dropped (the same rule as the epic above), and the repo hard-writes
   // NULL, so the invariant holds even if this guard is ever bypassed.
   if (args.assignee !== undefined) {
-    return { code: 'INVALID', message: 'assignee is refused at creation: a task holds a lease only from in_progress' }
+    return {
+      code: 'INVALID',
+      message: 'assignee is refused at creation: a task holds a lease only from in_progress'
+    }
   }
   // G1/G2: `legacy` parks pre-v5 rows and archived projects keep their work readable but take no new
   // task; both are refusals on the resolved project row the service already looked up.
   if (args.project === RESERVED_PROJECT_SLUG) {
-    return { code: 'INVALID', message: `create_task is refused in the reserved project '${RESERVED_PROJECT_SLUG}'` }
+    return {
+      code: 'INVALID',
+      message: `create_task is refused in the reserved project '${RESERVED_PROJECT_SLUG}'`
+    }
   }
-  if (args.projectArchived) return { code: 'INVALID', message: `project '${args.project}' is archived` }
+  if (args.projectArchived)
+    return { code: 'INVALID', message: `project '${args.project}' is archived` }
   if (deps.length > 0) {
     const depErr = depsGuardError(store, deps, args.project)
     if (depErr) return depErr
@@ -172,11 +244,20 @@ export function epicPromotionRaceError(epicId: number): SvcError {
 // the one state with no holder and no work to destroy. Every mismatch means the target changed
 // after the guard accepted it, so it is reported as the race, not as a precondition the caller got
 // wrong.
-export function epicTargetChangedError(target: Task | null, epicId: number, project: string): SvcError | null {
+export function epicTargetChangedError(
+  target: Task | null,
+  epicId: number,
+  project: string
+): SvcError | null {
   return epicTargetRefusal(target, project) ? epicPromotionRaceError(epicId) : null
 }
 
-export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: boolean, store: GuardStore): SvcError | null {
+export function updateStatusGuard(
+  args: UpdateStatusInput,
+  task: Task,
+  refund: boolean,
+  store: GuardStore
+): SvcError | null {
   // version is optional: when omitted the read-time check is skipped, but the write still CASes on
   // the version read here, so a concurrent modification between read and write refuses as CONFLICT.
   if (args.version !== undefined && task.version !== args.version) {
@@ -203,7 +284,10 @@ export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: b
   if (!task.is_epic && args.status === 'open') {
     return { code: 'INVALID', message: `${task.status} → open` }
   }
-  if (task.is_epic && (args.status === 'queued' || args.status === 'review' || args.status === 'blocked')) {
+  if (
+    task.is_epic &&
+    (args.status === 'queued' || args.status === 'review' || args.status === 'blocked')
+  ) {
     return { code: 'INVALID', message: `${task.status} → ${args.status}` }
   }
   if (task.is_epic && args.status === 'in_progress' && task.status !== 'in_progress') {
@@ -215,7 +299,8 @@ export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: b
   if (renewal) {
     const epicErr = epicError(task, `#${task.id} is an epic`)
     if (epicErr) return epicErr
-    if (task.assignee !== args.agent) return { code: 'CONFLICT', message: `lease held by ${task.assignee}` }
+    if (task.assignee !== args.agent)
+      return { code: 'CONFLICT', message: `lease held by ${task.assignee}` }
   }
   // acquiring a lease is a claim-verb concern: update_status must not stay a second, unguarded
   // door to in_progress. The claimTask precondition set maps 1:1 — NOT_FOUND is covered by the
@@ -225,9 +310,10 @@ export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: b
   // the claim and a dependency closed for work stays closed for work — the administrative edge out of
   // `failed` (`failed -> canceled`) closes a task out, it never reopens one.
   if (args.status === 'in_progress' && !selfEdge) {
-    const eligibilityErr = task.status === 'queued' || task.status === 'blocked'
-      ? claimEligibilityError(task, store)
-      : epicNotClaimableError(task)
+    const eligibilityErr =
+      task.status === 'queued' || task.status === 'blocked'
+        ? claimEligibilityError(task, store)
+        : epicNotClaimableError(task)
     if (eligibilityErr) return eligibilityErr
   }
   // an epic is never leased (the in_progress acquisition guard above), so its attempts is always 0 and
@@ -248,8 +334,13 @@ export function updateStatusGuard(args: UpdateStatusInput, task: Task, refund: b
   return null
 }
 
-export function updateTaskGuard(args: UpdateTaskInput, task: Task, store: GuardStore): SvcError | null {
-  const agentErr = requiredError(args.agent, 'agent') ?? tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent')
+export function updateTaskGuard(
+  args: UpdateTaskInput,
+  task: Task,
+  store: GuardStore
+): SvcError | null {
+  const agentErr =
+    requiredError(args.agent, 'agent') ?? tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent')
   if (agentErr) return agentErr
   if (args.comment !== undefined) {
     const commentErr = commentError(args.comment)
@@ -267,7 +358,8 @@ export function updateTaskGuard(args: UpdateTaskInput, task: Task, store: GuardS
     args.depends_on !== undefined
   if (!hasField) return { code: 'INVALID', message: 'nothing to update' }
   if (args.title !== undefined) {
-    const titleErr = requiredError(args.title, 'title') ?? tooLongError(args.title, MAX_TITLE_LENGTH, 'title')
+    const titleErr =
+      requiredError(args.title, 'title') ?? tooLongError(args.title, MAX_TITLE_LENGTH, 'title')
     if (titleErr) return titleErr
   }
   if (args.description !== undefined) {

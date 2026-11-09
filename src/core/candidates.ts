@@ -8,7 +8,12 @@ import { CANDIDATES_PAGE_SIZE } from '../defaults'
 // queue at page granularity: the loop stops once the offset has reached the ceiling, so at most
 // `ceiling + CANDIDATES_PAGE_SIZE - 1` rows are read before it gives up on the rest. Each task is
 // yielded at most once, so an overlapping page can never duplicate a row.
-export function readyCandidates(store: CandidateStore, limit: number, ceiling: number, projectId: number): Task[] {
+export function readyCandidates(
+  store: CandidateStore,
+  limit: number,
+  ceiling: number,
+  projectId: number
+): Task[] {
   const ready: Task[] = []
   if (limit <= 0) return ready
   const depCache = new Map<number, number[]>()
@@ -20,7 +25,10 @@ export function readyCandidates(store: CandidateStore, limit: number, ceiling: n
     const allDeps = new Set<number>()
     for (const row of page) {
       let deps = depCache.get(row.id)
-      if (deps === undefined) { deps = parseDeps(row.depends_on); depCache.set(row.id, deps) }
+      if (deps === undefined) {
+        deps = parseDeps(row.depends_on)
+        depCache.set(row.id, deps)
+      }
       for (const dep of deps) allDeps.add(dep)
     }
     const depStatuses = store.statusesOf(Array.from(allDeps))
@@ -29,7 +37,10 @@ export function readyCandidates(store: CandidateStore, limit: number, ceiling: n
       // a repeated page must not yield the same task twice
       if (yielded.has(row.id)) continue
       // every row of this page was cached in the loop above
-      if (depsSatisfied(depStatuses, depCache.get(row.id)!)) { ready.push(row); yielded.add(row.id) }
+      if (depsSatisfied(depStatuses, depCache.get(row.id)!)) {
+        ready.push(row)
+        yielded.add(row.id)
+      }
     }
     offset += CANDIDATES_PAGE_SIZE
   }

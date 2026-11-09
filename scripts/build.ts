@@ -5,11 +5,19 @@ const pkg = JSON.parse(readFileSync(resolve(import.meta.dir, '../package.json'),
 const version = pkg.version
 
 const proc = Bun.spawn(
-  [process.execPath, 'build', 'src/index.ts', '--compile', '--minify', '--sourcemap', '--outfile', 'dist/ziptask'],
+  [
+    process.execPath,
+    'build',
+    'src/index.ts',
+    '--compile',
+    '--minify',
+    '--sourcemap',
+    '--outfile',
+    'dist/ziptask'
+  ],
   { cwd: resolve(import.meta.dir, '..') }
 )
 
 const status = await proc.exited
 if (status !== 0) process.exit(status)
 console.log(`Built dist/ziptask v${version}`)
-

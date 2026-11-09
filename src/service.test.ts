@@ -2,40 +2,66 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { z } from 'zod/v4'
 import {
-  nowIso, clampLimit, TASK_STATUSES, MAX_RESULT_LIMIT, MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH,
-  MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON, MAX_TITLE_LENGTH
+  nowIso,
+  clampLimit,
+  TASK_STATUSES,
+  MAX_RESULT_LIMIT,
+  MAX_AGENT_LENGTH,
+  MAX_CONTENT_LENGTH,
+  MAX_DESCRIPTION_LENGTH,
+  MAX_DEPENDS_ON,
+  MAX_TITLE_LENGTH
 } from './core/tasks'
 import type { Store } from './core/types'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
-  handleCreateTask, handleClaimTask, handleUpdateStatus,
-  handleListQueue, handleListTasks
+  handleCreateTask,
+  handleClaimTask,
+  handleUpdateStatus,
+  handleListQueue,
+  handleListTasks
 } from './mcp/task-tools'
 import { handleAddComment, handleGetTimeline } from './mcp/comment-tools'
 import { registerAllTools } from './mcp/tools'
 import {
-  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, taskStoreStubs, testProjectId,
+  createTestDb,
+  closeTestDb,
+  insertTaskRow,
+  getTaskRow,
+  json,
+  text,
+  taskStoreStubs,
+  testProjectId,
   type CreateTaskRowOpts
 } from './test-context'
 
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
-afterEach(() => { closeTestDb(db) })
+beforeEach(() => {
+  db = createTestDb()
+  repo = new TaskRepo(db)
+  svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' })
+})
+afterEach(() => {
+  closeTestDb(db)
+})
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
 // The boundary list for depends_on: every dependency must exist, so the ids come from seeded rows
 // rather than from fabricated numbers.
 function existingDeps(count: number): number[] {
-  return repo.transaction(() => Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' })))
+  return repo.transaction(() =>
+    Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' }))
+  )
 }
 
 // The row counts a refusal must not move: a refused call writes no task row, no audit row and no
 // comment, so the three counts are the evidence that nothing was written.
 function storeCounts(): { tasks: number; audit: number; comments: number } {
-  const count = (table: string) => (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+  const count = (table: string) =>
+    (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
   return { tasks: count('tasks'), audit: count('audit_log'), comments: count('comments') }
 }
 
@@ -53,7 +79,9 @@ describe('audit_log toggle', () => {
       const id = json(handleCreateTask(svc, { title: 'NoAudit', reporter: 'dev' })).id
       const logs = db.query('SELECT * FROM audit_log WHERE task_id = ?').all(id) as any[]
       expect(logs.length).toBe(0)
-    } finally { closeTestDb(db) }
+    } finally {
+      closeTestDb(db)
+    }
   })
 
   test('auditLog=false: claim does not write audit row', () => {
@@ -63,7 +91,9 @@ describe('audit_log toggle', () => {
       handleClaimTask(svc, { agent: 'agent-1', task_id: id })
       const logs = db.query('SELECT * FROM audit_log WHERE task_id = ?').all(id) as any[]
       expect(logs.length).toBe(0)
-    } finally { closeTestDb(db) }
+    } finally {
+      closeTestDb(db)
+    }
   })
 
   test('auditLog=false: update_status does not write audit row', () => {
@@ -75,7 +105,9 @@ describe('audit_log toggle', () => {
       handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version })
       const logs = db.query('SELECT * FROM audit_log WHERE task_id = ?').all(id) as any[]
       expect(logs.length).toBe(0)
-    } finally { closeTestDb(db) }
+    } finally {
+      closeTestDb(db)
+    }
   })
 
   test('auditLog=false: comments still insert', () => {
@@ -88,7 +120,9 @@ describe('audit_log toggle', () => {
       expect(comments[0].content).toBe('hello')
       const audit = db.query('SELECT * FROM audit_log WHERE task_id = ?').all(id) as any[]
       expect(audit.length).toBe(0)
-    } finally { closeTestDb(db) }
+    } finally {
+      closeTestDb(db)
+    }
   })
 
   test('auditLog=true (default): audit rows written on create/claim/update (v2)', () => {
@@ -104,7 +138,9 @@ describe('audit_log toggle', () => {
       expect(actions).toContain('create')
       expect(actions).toContain('claim')
       expect(actions).toContain('update_status')
-    } finally { closeTestDb(db) }
+    } finally {
+      closeTestDb(db)
+    }
   })
 })
 
@@ -132,7 +168,9 @@ describe('claimTask atomic transaction (#1705)', () => {
     }
 
     try {
-      expect(() => svc.claimTask({ agent: 'dev', taskId: id })).toThrow('audit append simulated error')
+      expect(() => svc.claimTask({ agent: 'dev', taskId: id })).toThrow(
+        'audit append simulated error'
+      )
     } finally {
       repo.auditAppend = origAuditAppend
     }
@@ -145,12 +183,22 @@ describe('claimTask atomic transaction (#1705)', () => {
 
 describe('reap cooldown (#104)', () => {
   function fakeStore(reapCb?: () => void): Store {
-    return taskStoreStubs({ expiredLeases: () => { reapCb?.(); return [] } })
+    return taskStoreStubs({
+      expiredLeases: () => {
+        reapCb?.()
+        return []
+      }
+    })
   }
 
   test('first read call reaps (lastReapAt=0), second read within cooldown skips', () => {
     let reapCallCount = 0
-    const svc = new TaskService(fakeStore(() => { reapCallCount++ }), { reapCooldownSec: 3600, scope: 'test' })
+    const svc = new TaskService(
+      fakeStore(() => {
+        reapCallCount++
+      }),
+      { reapCooldownSec: 3600, scope: 'test' }
+    )
 
     svc.getTaskView(1)
     expect(reapCallCount).toBe(1)
@@ -179,7 +227,12 @@ describe('reap cooldown (#104)', () => {
 
   test('reapCooldownSec=0 reaps on every call (no caching)', () => {
     let reapCallCount = 0
-    const svc = new TaskService(fakeStore(() => { reapCallCount++ }), { reapCooldownSec: 0, scope: 'test' })
+    const svc = new TaskService(
+      fakeStore(() => {
+        reapCallCount++
+      }),
+      { reapCooldownSec: 0, scope: 'test' }
+    )
 
     svc.getTaskView(1)
     expect(reapCallCount).toBe(1)
@@ -191,7 +244,12 @@ describe('reap cooldown (#104)', () => {
 
   test('public reapExpiredLeases always forces regardless of cooldown', () => {
     let reapCallCount = 0
-    const svc = new TaskService(fakeStore(() => { reapCallCount++ }), { reapCooldownSec: 3600, scope: 'test' })
+    const svc = new TaskService(
+      fakeStore(() => {
+        reapCallCount++
+      }),
+      { reapCooldownSec: 3600, scope: 'test' }
+    )
 
     svc.getTaskView(1)
     expect(reapCallCount).toBe(1)
@@ -215,7 +273,7 @@ describe('auto-claim ceiling (#105)', () => {
           title: `Blocked ${i}`,
           description: null,
           priority: 'p2',
-                    reporter: 'dev',
+          reporter: 'dev',
           depends_on: JSON.stringify([999]),
           now: nowIso(),
           projectId: testProjectId(repo2)
@@ -226,7 +284,7 @@ describe('auto-claim ceiling (#105)', () => {
       title: 'Free',
       description: null,
       priority: 'p2',
-            reporter: 'dev',
+      reporter: 'dev',
       depends_on: '[]',
       now: nowIso(),
       projectId: testProjectId(repo2)
@@ -250,7 +308,7 @@ describe('auto-claim ceiling (#105)', () => {
           title: `Blocked ${i}`,
           description: null,
           priority: 'p2',
-                    reporter: 'dev',
+          reporter: 'dev',
           depends_on: JSON.stringify([999]),
           now: nowIso(),
           projectId: testProjectId(repo2)
@@ -261,7 +319,7 @@ describe('auto-claim ceiling (#105)', () => {
       title: 'Free',
       description: null,
       priority: 'p2',
-            reporter: 'dev',
+      reporter: 'dev',
       depends_on: '[]',
       now: nowIso(),
       projectId: testProjectId(repo2)
@@ -327,7 +385,11 @@ describe('limit guards (#3)', () => {
 
 describe('service defaults from config (#6)', () => {
   test('defaultPriority/defaultReporter are honoured when args omit them', () => {
-    const configured = new TaskService(repo, { defaultPriority: 'p0', defaultReporter: 'human', scope: 'test' })
+    const configured = new TaskService(repo, {
+      defaultPriority: 'p0',
+      defaultReporter: 'human',
+      scope: 'test'
+    })
     const id = json(handleCreateTask(configured, { title: 'C' })).id
     const row = getTaskRow(db, id)
     expect(row.priority).toBe('p0')
@@ -345,7 +407,9 @@ describe('atomicity: createTask cycle path (#767)', () => {
     // Task B (id=2) should not exist (cycle rejected)
     expect(getTaskRow(db, 2)).toBeNull()
     // No audit row for B
-    const auditB = db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = 2').get() as { n: number }
+    const auditB = db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = 2').get() as {
+      n: number
+    }
     expect(auditB.n).toBe(0)
     // Task A exists and has its own create audit
     const taskA = getTaskRow(db, a)
@@ -363,14 +427,22 @@ describe('atomicity: updateStatus transaction (#767)', () => {
     const id = json(handleCreateTask(svc, { title: 'Atomic', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
-    const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version, comment: 'atomic note' })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'review',
+      version: task.version,
+      comment: 'atomic note'
+    })
     expect(json(res).status).toBe('review')
     // Audit row written
-    const audits = db.query("SELECT * FROM audit_log WHERE task_id = ? AND action = 'update_status'").all(id) as any[]
+    const audits = db
+      .query("SELECT * FROM audit_log WHERE task_id = ? AND action = 'update_status'")
+      .all(id) as any[]
     expect(audits.length).toBe(1)
     expect(audits[0].new_value).toBe('review')
     // Comment written
-    const comments = db.query("SELECT * FROM comments WHERE task_id = ?").all(id) as any[]
+    const comments = db.query('SELECT * FROM comments WHERE task_id = ?').all(id) as any[]
     expect(comments.length).toBe(1)
     expect(comments[0].content).toBe('atomic note')
     expect(comments[0].type).toBe('comment')
@@ -380,14 +452,24 @@ describe('atomicity: updateStatus transaction (#767)', () => {
     const id = json(handleCreateTask(svc, { title: 'NoAudit', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     // Use stale version (1 instead of current)
-    const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: 1, comment: 'should not appear' })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'review',
+      version: 1,
+      comment: 'should not appear'
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('CONFLICT')
     // No audit row
-    const audits = db.query("SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = 'update_status'").get(id) as { n: number }
+    const audits = db
+      .query("SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = 'update_status'")
+      .get(id) as { n: number }
     expect(audits.n).toBe(0)
     // No comment
-    const comments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }
+    const comments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as {
+      n: number
+    }
     expect(comments.n).toBe(0)
   })
 
@@ -397,7 +479,13 @@ describe('atomicity: updateStatus transaction (#767)', () => {
     const t1 = getTaskRow(db, id)
     handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: t1.version })
     const t2 = getTaskRow(db, id)
-    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'done', version: t2.version, comment: 'all good' })
+    handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'done',
+      version: t2.version,
+      comment: 'all good'
+    })
     const comment = db.query('SELECT type FROM comments WHERE task_id = ?').get(id) as any
     expect(comment.type).toBe('resolution')
   })
@@ -409,7 +497,14 @@ describe('CAS: transitionStatus returns changes (#767)', () => {
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
     // transitionStatus is on the repo; call it directly
-    const changes = repo.transitionStatus(id, task.version, 'review', new Date().toISOString(), null, null)
+    const changes = repo.transitionStatus(
+      id,
+      task.version,
+      'review',
+      new Date().toISOString(),
+      null,
+      null
+    )
     expect(changes).toBe(1)
   })
 
@@ -418,7 +513,14 @@ describe('CAS: transitionStatus returns changes (#767)', () => {
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
     // Use wrong version
-    const changes = repo.transitionStatus(id, task.version + 999, 'review', new Date().toISOString(), null, null)
+    const changes = repo.transitionStatus(
+      id,
+      task.version + 999,
+      'review',
+      new Date().toISOString(),
+      null,
+      null
+    )
     expect(changes).toBe(0)
     // Task status unchanged
     const still = getTaskRow(db, id)
@@ -429,7 +531,12 @@ describe('CAS: transitionStatus returns changes (#767)', () => {
     const id = json(handleCreateTask(svc, { title: 'CAS3', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
-    const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version + 999 })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'review',
+      version: task.version + 999
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('CONFLICT')
   })
@@ -440,19 +547,33 @@ describe('deleteTask cascade (#795)', () => {
     const id = json(handleCreateTask(svc, { title: 'DeleteMe', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
-    handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task.version, comment: 'pre-delete note' })
+    handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'review',
+      version: task.version,
+      comment: 'pre-delete note'
+    })
     handleAddComment(svc, { id, agent: 'dev', content: 'extra comment' })
 
-    const beforeComments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }
-    const beforeAudit = db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }
+    const beforeComments = db
+      .query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?')
+      .get(id) as { n: number }
+    const beforeAudit = db
+      .query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?')
+      .get(id) as { n: number }
     expect(beforeComments.n).toBeGreaterThan(0)
     expect(beforeAudit.n).toBeGreaterThan(0)
 
     repo.deleteTask(id)
 
     expect(getTaskRow(db, id)).toBeNull()
-    const afterComments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }
-    const afterAudit = db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }
+    const afterComments = db
+      .query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?')
+      .get(id) as { n: number }
+    const afterAudit = db
+      .query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?')
+      .get(id) as { n: number }
     expect(afterComments.n).toBe(0)
     expect(afterAudit.n).toBe(0)
   })
@@ -467,14 +588,22 @@ describe('deleteTask cascade (#795)', () => {
     const id = json(handleCreateTask(svc, { title: 'CascadeMe', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     handleAddComment(svc, { id, agent: 'dev', content: 'note' })
-    expect((db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }).n).toBeGreaterThan(0)
-    expect((db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n).toBeGreaterThan(0)
+    expect(
+      (db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }).n
+    ).toBeGreaterThan(0)
+    expect(
+      (db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n
+    ).toBeGreaterThan(0)
 
     // bypass deleteTask entirely: only the ON DELETE CASCADE can clean the children
     db.run('DELETE FROM tasks WHERE id = ?', [id])
 
-    expect((db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }).n).toBe(0)
-    expect((db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n).toBe(0)
+    expect(
+      (db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }).n
+    ).toBe(0)
+    expect(
+      (db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n
+    ).toBe(0)
   })
 })
 
@@ -501,7 +630,12 @@ describe('length limits: agent and content (#795)', () => {
     const id = json(handleCreateTask(svc, { title: 'UpdLongAgent', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'ok', task_id: id })
     const task = getTaskRow(db, id)
-    const res = handleUpdateStatus(svc, { id, agent: LONG_AGENT, status: 'review', version: task!.version })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: LONG_AGENT,
+      status: 'review',
+      version: task!.version
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('INVALID: agent too long')
   })
@@ -510,7 +644,13 @@ describe('length limits: agent and content (#795)', () => {
     const id = json(handleCreateTask(svc, { title: 'UpdLongComment', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'ok', task_id: id })
     const task = getTaskRow(db, id)
-    const res = handleUpdateStatus(svc, { id, agent: 'ok', status: 'review', version: task!.version, comment: LONG_CONTENT })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'ok',
+      status: 'review',
+      version: task!.version,
+      comment: LONG_CONTENT
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('INVALID: comment too long')
   })
@@ -519,7 +659,15 @@ describe('length limits: agent and content (#795)', () => {
     const id = json(handleCreateTask(svc, { title: 'UpdOkComment', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'ok', task_id: id })
     const task = getTaskRow(db, id)
-    const res = json(handleUpdateStatus(svc, { id, agent: 'ok', status: 'review', version: task!.version, comment: OK_CONTENT }))
+    const res = json(
+      handleUpdateStatus(svc, {
+        id,
+        agent: 'ok',
+        status: 'review',
+        version: task!.version,
+        comment: OK_CONTENT
+      })
+    )
     expect(res.status).toBe('review')
     const comments = db.query('SELECT content FROM comments WHERE task_id = ?').all(id) as any[]
     expect(comments.length).toBe(1)
@@ -544,7 +692,9 @@ describe('length limits: agent and content (#795)', () => {
     const id = json(handleCreateTask(svc, { title: 'CmtOk', reporter: 'dev' })).id
     const res = json(handleAddComment(svc, { id, agent: OK_AGENT, content: OK_CONTENT }))
     expect(res.comment_id).toBeGreaterThan(0)
-    const row = db.query('SELECT agent, content FROM comments WHERE id = ?').get(res.comment_id) as any
+    const row = db
+      .query('SELECT agent, content FROM comments WHERE id = ?')
+      .get(res.comment_id) as any
     expect(row.agent).toBe(OK_AGENT)
     expect(row.content).toBe(OK_CONTENT)
   })
@@ -555,7 +705,13 @@ describe('empty/whitespace comment rejection in updateStatus (#810)', () => {
     const id = json(handleCreateTask(svc, { title: 'EmptyComment', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
-    const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task!.version, comment: '' })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'review',
+      version: task!.version,
+      comment: ''
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('INVALID: comment required')
   })
@@ -564,7 +720,13 @@ describe('empty/whitespace comment rejection in updateStatus (#810)', () => {
     const id = json(handleCreateTask(svc, { title: 'WsComment', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
-    const res = handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task!.version, comment: '   ' })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'agent-1',
+      status: 'review',
+      version: task!.version,
+      comment: '   '
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('INVALID: comment required')
   })
@@ -573,7 +735,15 @@ describe('empty/whitespace comment rejection in updateStatus (#810)', () => {
     const id = json(handleCreateTask(svc, { title: 'OkComment', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
-    const res = json(handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task!.version, comment: 'valid note' }))
+    const res = json(
+      handleUpdateStatus(svc, {
+        id,
+        agent: 'agent-1',
+        status: 'review',
+        version: task!.version,
+        comment: 'valid note'
+      })
+    )
     expect(res.status).toBe('review')
   })
 
@@ -581,9 +751,13 @@ describe('empty/whitespace comment rejection in updateStatus (#810)', () => {
     const id = json(handleCreateTask(svc, { title: 'NoComment', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
-    const res = json(handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task!.version }))
+    const res = json(
+      handleUpdateStatus(svc, { id, agent: 'agent-1', status: 'review', version: task!.version })
+    )
     expect(res.status).toBe('review')
-    const comments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as { n: number }
+    const comments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as {
+      n: number
+    }
     expect(comments.n).toBe(0)
   })
 })
@@ -605,7 +779,11 @@ describe('reporter/assignee length guards in createTask (#811)', () => {
   })
 
   test('createTask rejects assignee > MAX_AGENT_LENGTH', () => {
-    const res = handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: LONG_AGENT })
+    const res = handleCreateTask(svc, {
+      title: 'LongAssignee',
+      reporter: 'dev',
+      assignee: LONG_AGENT
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('INVALID: assignee too long')
   })
@@ -615,7 +793,9 @@ describe('reporter/assignee length guards in createTask (#811)', () => {
     // instead of the length error: a name that is legal as a holder is still not a holder at birth.
     const res = handleCreateTask(svc, { title: 'OkAssignee', reporter: 'dev', assignee: OK_AGENT })
     expect(res.isError).toBe(true)
-    expect(text(res)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+    expect(text(res)).toBe(
+      'INVALID: assignee is refused at creation: a task holds a lease only from in_progress'
+    )
   })
 })
 
@@ -624,7 +804,8 @@ describe('reporter/assignee length guards in createTask (#811)', () => {
 // queue is shared, the auto-pick is not assignee-aware, the first claim overwrites the column).
 // The value is refused at creation, and the store hard-writes NULL behind that guard.
 describe('a creation-time assignee is refused (#1872)', () => {
-  const REFUSAL = 'INVALID: assignee is refused at creation: a task holds a lease only from in_progress'
+  const REFUSAL =
+    'INVALID: assignee is refused at creation: a task holds a lease only from in_progress'
 
   test('createTask refuses an assignee with the documented INVALID string', () => {
     const res = handleCreateTask(svc, { title: 'Leased', reporter: 'dev', assignee: 'worker' })
@@ -647,13 +828,22 @@ describe('a creation-time assignee is refused (#1872)', () => {
   })
 
   test('the epic rule is still checked first and keeps its own message', () => {
-    const res = handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true, assignee: 'boss' })
+    const res = handleCreateTask(svc, {
+      title: 'Epic',
+      reporter: 'dev',
+      epic: true,
+      assignee: 'boss'
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toBe('INVALID: an epic takes no assignee: it holds no lease')
   })
 
   test('the length guard still runs first: an over-long assignee is refused as too long', () => {
-    const res = handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: 'a'.repeat(MAX_AGENT_LENGTH + 1) })
+    const res = handleCreateTask(svc, {
+      title: 'LongAssignee',
+      reporter: 'dev',
+      assignee: 'a'.repeat(MAX_AGENT_LENGTH + 1)
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toBe('INVALID: assignee too long')
   })
@@ -662,8 +852,13 @@ describe('a creation-time assignee is refused (#1872)', () => {
     // The guard is the first line of defence; the repo is the last one. A bypass or a cross-process
     // race that reaches the store with a value in hand must not leave a holder without a lease.
     const id = repo.insertTask({
-      title: 'Bypass', description: null, priority: 'p2', reporter: 'dev',
-      depends_on: '[]', now: nowIso(), projectId: testProjectId(repo)
+      title: 'Bypass',
+      description: null,
+      priority: 'p2',
+      reporter: 'dev',
+      depends_on: '[]',
+      now: nowIso(),
+      projectId: testProjectId(repo)
     }).id
     const row = getTaskRow(db, id)!
     expect(row.status).toBe('queued')
@@ -680,24 +875,42 @@ describe('create_task input bounds (#1857)', () => {
   const TOO_MANY_DEPS = Array.from({ length: MAX_DEPENDS_ON + 1 }, (_, i) => 9000 + i)
 
   test('createTask refuses a description over the limit with the documented INVALID string', () => {
-    const res = handleCreateTask(svc, { title: 'LongDescription', reporter: 'dev', description: LONG_DESCRIPTION })
+    const res = handleCreateTask(svc, {
+      title: 'LongDescription',
+      reporter: 'dev',
+      description: LONG_DESCRIPTION
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toBe('INVALID: description too long')
   })
 
   test('the description refusal writes no task row, no audit row and no comment', () => {
     const before = storeCounts()
-    handleCreateTask(svc, { title: 'LongDescription', reporter: 'dev', description: LONG_DESCRIPTION })
+    handleCreateTask(svc, {
+      title: 'LongDescription',
+      reporter: 'dev',
+      description: LONG_DESCRIPTION
+    })
     expect(storeCounts()).toEqual(before)
   })
 
   test('createTask accepts a description exactly at the limit and stores it verbatim', () => {
-    const id = json(handleCreateTask(svc, { title: 'OkDescription', reporter: 'dev', description: OK_DESCRIPTION })).id
+    const id = json(
+      handleCreateTask(svc, {
+        title: 'OkDescription',
+        reporter: 'dev',
+        description: OK_DESCRIPTION
+      })
+    ).id
     expect(getTaskRow(db, id).description).toBe(OK_DESCRIPTION)
   })
 
   test('createTask refuses a depends_on array over the limit with the documented INVALID string', () => {
-    const res = handleCreateTask(svc, { title: 'TooManyDeps', reporter: 'dev', depends_on: TOO_MANY_DEPS })
+    const res = handleCreateTask(svc, {
+      title: 'TooManyDeps',
+      reporter: 'dev',
+      depends_on: TOO_MANY_DEPS
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toBe('INVALID: depends_on too long')
   })
@@ -710,7 +923,9 @@ describe('create_task input bounds (#1857)', () => {
 
   test('createTask accepts a depends_on array exactly at the limit and stores every id', () => {
     const deps = existingDeps(MAX_DEPENDS_ON)
-    const id = json(handleCreateTask(svc, { title: 'MaxDeps', reporter: 'dev', depends_on: deps })).id
+    const id = json(
+      handleCreateTask(svc, { title: 'MaxDeps', reporter: 'dev', depends_on: deps })
+    ).id
     expect(JSON.parse(getTaskRow(db, id).depends_on)).toEqual(deps)
   })
 })
@@ -726,7 +941,8 @@ describe('the create_task string bounds count code points (#1874)', () => {
   const multiByte = (n: number): string => EMOJI.repeat(n)
   // A string of exactly n code points, half ASCII and half multi-byte: a counter that measures
   // only one kind of character would miss the other.
-  const mixed = (n: number): string => 'a'.repeat(Math.floor(n / 2)) + EMOJI.repeat(n - Math.floor(n / 2))
+  const mixed = (n: number): string =>
+    'a'.repeat(Math.floor(n / 2)) + EMOJI.repeat(n - Math.floor(n / 2))
   // The code-point count of a string, measured independently of the production helper.
   const codePoints = (value: string): number => [...value].length
 
@@ -734,7 +950,14 @@ describe('the create_task string bounds count code points (#1874)', () => {
   // against, so a schema/guard disagreement shows up here and not only over the wire.
   function createTaskShape(): any {
     let shape: any
-    registerAllTools({ registerTool: (name: string, cfg: any) => { if (name === 'create_task') shape = cfg.inputSchema } } as any, svc)
+    registerAllTools(
+      {
+        registerTool: (name: string, cfg: any) => {
+          if (name === 'create_task') shape = cfg.inputSchema
+        }
+      } as any,
+      svc
+    )
     return shape
   }
 
@@ -821,7 +1044,10 @@ describe('the create_task string bounds count code points (#1874)', () => {
 
   describe('the refusal strings are exact and write nothing', () => {
     test('the schema refuses a description with the exact documented string', () => {
-      const parsed = createTaskShape().safeParse({ title: 'Schema', description: multiByte(MAX_DESCRIPTION_LENGTH + 1) })
+      const parsed = createTaskShape().safeParse({
+        title: 'Schema',
+        description: multiByte(MAX_DESCRIPTION_LENGTH + 1)
+      })
       expect(parsed.success).toBe(false)
       const issues = (parsed as any).error.issues
       expect(issues[0].message).toBe('INVALID: description too long')
@@ -838,7 +1064,11 @@ describe('the create_task string bounds count code points (#1874)', () => {
 
     test('the guard refuses a description with the exact documented string and writes nothing', () => {
       const before = storeCounts()
-      const res = handleCreateTask(svc, { title: 'LongDescription', reporter: 'dev', description: multiByte(MAX_DESCRIPTION_LENGTH + 1) })
+      const res = handleCreateTask(svc, {
+        title: 'LongDescription',
+        reporter: 'dev',
+        description: multiByte(MAX_DESCRIPTION_LENGTH + 1)
+      })
       expect(res.isError).toBe(true)
       expect(text(res)).toBe('INVALID: description too long')
       expect(storeCounts()).toEqual(before)
@@ -864,13 +1094,22 @@ describe('the create_task string bounds count code points (#1874)', () => {
 
   describe('the unchanged paths stay pinned', () => {
     test('an epic still answers the epic refusal, not the creation refusal', () => {
-      const res = handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true, assignee: 'boss' })
+      const res = handleCreateTask(svc, {
+        title: 'Epic',
+        reporter: 'dev',
+        epic: true,
+        assignee: 'boss'
+      })
       expect(res.isError).toBe(true)
       expect(text(res)).toBe('INVALID: an epic takes no assignee: it holds no lease')
     })
 
     test('the length guard runs before the creation refusal: an over-long assignee is refused as too long', () => {
-      const res = handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: multiByte(MAX_AGENT_LENGTH + 1) })
+      const res = handleCreateTask(svc, {
+        title: 'LongAssignee',
+        reporter: 'dev',
+        assignee: multiByte(MAX_AGENT_LENGTH + 1)
+      })
       expect(res.isError).toBe(true)
       expect(text(res)).toBe('INVALID: assignee too long')
     })
@@ -887,7 +1126,11 @@ describe('the create_task string bounds count code points (#1874)', () => {
       const parsed = shape.safeParse({ title: 'TooManyDeps', depends_on: tooManyDeps })
       expect(parsed.success).toBe(false)
       expect((parsed as any).error.issues[0].message).toBe('INVALID: depends_on too long')
-      const res = handleCreateTask(svc, { title: 'TooManyDeps', reporter: 'dev', depends_on: tooManyDeps })
+      const res = handleCreateTask(svc, {
+        title: 'TooManyDeps',
+        reporter: 'dev',
+        depends_on: tooManyDeps
+      })
       expect(res.isError).toBe(true)
       expect(text(res)).toBe('INVALID: depends_on too long')
     })
@@ -952,17 +1195,31 @@ describe('the create_task string bounds count code points (#1874)', () => {
     test('the guard order is pinned: the length refusal comes before the creation refusal', () => {
       // An over-long assignee is too long FIRST; an in-bounds one reaches the creation refusal.
       // Both strings are unchanged - the order is what the test pins.
-      const over = handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: multiByte(MAX_AGENT_LENGTH + 1) })
+      const over = handleCreateTask(svc, {
+        title: 'LongAssignee',
+        reporter: 'dev',
+        assignee: multiByte(MAX_AGENT_LENGTH + 1)
+      })
       expect(over.isError).toBe(true)
       expect(text(over)).toBe('INVALID: assignee too long')
-      const inBounds = handleCreateTask(svc, { title: 'Assignee', reporter: 'dev', assignee: 'boss' })
+      const inBounds = handleCreateTask(svc, {
+        title: 'Assignee',
+        reporter: 'dev',
+        assignee: 'boss'
+      })
       expect(inBounds.isError).toBe(true)
-      expect(text(inBounds)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+      expect(text(inBounds)).toBe(
+        'INVALID: assignee is refused at creation: a task holds a lease only from in_progress'
+      )
     })
 
     test('the assignee length refusal writes no task row, no audit row and no comment', () => {
       const before = storeCounts()
-      handleCreateTask(svc, { title: 'LongAssignee', reporter: 'dev', assignee: multiByte(MAX_AGENT_LENGTH + 1) })
+      handleCreateTask(svc, {
+        title: 'LongAssignee',
+        reporter: 'dev',
+        assignee: multiByte(MAX_AGENT_LENGTH + 1)
+      })
       expect(storeCounts()).toEqual(before)
     })
 
@@ -974,7 +1231,9 @@ describe('the create_task string bounds count code points (#1874)', () => {
       expect(createTaskShape().safeParse({ title: 'AssigneeAtLimit', assignee }).success).toBe(true)
       const res = handleCreateTask(svc, { title: 'AssigneeAtLimit', reporter: 'dev', assignee })
       expect(res.isError).toBe(true)
-      expect(text(res)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+      expect(text(res)).toBe(
+        'INVALID: assignee is refused at creation: a task holds a lease only from in_progress'
+      )
     })
   })
 })
@@ -998,7 +1257,9 @@ describe('claimTask whitespace agent (#811)', () => {
 describe('claimTask taskId branch (F1 #1040)', () => {
   test('claimTask with an explicit taskId claims that task, not the queue head', () => {
     const bait = json(handleCreateTask(svc, { title: 'Bait', reporter: 'dev', priority: 'p0' })).id
-    const target = json(handleCreateTask(svc, { title: 'Target', reporter: 'dev', priority: 'p3' })).id
+    const target = json(
+      handleCreateTask(svc, { title: 'Target', reporter: 'dev', priority: 'p3' })
+    ).id
     const res = svc.claimTask({ agent: 'test', taskId: target })
     expect(res.ok).toBe(true)
     if (!res.ok) throw new Error('unreachable')
@@ -1024,7 +1285,9 @@ describe('claimTask taskId branch (F1 #1040)', () => {
 
   test('the wire name task_id is not a core parameter: only taskId is honoured', () => {
     const bait = json(handleCreateTask(svc, { title: 'Bait', reporter: 'dev', priority: 'p0' })).id
-    const target = json(handleCreateTask(svc, { title: 'Target', reporter: 'dev', priority: 'p3' })).id
+    const target = json(
+      handleCreateTask(svc, { title: 'Target', reporter: 'dev', priority: 'p3' })
+    ).id
     // The wire-shaped {task_id} leaves core's taskId undefined, so the auto-pick branch
     // runs and takes the p0 bait. Proof the id/task_id resolution lives at the MCP edge.
     const res = svc.claimTask({ agent: 'test', task_id: target } as any)
@@ -1038,7 +1301,14 @@ describe('claimTask taskId branch (F1 #1040)', () => {
 describe('listTasks invalid status filter (#811)', () => {
   test('listTasks rejects an unknown status through the input schema enum', () => {
     let schema: any
-    registerAllTools({ registerTool: (name: string, cfg: any) => { if (name === 'list_tasks') schema = cfg.inputSchema } } as any, svc)
+    registerAllTools(
+      {
+        registerTool: (name: string, cfg: any) => {
+          if (name === 'list_tasks') schema = cfg.inputSchema
+        }
+      } as any,
+      svc
+    )
     expect(schema.safeParse({ status: 'invalid_status' }).success).toBe(false)
     // the enum is sourced from TASK_STATUSES, so every status must pass and nothing else may
     for (const status of TASK_STATUSES) {
@@ -1056,41 +1326,65 @@ describe('listTasks invalid status filter (#811)', () => {
 
 describe('TaskService error contract after the hygiene refactor (#1445)', () => {
   test('claim: an unknown task id is NOT_FOUND:', () => {
-    expect(svc.claimTask({ agent: 'a', taskId: 9999 })).toEqual({ ok: false, error: { code: 'NOT_FOUND', message: '' } })
+    expect(svc.claimTask({ agent: 'a', taskId: 9999 })).toEqual({
+      ok: false,
+      error: { code: 'NOT_FOUND', message: '' }
+    })
   })
 
   test('claim: an already-leased task is CONFLICT: status=<current>', () => {
     const id = json(handleCreateTask(svc, { title: 'Busy', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'a', task_id: id })
-    expect(svc.claimTask({ agent: 'b', taskId: id })).toEqual({ ok: false, error: { code: 'CONFLICT', message: 'status=in_progress' } })
+    expect(svc.claimTask({ agent: 'b', taskId: id })).toEqual({
+      ok: false,
+      error: { code: 'CONFLICT', message: 'status=in_progress' }
+    })
   })
 
   test('claim: an empty queue is EMPTY: no claimable tasks', () => {
-    expect(svc.claimTask({ agent: 'a' })).toEqual({ ok: false, error: { code: 'EMPTY', message: 'no claimable tasks' } })
+    expect(svc.claimTask({ agent: 'a' })).toEqual({
+      ok: false,
+      error: { code: 'EMPTY', message: 'no claimable tasks' }
+    })
   })
 
   test('claim: a lost compare-and-swap is CONFLICT: version mismatch', () => {
     const id = json(handleCreateTask(svc, { title: 'LostRace', reporter: 'dev' })).id
     const raced = new TaskRepo(db)
     raced.markClaimed = () => 0
-    expect(new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }).claimTask({ agent: 'a', taskId: id }))
-      .toEqual({ ok: false, error: { code: 'CONFLICT', message: 'version mismatch' } })
+    expect(
+      new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }).claimTask({
+        agent: 'a',
+        taskId: id
+      })
+    ).toEqual({ ok: false, error: { code: 'CONFLICT', message: 'version mismatch' } })
   })
 
   test('update_status: an unknown task id is NOT_FOUND:', () => {
-    expect(svc.updateStatus({ id: 9999, agent: 'a', status: 'blocked', version: 1 }))
-      .toEqual({ ok: false, error: { code: 'NOT_FOUND', message: '' } })
+    expect(svc.updateStatus({ id: 9999, agent: 'a', status: 'blocked', version: 1 })).toEqual({
+      ok: false,
+      error: { code: 'NOT_FOUND', message: '' }
+    })
   })
 
   test('update_status: a lost compare-and-swap is CONFLICT: concurrent modification', () => {
     const id = json(handleCreateTask(svc, { title: 'LostRace2', reporter: 'dev' })).id
     const raced = new TaskRepo(db)
     raced.transitionStatus = () => 0
-    expect(new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }).updateStatus({ id, agent: 'a', status: 'blocked', version: 1 }))
-      .toEqual({ ok: false, error: { code: 'CONFLICT', message: 'concurrent modification' } })
+    expect(
+      new TaskService(raced, { leaseTtlMin: 15, scope: 'test' }).updateStatus({
+        id,
+        agent: 'a',
+        status: 'blocked',
+        version: 1
+      })
+    ).toEqual({ ok: false, error: { code: 'CONFLICT', message: 'concurrent modification' } })
   })
 
   test('add_comment: an unknown task id is NOT_FOUND:', () => {
-    expect(svc.addComment({ id: 9999, agent: 'a', content: 'x' })).toEqual({ ok: false, error: { code: 'NOT_FOUND', message: '' } })
+    expect(svc.addComment({ id: 9999, agent: 'a', content: 'x' })).toEqual({
+      ok: false,
+      error: { code: 'NOT_FOUND', message: '' }
+    })
   })
 })

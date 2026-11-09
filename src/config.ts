@@ -2,21 +2,39 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { z } from 'zod/v4'
 import {
-  DEFAULT_DB_PATH, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
-  DEFAULT_REAP_COOLDOWN_SEC, DEFAULT_AUTO_CLAIM_CEILING, DEFAULT_HTTP_MAX_SESSIONS,
-  DEFAULT_HTTP_SESSION_TTL_MS, DEFAULT_PRIORITY, DEFAULT_REPORTER, DEFAULT_LIST_LIMIT,
-  DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT, DEFAULT_LOG_LEVEL, DEFAULT_AUDIT_LOG,
+  DEFAULT_DB_PATH,
+  DEFAULT_HOST,
+  DEFAULT_PORT,
+  DEFAULT_LEASE_TTL_MIN,
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_REAP_COOLDOWN_SEC,
+  DEFAULT_AUTO_CLAIM_CEILING,
+  DEFAULT_HTTP_MAX_SESSIONS,
+  DEFAULT_HTTP_SESSION_TTL_MS,
+  DEFAULT_PRIORITY,
+  DEFAULT_REPORTER,
+  DEFAULT_LIST_LIMIT,
+  DEFAULT_TIMELINE_LIMIT,
+  DEFAULT_QUEUE_LIMIT,
+  DEFAULT_LOG_LEVEL,
+  DEFAULT_AUDIT_LOG,
   LEVELS
 } from './defaults'
-import { isTaskPriorityInput, normalizePriority, PRIORITY_INVALID_MESSAGE, MAX_LEASE_TTL_MIN } from './core/tasks'
+import {
+  isTaskPriorityInput,
+  normalizePriority,
+  PRIORITY_INVALID_MESSAGE,
+  MAX_LEASE_TTL_MIN
+} from './core/tasks'
 
 // The configured default accepts the same shapes as create_task (the canonical "pN", the number N
 // and the digit string "N"): the normalizer in src/core/tasks.ts is the one mapping, and the
 // transform turns the accepted shape into the canonical string the settings carry.
-export const PRIORITY_INPUT = z.unknown().refine(
-  (value) => value === undefined || isTaskPriorityInput(value),
-  { message: `INVALID: ${PRIORITY_INVALID_MESSAGE}` }
-)
+export const PRIORITY_INPUT = z
+  .unknown()
+  .refine((value) => value === undefined || isTaskPriorityInput(value), {
+    message: `INVALID: ${PRIORITY_INVALID_MESSAGE}`
+  })
 
 export const DEFAULTS = Object.freeze({
   dbPath: DEFAULT_DB_PATH,
@@ -50,9 +68,12 @@ const boundaries = {
   maxAttempts: z.number().int().positive(),
   reapCooldownSec: z.number().int().positive(),
   autoClaimCeiling: z.number().int().positive(),
-  http: partialGroup({ maxSessions: z.number().int().positive(), sessionTtlMs: z.number().int().positive() }),
+  http: partialGroup({
+    maxSessions: z.number().int().positive(),
+    sessionTtlMs: z.number().int().positive()
+  }),
   defaults: partialGroup({
-    priority: PRIORITY_INPUT.optional().transform(value => normalizePriority(value) ?? undefined),
+    priority: PRIORITY_INPUT.optional().transform((value) => normalizePriority(value) ?? undefined),
     reporter: z.string(),
     listLimit: z.number().int().positive(),
     timelineLimit: z.number().int().positive(),
@@ -60,11 +81,13 @@ const boundaries = {
   })
 }
 
-const SettingsSchema = z.object({
-  ...boundaries,
-  logging: partialGroup({ level: z.enum(LEVELS) }),
-  auditLog: z.boolean()
-}).partial()
+const SettingsSchema = z
+  .object({
+    ...boundaries,
+    logging: partialGroup({ level: z.enum(LEVELS) }),
+    auditLog: z.boolean()
+  })
+  .partial()
 
 // The env layer is the last word, so the merged result is re-validated against the same
 // boundaries minus logging.level: that one stays a raw string on purpose (the logger parses
@@ -79,9 +102,12 @@ const CompleteSettingsSchema = z.object({
   maxAttempts: z.number().int().positive(),
   reapCooldownSec: z.number().int().positive(),
   autoClaimCeiling: z.number().int().positive(),
-  http: z.object({ maxSessions: z.number().int().positive(), sessionTtlMs: z.number().int().positive() }),
+  http: z.object({
+    maxSessions: z.number().int().positive(),
+    sessionTtlMs: z.number().int().positive()
+  }),
   defaults: z.object({
-    priority: PRIORITY_INPUT.transform(value => normalizePriority(value) ?? DEFAULT_PRIORITY),
+    priority: PRIORITY_INPUT.transform((value) => normalizePriority(value) ?? DEFAULT_PRIORITY),
     reporter: z.string(),
     listLimit: z.number().int().positive(),
     timelineLimit: z.number().int().positive(),
@@ -120,7 +146,7 @@ export const ENV_MAPPINGS: EnvMapping[] = [
   { env: 'ZIPTASK_DEFAULTS_TIMELINE_LIMIT', path: 'defaults.timelineLimit', type: 'int' },
   { env: 'ZIPTASK_DEFAULTS_QUEUE_LIMIT', path: 'defaults.queueLimit', type: 'int' },
   { env: 'ZIPTASK_LOG_LEVEL', path: 'logging.level', type: 'string' },
-  { env: 'ZIPTASK_AUDIT_LOG', path: 'auditLog', type: 'bool' },
+  { env: 'ZIPTASK_AUDIT_LOG', path: 'auditLog', type: 'bool' }
 ]
 
 // Strict on purpose: a value of the wrong shape is a typo, and reinterpreting it would change
@@ -130,8 +156,10 @@ const INT_VALUE_PATTERN = /^\d+$/
 
 function parseValue(raw: string, type: EnvType): string | number | boolean | undefined {
   switch (type) {
-    case 'string': return raw
-    case 'int': return INT_VALUE_PATTERN.test(raw) ? parseInt(raw, 10) : undefined
+    case 'string':
+      return raw
+    case 'int':
+      return INT_VALUE_PATTERN.test(raw) ? parseInt(raw, 10) : undefined
     // true/false are the same words in any case; `1`/`yes`/empty stay invalid instead of being guessed.
     case 'bool': {
       const value = raw.toLowerCase()
@@ -142,7 +170,7 @@ function parseValue(raw: string, type: EnvType): string | number | boolean | und
 
 function formatIssues(error: z.ZodError): string {
   return error.issues
-    .map(issue => `${issue.path.length > 0 ? issue.path.join('.') : '<root>'}: ${issue.message}`)
+    .map((issue) => `${issue.path.length > 0 ? issue.path.join('.') : '<root>'}: ${issue.message}`)
     .join('; ')
 }
 
@@ -187,7 +215,12 @@ function isDangerousKey(key: string): boolean {
 // design, so binding anywhere else is an explicit operator choice that must be acknowledged.
 export function isLoopbackHost(host: string): boolean {
   const normalized = host.trim().toLowerCase()
-  return normalized === '127.0.0.1' || normalized === 'localhost' || normalized === '::1' || normalized === '[::1]'
+  return (
+    normalized === '127.0.0.1' ||
+    normalized === 'localhost' ||
+    normalized === '::1' ||
+    normalized === '[::1]'
+  )
 }
 
 export function setNested(obj: Record<string, unknown>, path: string, value: unknown): void {
@@ -217,7 +250,10 @@ export function setNested(obj: Record<string, unknown>, path: string, value: unk
   current[last] = value
 }
 
-function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+function deepMerge(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>
+): Record<string, unknown> {
   const result: Record<string, unknown> = {}
   for (const key of Object.keys(target)) {
     if (isDangerousKey(key)) continue

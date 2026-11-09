@@ -1,29 +1,57 @@
 import type { Task, TaskPriority, CreatedTaskStatus, Clock } from './tasks'
 import { MAX_LEASE_TTL_MIN, asClock } from './tasks'
-import type { CommentRow, TaskServiceStore, TimelineRow, SvcResult, UpdateStatusData, UpdateTaskData } from './types'
+import type {
+  CommentRow,
+  TaskServiceStore,
+  TimelineRow,
+  SvcResult,
+  UpdateStatusData,
+  UpdateTaskData
+} from './types'
 import { LeaseReaper } from './reaper'
 import {
-  DEFAULT_LEASE_TTL_MIN, DEFAULT_MAX_ATTEMPTS,
-  DEFAULT_AUDIT_LOG, DEFAULT_REAP_COOLDOWN_SEC, DEFAULT_AUTO_CLAIM_CEILING, DEFAULT_PRIORITY,
-  DEFAULT_REPORTER, DEFAULT_LIST_LIMIT, DEFAULT_TIMELINE_LIMIT, DEFAULT_QUEUE_LIMIT
+  DEFAULT_LEASE_TTL_MIN,
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_AUDIT_LOG,
+  DEFAULT_REAP_COOLDOWN_SEC,
+  DEFAULT_AUTO_CLAIM_CEILING,
+  DEFAULT_PRIORITY,
+  DEFAULT_REPORTER,
+  DEFAULT_LIST_LIMIT,
+  DEFAULT_TIMELINE_LIMIT,
+  DEFAULT_QUEUE_LIMIT
 } from '../defaults'
 
 import { ProjectService } from './project-service'
 import { TaskLifecycleService } from './task-lifecycle'
 import { TaskQueryService } from './task-query'
-import type { CreateTaskArgs, ClaimTaskArgs, UpdateStatusArgs, UpdateTaskArgs } from './task-lifecycle'
+import type {
+  CreateTaskArgs,
+  ClaimTaskArgs,
+  UpdateStatusArgs,
+  UpdateTaskArgs
+} from './task-lifecycle'
 import type { ListTasksArgs, ListQueueArgs } from './task-query'
 
 // TaskServiceOptions: options for TaskService construction.
 
 export type TaskServiceOptions = {
-  leaseTtlMin?: number; maxAttempts?: number; auditLog?: boolean; reapCooldownSec?: number; autoClaimCeiling?: number
-  defaultPriority?: TaskPriority; defaultReporter?: string; listLimit?: number; timelineLimit?: number; queueLimit?: number
+  leaseTtlMin?: number
+  maxAttempts?: number
+  auditLog?: boolean
+  reapCooldownSec?: number
+  autoClaimCeiling?: number
+  defaultPriority?: TaskPriority
+  defaultReporter?: string
+  listLimit?: number
+  timelineLimit?: number
+  queueLimit?: number
   scope?: string
   clock?: unknown
 }
 
-type ResolvedOptions = Required<Omit<TaskServiceOptions, 'scope' | 'clock'>> & Pick<TaskServiceOptions, 'scope'> & { clock: Clock | null }
+type ResolvedOptions = Required<Omit<TaskServiceOptions, 'scope' | 'clock'>> &
+  Pick<TaskServiceOptions, 'scope'> & { clock: Clock | null }
 
 function resolveOptions(opts: TaskServiceOptions): ResolvedOptions {
   const leaseTtlMin = opts.leaseTtlMin ?? DEFAULT_LEASE_TTL_MIN
@@ -53,7 +81,12 @@ export class TaskService {
 
   constructor(store: TaskServiceStore, opts: TaskServiceOptions = {}) {
     const resolved = resolveOptions(opts)
-    const reaper = new LeaseReaper(store, resolved.reapCooldownSec, resolved.auditLog, resolved.clock)
+    const reaper = new LeaseReaper(
+      store,
+      resolved.reapCooldownSec,
+      resolved.auditLog,
+      resolved.clock
+    )
     this.projects = new ProjectService(store, resolved.scope)
     this.lifecycle = new TaskLifecycleService(store, resolved, this.projects, reaper)
     this.query = new TaskQueryService(store, resolved, this.projects, reaper)
@@ -63,19 +96,29 @@ export class TaskService {
     return this.lifecycle.createTask(args)
   }
 
-  getTaskView(id: number): SvcResult<{ task: Readonly<Task>; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number; canceled: number } }> {
+  getTaskView(id: number): SvcResult<{
+    task: Readonly<Task>
+    blockedBy: number[]
+    subtasks?: { total: number; open: number; done: number; failed: number; canceled: number }
+  }> {
     return this.query.getTaskView(id)
   }
 
-  listTasks(args: ListTasksArgs): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number }> {
+  listTasks(
+    args: ListTasksArgs
+  ): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number }> {
     return this.query.listTasks(args)
   }
 
-  getTasksByIds(ids: number[]): SvcResult<{ items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
+  getTasksByIds(
+    ids: number[]
+  ): SvcResult<{ items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
     return this.query.getTasksByIds(ids)
   }
 
-  claimTask(args: ClaimTaskArgs): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> {
+  claimTask(
+    args: ClaimTaskArgs
+  ): SvcResult<{ id: number; leaseTtlMin: number; task: Readonly<Task> }> {
     return this.lifecycle.claimTask(args)
   }
 
@@ -91,7 +134,11 @@ export class TaskService {
     return this.query.listQueue(args)
   }
 
-  addComment(args: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
+  addComment(args: {
+    id: number
+    agent: string
+    content: string
+  }): SvcResult<{ comment_id: number }> {
     return this.query.addComment(args)
   }
 

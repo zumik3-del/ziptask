@@ -8,10 +8,12 @@ describe('HTTP replay window', () => {
   test('rejects evicted, unknown and cross-session cursors without damaging sessions', async () => {
     const stores: InMemoryEventStore[] = []
     const original = InMemoryEventStore.prototype.storeEvent
-    const spy = spyOn(InMemoryEventStore.prototype, 'storeEvent').mockImplementation(async function (this: InMemoryEventStore, stream, message) {
-      if (!stores.includes(this)) stores.push(this)
-      return original.call(this, stream, message)
-    })
+    const spy = spyOn(InMemoryEventStore.prototype, 'storeEvent').mockImplementation(
+      async function (this: InMemoryEventStore, stream, message) {
+        if (!stores.includes(this)) stores.push(this)
+        return original.call(this, stream, message)
+      }
+    )
     const srv = startTestServer()
     const url = new URL(`http://127.0.0.1:${srv.port}/mcp`)
     const a = new Client({ name: 'replay-a', version: '1' })
@@ -24,25 +26,46 @@ describe('HTTP replay window', () => {
       const storeA = stores[0]
       await b.connect(tb)
       await b.listTools()
-      const storeB = stores.find(s => s !== storeA)!
+      const storeB = stores.find((s) => s !== storeA)!
       expect(storeB).toBeDefined()
-      const foreign = await storeB.storeEvent('foreign', { jsonrpc: '2.0', method: 'notifications/test' })
-      const evicted = await storeA.storeEvent('test-stream', { jsonrpc: '2.0', method: 'notifications/test' })
+      const foreign = await storeB.storeEvent('foreign', {
+        jsonrpc: '2.0',
+        method: 'notifications/test'
+      })
+      const evicted = await storeA.storeEvent('test-stream', {
+        jsonrpc: '2.0',
+        method: 'notifications/test'
+      })
       let retained = ''
       for (let i = 0; i < MAX_EVENT_STORE_EVENTS; i++) {
-        retained = await storeA.storeEvent('test-stream', { jsonrpc: '2.0', method: 'notifications/test' })
+        retained = await storeA.storeEvent('test-stream', {
+          jsonrpc: '2.0',
+          method: 'notifications/test'
+        })
       }
       await storeA.storeEvent('test-stream', { jsonrpc: '2.0', method: 'notifications/test' })
       const controller = new AbortController()
-      const get = (session: string | undefined, cursor?: string) => fetch(url, {
-        signal: controller.signal,
-        headers: { accept: 'text/event-stream', ...(session ? { 'mcp-session-id': session } : {}), ...(cursor ? { 'last-event-id': cursor } : {}) }
-      })
+      const get = (session: string | undefined, cursor?: string) =>
+        fetch(url, {
+          signal: controller.signal,
+          headers: {
+            accept: 'text/event-stream',
+            ...(session ? { 'mcp-session-id': session } : {}),
+            ...(cursor ? { 'last-event-id': cursor } : {})
+          }
+        })
       for (const cursor of [evicted, 'never-issued', foreign]) {
         const res = await get(ta.sessionId, cursor)
         expect(res.status).toBe(400)
         expect(res.headers.get('content-type')).toContain('application/json')
-        expect(await res.json()).toEqual({ jsonrpc: '2.0', id: null, error: { code: -32000, message: "Bad Request: Last-Event-ID is not in this session's replay window" } })
+        expect(await res.json()).toEqual({
+          jsonrpc: '2.0',
+          id: null,
+          error: {
+            code: -32000,
+            message: "Bad Request: Last-Event-ID is not in this session's replay window"
+          }
+        })
       }
       expect((await get('missing-session', 'never-issued')).status).toBe(404)
       expect((await get(undefined, 'never-issued')).status).toBe(400)
@@ -58,7 +81,9 @@ describe('HTTP replay window', () => {
       const takeover = await get(ta.sessionId, retained)
       expect(takeover.status).toBe(200)
       const successor = takeover.body!.getReader()
-      expect(new TextDecoder().decode((await successor.read()).value)).toContain('notifications/test')
+      expect(new TextDecoder().decode((await successor.read()).value)).toContain(
+        'notifications/test'
+      )
       expect((await reader.read()).done).toBe(true)
       controller.abort()
     } finally {
@@ -76,7 +101,10 @@ describe('HTTP replay window', () => {
     try {
       await client.connect(transport)
       const session = transport.sessionId
-      await expect(transport.resumeStream('never-issued')).rejects.toMatchObject({ status: 400, message: 'Failed to open SSE stream: Bad Request' })
+      await expect(transport.resumeStream('never-issued')).rejects.toMatchObject({
+        status: 400,
+        message: 'Failed to open SSE stream: Bad Request'
+      })
       expect(transport.sessionId).toBe(session)
       expect((await client.listTools()).tools.length).toBeGreaterThan(0)
     } finally {

@@ -27,7 +27,7 @@ function drainLines(): string[] {
 }
 
 function drain(): JsonRecord[] {
-  return drainLines().map(line => JSON.parse(line) as JsonRecord)
+  return drainLines().map((line) => JSON.parse(line) as JsonRecord)
 }
 
 describe('createLogger level gating', () => {
@@ -46,14 +46,14 @@ describe('createLogger level gating', () => {
 
   test('error: only error emits', () => {
     emitAll(createLogger('err-only', 'error'))
-    expect(drain().map(r => ({ level: r.level, msg: r.msg }))).toEqual([
+    expect(drain().map((r) => ({ level: r.level, msg: r.msg }))).toEqual([
       { level: 'error', msg: 'e' }
     ])
   })
 
   test('warn: error and warn emit, info and debug suppressed', () => {
     emitAll(createLogger('warn-only', 'warn'))
-    expect(drain().map(r => ({ level: r.level, msg: r.msg }))).toEqual([
+    expect(drain().map((r) => ({ level: r.level, msg: r.msg }))).toEqual([
       { level: 'error', msg: 'e' },
       { level: 'warn', msg: 'w' }
     ])
@@ -61,7 +61,7 @@ describe('createLogger level gating', () => {
 
   test('info: error, warn and info emit, debug suppressed', () => {
     emitAll(createLogger('info-level', 'info'))
-    expect(drain().map(r => ({ level: r.level, msg: r.msg }))).toEqual([
+    expect(drain().map((r) => ({ level: r.level, msg: r.msg }))).toEqual([
       { level: 'error', msg: 'e' },
       { level: 'warn', msg: 'w' },
       { level: 'info', msg: 'i' }
@@ -70,7 +70,7 @@ describe('createLogger level gating', () => {
 
   test('debug: every level emits', () => {
     emitAll(createLogger('dbg', 'debug'))
-    expect(drain().map(r => ({ level: r.level, msg: r.msg }))).toEqual([
+    expect(drain().map((r) => ({ level: r.level, msg: r.msg }))).toEqual([
       { level: 'error', msg: 'e' },
       { level: 'warn', msg: 'w' },
       { level: 'info', msg: 'i' },
@@ -80,7 +80,7 @@ describe('createLogger level gating', () => {
 
   test('the level is matched case-insensitively and without a warn record', () => {
     emitAll(createLogger('case', 'WARN'))
-    expect(drain().map(r => r.level)).toEqual(['error', 'warn'])
+    expect(drain().map((r) => r.level)).toEqual(['error', 'warn'])
   })
 })
 
@@ -116,7 +116,7 @@ describe('createLogger record contract', () => {
     expect(lines[0]!.slice(0, -1).includes('\n')).toBe(false)
     expect(lines[0]!).toContain('\\n')
 
-    const records = lines.map(line => JSON.parse(line) as JsonRecord)
+    const records = lines.map((line) => JSON.parse(line) as JsonRecord)
     expect(records.length).toBe(1)
     expect(records[0]!.msg).toBe('real')
     expect(records[0]!.logger).toBe('forge')
@@ -134,7 +134,7 @@ describe('createLogger record contract', () => {
     for (const line of lines) {
       expect(line.slice(0, -1).includes('\n')).toBe(false)
     }
-    const [injected, fromError] = lines.map(line => JSON.parse(line) as JsonRecord)
+    const [injected, fromError] = lines.map((line) => JSON.parse(line) as JsonRecord)
     expect(injected!.msg).toBe('real\n{"msg":"forged"}')
     // an Error stack is multi-line by nature, so it is the field most at risk
     expect((fromError!.stack as string).includes('\n')).toBe(true)
@@ -171,8 +171,20 @@ describe('createLogger record contract', () => {
 
   test('reserved keys win over both ctx and per-call fields', () => {
     createLogger('reserved', 'info')
-      .child({ logger: 'fake-logger', ts: 'fake-ts', level: 'off', msg: 'fake-msg', tenant: 'acme' })
-      .info('real', { logger: 'fake-logger', ts: 'fake-ts', level: 'debug', msg: 'fake-msg', port: 1 })
+      .child({
+        logger: 'fake-logger',
+        ts: 'fake-ts',
+        level: 'off',
+        msg: 'fake-msg',
+        tenant: 'acme'
+      })
+      .info('real', {
+        logger: 'fake-logger',
+        ts: 'fake-ts',
+        level: 'debug',
+        msg: 'fake-msg',
+        port: 1
+      })
 
     const [record] = drain()
     expect(record!.logger).toBe('reserved')
@@ -217,7 +229,7 @@ describe('createLogger child contexts', () => {
     child.info('a')
     child.error('b')
     const out = drain()
-    expect(out.map(r => ({ level: r.level, msg: r.msg, taskId: r.taskId }))).toEqual([
+    expect(out.map((r) => ({ level: r.level, msg: r.msg, taskId: r.taskId }))).toEqual([
       { level: 'info', msg: 'a', taskId: 7 },
       { level: 'error', msg: 'b', taskId: 7 }
     ])
@@ -267,7 +279,10 @@ describe('createLogger error records', () => {
   })
 
   test('the reported error wins over call-site fields named err or stack', () => {
-    createLogger('err', 'info').error('failed', new Error('real'), { err: 'fake-err', stack: 'fake-stack' })
+    createLogger('err', 'info').error('failed', new Error('real'), {
+      err: 'fake-err',
+      stack: 'fake-stack'
+    })
     const [record] = drain()
     expect(record!.err).toBe('real')
     expect(record!.stack).not.toBe('fake-stack')
@@ -292,7 +307,14 @@ describe('createLogger error records', () => {
     expect(record!.taskId).toBe(1)
     expect(record!.nested).toEqual({ a: 1 })
     expect(Object.keys(record!).includes('err')).toBe(false)
-    expect(Object.keys(record!).sort()).toEqual(['level', 'logger', 'msg', 'nested', 'taskId', 'ts'])
+    expect(Object.keys(record!).sort()).toEqual([
+      'level',
+      'logger',
+      'msg',
+      'nested',
+      'taskId',
+      'ts'
+    ])
   })
 
   test('fields beside an Error survive, with err and stack still taken from the error', () => {
@@ -394,14 +416,14 @@ describe('createLogger level parsing', () => {
     // the fallback is really the info gate, not an open level
     log.info('kept')
     log.debug('suppressed')
-    expect(drain().map(r => r.msg)).toEqual(['kept'])
+    expect(drain().map((r) => r.msg)).toEqual(['kept'])
   })
 
   test('a case variant of a known level is not reported as unknown', () => {
     const log = createLogger('ok-level', 'DEBUG')
     expect(drain()).toEqual([])
     log.debug('kept')
-    expect(drain().map(r => r.msg)).toEqual(['kept'])
+    expect(drain().map((r) => r.msg)).toEqual(['kept'])
   })
 })
 

@@ -28,7 +28,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  try { rmSync(testDir, { recursive: true }) } catch {}
+  try {
+    rmSync(testDir, { recursive: true })
+  } catch {}
 })
 
 describe('loadSettings defaults', () => {
@@ -79,7 +81,13 @@ describe('loadSettings settings.json', () => {
       leaseTtlMin: 30,
       maxAttempts: 5,
       http: { maxSessions: 200, sessionTtlMs: 1_800_000 },
-      defaults: { priority: 'p0', reporter: 'human', listLimit: 10, timelineLimit: 20, queueLimit: 5 }
+      defaults: {
+        priority: 'p0',
+        reporter: 'human',
+        listLimit: 10,
+        timelineLimit: 20,
+        queueLimit: 5
+      }
     })
     const s = loadSettings({ path: settingsPath, env: {}, argv: [] })
     expect(s.dbPath).toBe('/tmp/my.db')
@@ -131,7 +139,10 @@ describe('loadSettings env overrides', () => {
   })
 
   test('env overrides defaults when no settings file', () => {
-    const s = loadSettings({ env: { ZIPTASK_DB: '/tmp/no-file.db', ZIPTASK_PORT: '1234' }, argv: [] })
+    const s = loadSettings({
+      env: { ZIPTASK_DB: '/tmp/no-file.db', ZIPTASK_PORT: '1234' },
+      argv: []
+    })
     expect(s.dbPath).toBe('/tmp/no-file.db')
     expect(s.port).toBe(1234)
     expect(s.host).toBe(DEFAULTS.host)
@@ -207,25 +218,35 @@ describe('loadSettings env overrides', () => {
     ]
     for (const [envName, path] of cases) {
       const err = (() => {
-        try { loadSettings({ env: { [envName]: '0' }, argv: [] }); return '' } catch (e) { return (e as Error).message }
+        try {
+          loadSettings({ env: { [envName]: '0' }, argv: [] })
+          return ''
+        } catch (e) {
+          return (e as Error).message
+        }
       })()
       expect(err).toContain(`Invalid configuration after env overrides: ${path}: `)
     }
   })
 
   test('an invalid priority enum from env is refused with the key named', () => {
-    expect(() => loadSettings({ env: { ZIPTASK_DEFAULTS_PRIORITY: 'p9' }, argv: [] }))
-      .toThrow(/Invalid configuration after env overrides: defaults\.priority: /)
+    expect(() => loadSettings({ env: { ZIPTASK_DEFAULTS_PRIORITY: 'p9' }, argv: [] })).toThrow(
+      /Invalid configuration after env overrides: defaults\.priority: /
+    )
   })
 
   test('an env override above settings.json is still validated against the schema', () => {
     const settingsPath = writeSettingsJson(testDir, { port: 7000, defaults: { priority: 'p1' } })
-    expect(() => loadSettings({ path: settingsPath, env: { ZIPTASK_HTTP_MAX_SESSIONS: '0' }, argv: [] }))
-      .toThrow(/Invalid configuration after env overrides: http\.maxSessions: /)
-    expect(() => loadSettings({ path: settingsPath, env: { ZIPTASK_DEFAULTS_PRIORITY: 'p9' }, argv: [] }))
-      .toThrow(/Invalid configuration after env overrides: defaults\.priority: /)
+    expect(() =>
+      loadSettings({ path: settingsPath, env: { ZIPTASK_HTTP_MAX_SESSIONS: '0' }, argv: [] })
+    ).toThrow(/Invalid configuration after env overrides: http\.maxSessions: /)
+    expect(() =>
+      loadSettings({ path: settingsPath, env: { ZIPTASK_DEFAULTS_PRIORITY: 'p9' }, argv: [] })
+    ).toThrow(/Invalid configuration after env overrides: defaults\.priority: /)
     // the same file without a bad override still loads
-    expect(loadSettings({ path: settingsPath, env: { ZIPTASK_PORT: '8080' }, argv: [] }).port).toBe(8080)
+    expect(loadSettings({ path: settingsPath, env: { ZIPTASK_PORT: '8080' }, argv: [] }).port).toBe(
+      8080
+    )
   })
 
   test('all-valid env overrides pass the post-merge validation', () => {
@@ -240,14 +261,24 @@ describe('loadSettings env overrides', () => {
 
   test('a valid env value emits no warning', () => {
     const warnings: string[] = []
-    loadSettings({ env: { ZIPTASK_PORT: '1234' }, argv: [], warn: (message) => warnings.push(message) })
+    loadSettings({
+      env: { ZIPTASK_PORT: '1234' },
+      argv: [],
+      warn: (message) => warnings.push(message)
+    })
     expect(warnings).toEqual([])
   })
 
   test('ZIPTASK_LOG_LEVEL overrides logging level (error/warn/debug/off)', () => {
-    expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'error' }, argv: [] }).logging.level).toBe('error')
-    expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'warn' }, argv: [] }).logging.level).toBe('warn')
-    expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'debug' }, argv: [] }).logging.level).toBe('debug')
+    expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'error' }, argv: [] }).logging.level).toBe(
+      'error'
+    )
+    expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'warn' }, argv: [] }).logging.level).toBe(
+      'warn'
+    )
+    expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'debug' }, argv: [] }).logging.level).toBe(
+      'debug'
+    )
     expect(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'off' }, argv: [] }).logging.level).toBe('off')
   })
 
@@ -256,7 +287,9 @@ describe('loadSettings env overrides', () => {
     // env value over untouched, so an unknown level can reach createLogger and its warn,
     // and case handling stays the logger's business (pinned in src/logger.test.ts).
     expect(rawLevel(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'warn' }, argv: [] }))).toBe('warn')
-    expect(rawLevel(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'verbose' }, argv: [] }))).toBe('verbose')
+    expect(rawLevel(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'verbose' }, argv: [] }))).toBe(
+      'verbose'
+    )
     expect(rawLevel(loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'WARN' }, argv: [] }))).toBe('WARN')
     // unset stays at the default, the only normalization left here
     expect(rawLevel(loadSettings({ env: {}, argv: [] }))).toBe('info')
@@ -284,7 +317,13 @@ describe('loadSettings env overrides', () => {
   test('env overrides settings.json for nested keys', () => {
     const settingsPath = writeSettingsJson(testDir, {
       http: { maxSessions: 50, sessionTtlMs: 600_000 },
-      defaults: { priority: 'p3', reporter: 'system', listLimit: 99, timelineLimit: 99, queueLimit: 99 }
+      defaults: {
+        priority: 'p3',
+        reporter: 'system',
+        listLimit: 99,
+        timelineLimit: 99,
+        queueLimit: 99
+      }
     })
     const s = loadSettings({
       path: settingsPath,
@@ -348,8 +387,12 @@ describe('strict env int parsing', () => {
 describe('strict env bool parsing', () => {
   test('true and false are accepted in any case', () => {
     for (const [raw, expected] of [
-      ['true', true], ['TRUE', true], ['True', true],
-      ['false', false], ['FALSE', false], ['False', false]
+      ['true', true],
+      ['TRUE', true],
+      ['True', true],
+      ['false', false],
+      ['FALSE', false],
+      ['False', false]
     ] as const) {
       const warnings: string[] = []
       const s = loadSettings({
@@ -402,27 +445,36 @@ describe('ZIPTASK_LOG_LEVEL hand-off to the logger', () => {
       return true
     })
     const records = (): Record<string, unknown>[] =>
-      chunks.map(line => JSON.parse(line) as Record<string, unknown>)
+      chunks.map((line) => JSON.parse(line) as Record<string, unknown>)
 
     try {
       const settings = loadSettings({ env: { ZIPTASK_LOG_LEVEL: 'verbose' }, argv: [] })
       const log = createLogger('app', settings.logging.level)
 
       // the warn about the unparsable level is emitted at construction, exactly once
-      expect(records().map(r => ({ level: r.level, logger: r.logger, msg: r.msg, requested: r.requested })))
-        .toEqual([{
+      expect(
+        records().map((r) => ({
+          level: r.level,
+          logger: r.logger,
+          msg: r.msg,
+          requested: r.requested
+        }))
+      ).toEqual([
+        {
           level: 'warn',
           logger: 'app',
           msg: 'unknown log level requested, falling back to info',
           requested: 'verbose'
-        }])
+        }
+      ])
 
       // ...and the fallback is the real info gate, not an open level
       chunks.length = 0
       log.info('kept')
       log.debug('suppressed')
-      expect(records().map(r => ({ level: r.level, msg: r.msg })))
-        .toEqual([{ level: 'info', msg: 'kept' }])
+      expect(records().map((r) => ({ level: r.level, msg: r.msg }))).toEqual([
+        { level: 'info', msg: 'kept' }
+      ])
     } finally {
       writeSpy.mockRestore()
     }
@@ -452,17 +504,21 @@ describe('loadSettings CLI flag', () => {
     const envFile = join(testDir, 'env-settings.json')
     writeFileSync(envFile, JSON.stringify({ port: 6666 }))
     const env = { ZIPTASK_SETTINGS: envFile }
-    expect(() => loadSettings({ env, argv: ['node', '--settings'] }))
-      .toThrow(/Missing path for --settings/)
-    expect(() => loadSettings({ env: {}, argv: ['node', '--settings'] }))
-      .toThrow(/Missing path for --settings/)
+    expect(() => loadSettings({ env, argv: ['node', '--settings'] })).toThrow(
+      /Missing path for --settings/
+    )
+    expect(() => loadSettings({ env: {}, argv: ['node', '--settings'] })).toThrow(
+      /Missing path for --settings/
+    )
   })
 
   test('a flag-like --settings value throws instead of being read as a file', () => {
-    expect(() => loadSettings({ env: {}, argv: ['node', '--settings', '--stdio'] }))
-      .toThrow(/Missing path for --settings \(got '--stdio'\)/)
-    expect(() => loadSettings({ env: {}, argv: ['node', '--settings', ''] }))
-      .toThrow(/Missing path for --settings/)
+    expect(() => loadSettings({ env: {}, argv: ['node', '--settings', '--stdio'] })).toThrow(
+      /Missing path for --settings \(got '--stdio'\)/
+    )
+    expect(() => loadSettings({ env: {}, argv: ['node', '--settings', ''] })).toThrow(
+      /Missing path for --settings/
+    )
   })
 
   test('--settings with a positional path still works', () => {
@@ -480,22 +536,28 @@ describe('loadSettings CLI flag', () => {
     const cliPath = writeSettingsJson(testDir, { dbPath: '/tmp/cli-equals.db' })
     const envFile = join(testDir, 'env-equals-settings.json')
     writeFileSync(envFile, JSON.stringify({ dbPath: '/tmp/env-equals.db' }))
-    const s = loadSettings({ env: { ZIPTASK_SETTINGS: envFile }, argv: ['node', `--settings=${cliPath}`] })
+    const s = loadSettings({
+      env: { ZIPTASK_SETTINGS: envFile },
+      argv: ['node', `--settings=${cliPath}`]
+    })
     expect(s.dbPath).toBe('/tmp/cli-equals.db')
   })
 
   test('an empty or flag-like --settings= value throws instead of falling back', () => {
-    expect(() => loadSettings({ env: {}, argv: ['node', '--settings='] }))
-      .toThrow(/Missing path for --settings/)
-    expect(() => loadSettings({ env: {}, argv: ['node', '--settings=--stdio'] }))
-      .toThrow(/Missing path for --settings \(got '--stdio'\)/)
+    expect(() => loadSettings({ env: {}, argv: ['node', '--settings='] })).toThrow(
+      /Missing path for --settings/
+    )
+    expect(() => loadSettings({ env: {}, argv: ['node', '--settings=--stdio'] })).toThrow(
+      /Missing path for --settings \(got '--stdio'\)/
+    )
   })
 
   test('a missing --settings path is not masked by opts.path', () => {
     const envFile = join(testDir, 'env-settings.json')
     writeFileSync(envFile, JSON.stringify({ port: 6666 }))
-    expect(() => loadSettings({ path: envFile, env: {}, argv: ['node', '--settings'] }))
-      .toThrow(/Missing path for --settings/)
+    expect(() => loadSettings({ path: envFile, env: {}, argv: ['node', '--settings'] })).toThrow(
+      /Missing path for --settings/
+    )
   })
 })
 
@@ -503,26 +565,30 @@ describe('loadSettings error cases', () => {
   test('invalid JSON throws clear error', () => {
     const badPath = join(testDir, 'bad.json')
     writeFileSync(badPath, '{ not valid json }}}')
-    expect(() => loadSettings({ path: badPath, env: {}, argv: [] }))
-      .toThrow(/Invalid JSON in settings file/)
+    expect(() => loadSettings({ path: badPath, env: {}, argv: [] })).toThrow(
+      /Invalid JSON in settings file/
+    )
   })
 
   test('invalid schema shape throws clear zod validation error', () => {
     const badPath = writeSettingsJson(testDir, { port: -1 })
-    expect(() => loadSettings({ path: badPath, env: {}, argv: [] }))
-      .toThrow(/Invalid settings.json/)
+    expect(() => loadSettings({ path: badPath, env: {}, argv: [] })).toThrow(
+      /Invalid settings.json/
+    )
   })
 
   test('non-integer port in settings.json is rejected', () => {
     const badPath = writeSettingsJson(testDir, { port: 3.5 })
-    expect(() => loadSettings({ path: badPath, env: {}, argv: [] }))
-      .toThrow(/Invalid settings.json/)
+    expect(() => loadSettings({ path: badPath, env: {}, argv: [] })).toThrow(
+      /Invalid settings.json/
+    )
   })
 
   test('invalid priority enum in settings.json is rejected', () => {
     const badPath = writeSettingsJson(testDir, { defaults: { priority: 'p99' } })
-    expect(() => loadSettings({ path: badPath, env: {}, argv: [] }))
-      .toThrow(/Invalid settings.json/)
+    expect(() => loadSettings({ path: badPath, env: {}, argv: [] })).toThrow(
+      /Invalid settings.json/
+    )
   })
 
   test('an unknown logging.level in settings.json is rejected (no silent info fallback)', () => {
@@ -530,8 +596,9 @@ describe('loadSettings error cases', () => {
     // 'verbose' is accepted verbatim from the env and still fails startup from the file
     for (const level of ['warning', 'verbose']) {
       const badPath = writeSettingsJson(testDir, { logging: { level } })
-      expect(() => loadSettings({ path: badPath, env: {}, argv: [] }))
-        .toThrow(/Invalid settings.json/)
+      expect(() => loadSettings({ path: badPath, env: {}, argv: [] })).toThrow(
+        /Invalid settings.json/
+      )
     }
   })
 })
@@ -545,7 +612,12 @@ describe('leaseTtlMin cap', () => {
   test('a settings.json leaseTtlMin above 1440 fails validation', () => {
     const settingsPath = writeSettingsJson(testDir, { leaseTtlMin: 1441 })
     const message = (() => {
-      try { loadSettings({ path: settingsPath, env: {}, argv: [] }); return '' } catch (e) { return (e as Error).message }
+      try {
+        loadSettings({ path: settingsPath, env: {}, argv: [] })
+        return ''
+      } catch (e) {
+        return (e as Error).message
+      }
     })()
     expect(message).toContain('Invalid settings.json')
     expect(message).toContain('leaseTtlMin')
@@ -553,19 +625,23 @@ describe('leaseTtlMin cap', () => {
   })
 
   test('1440 from env is accepted', () => {
-    expect(loadSettings({ env: { ZIPTASK_LEASE_TTL_MIN: '1440' }, argv: [] }).leaseTtlMin).toBe(1440)
+    expect(loadSettings({ env: { ZIPTASK_LEASE_TTL_MIN: '1440' }, argv: [] }).leaseTtlMin).toBe(
+      1440
+    )
   })
 
   test('an env leaseTtlMin above 1440 fails the post-merge validation and names the key', () => {
-    expect(() => loadSettings({ env: { ZIPTASK_LEASE_TTL_MIN: '1441' }, argv: [] }))
-      .toThrow(/Invalid configuration after env overrides: leaseTtlMin: /)
+    expect(() => loadSettings({ env: { ZIPTASK_LEASE_TTL_MIN: '1441' }, argv: [] })).toThrow(
+      /Invalid configuration after env overrides: leaseTtlMin: /
+    )
   })
 
   test('the env cap applies on top of a valid settings.json value', () => {
     const settingsPath = writeSettingsJson(testDir, { leaseTtlMin: 30 })
     expect(loadSettings({ path: settingsPath, env: {}, argv: [] }).leaseTtlMin).toBe(30)
-    expect(() => loadSettings({ path: settingsPath, env: { ZIPTASK_LEASE_TTL_MIN: '1441' }, argv: [] }))
-      .toThrow(/Invalid configuration after env overrides: leaseTtlMin: /)
+    expect(() =>
+      loadSettings({ path: settingsPath, env: { ZIPTASK_LEASE_TTL_MIN: '1441' }, argv: [] })
+    ).toThrow(/Invalid configuration after env overrides: leaseTtlMin: /)
   })
 })
 
@@ -580,12 +656,15 @@ describe('maxAttempts flow', () => {
     const settingsPath = writeSettingsJson(testDir, { maxAttempts: 5 })
     const s = loadSettings({ path: settingsPath, env: {}, argv: [] })
     // Build a minimal in-memory service to verify the value propagates
-    const svc = new TaskService(taskStoreStubs({
-      insertTask: (t) => {
-        expect(t.maxAttempts).toBe(5)
-        return { id: 1, status: 'queued' }
-      }
-    }), { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
+    const svc = new TaskService(
+      taskStoreStubs({
+        insertTask: (t) => {
+          expect(t.maxAttempts).toBe(5)
+          return { id: 1, status: 'queued' }
+        }
+      }),
+      { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' }
+    )
 
     const result = svc.createTask({ title: 'Flow test', reporter: 'tester' })
     expect(result.ok).toBe(true)
@@ -594,12 +673,15 @@ describe('maxAttempts flow', () => {
   test('default maxAttempts is 3 when not configured', () => {
     const s = loadSettings({ env: {}, argv: [] })
     expect(s.maxAttempts).toBe(3)
-    const svc = new TaskService(taskStoreStubs({
-      insertTask: (t) => {
-        expect(t.maxAttempts).toBe(3)
-        return { id: 1, status: 'queued' }
-      }
-    }), { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' })
+    const svc = new TaskService(
+      taskStoreStubs({
+        insertTask: (t) => {
+          expect(t.maxAttempts).toBe(3)
+          return { id: 1, status: 'queued' }
+        }
+      }),
+      { leaseTtlMin: s.leaseTtlMin, maxAttempts: s.maxAttempts, scope: 'test' }
+    )
 
     const result = svc.createTask({ title: 'Default flow', reporter: 'tester' })
     expect(result.ok).toBe(true)

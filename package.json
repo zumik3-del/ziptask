@@ -11,6 +11,7 @@
     "build": "bun run tsc --noEmit",
     "build:bin": "bun run scripts/build.ts",
     "test": "bun test",
+    "format": "biome format --write src/ scripts/",
     "lint": "bunx biome check src/ scripts/"
   },
   "dependencies": {

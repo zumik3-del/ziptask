@@ -231,7 +231,10 @@ describe('the process-wide clock reset seam', () => {
       const wallStart = Date.now()
       const baseline = monotonicNowMs()
       const store = new InMemoryEventStore()
-      const message = { jsonrpc: '2.0', method: 'notifications/initialized' } as unknown as JSONRPCMessage
+      const message = {
+        jsonrpc: '2.0',
+        method: 'notifications/initialized'
+      } as unknown as JSONRPCMessage
       await store.storeEvent('stream-1', message)
       await store.storeEvent('stream-1', message)
       await store.storeEvent('stream-1', message)

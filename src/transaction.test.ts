@@ -12,7 +12,8 @@ import { makeTempDbPath, removeTempDb, seedProject } from './test-context'
 // window is bounded: the rival either fails at once or bridges the gap itself - no test here can
 // hang on a lock.
 
-const INSERT_PROJECT = 'INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES (?, \'\', \'2026-01-01T00:00:00.000Z\', \'2026-01-01T00:00:00.000Z\')'
+const INSERT_PROJECT =
+  "INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES (?, '', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')"
 
 let dbPath: string
 let db: Database
@@ -33,7 +34,9 @@ afterEach(() => {
 })
 
 function projectSlugs(conn: Database): string[] {
-  return (conn.query('SELECT slug FROM projects ORDER BY slug').all() as Array<{ slug: string }>).map(r => r.slug)
+  return (
+    conn.query('SELECT slug FROM projects ORDER BY slug').all() as Array<{ slug: string }>
+  ).map((r) => r.slug)
 }
 
 describe('TaskRepo.transaction is IMMEDIATE (#2243)', () => {
@@ -54,7 +57,9 @@ describe('TaskRepo.transaction is IMMEDIATE (#2243)', () => {
     // IMMEDIATE means the rival could not slip in between the read and the write.
     expect(rivalBlocked).toBe(true)
     // Once the transaction commits, the rival's own transaction is allowed through.
-    rival.transaction(() => { rival.run(INSERT_PROJECT, ['rival']) })()
+    rival.transaction(() => {
+      rival.run(INSERT_PROJECT, ['rival'])
+    })()
     expect(projectSlugs(db)).toEqual(['ours', 'rival', 'test'])
   })
 

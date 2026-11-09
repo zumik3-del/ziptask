@@ -54,12 +54,18 @@ export function withCors(response: Response): Response {
 // Thin adapter over the SDK's own body reader, so the peek below and the transport it feeds agree
 // on one cap and one Content-Length fast path: two copies drift (a local one enforced 1 MiB here
 // while the transport still accepted 4 MiB). The caller turns `oversized` into a 413.
-export async function readBodyWithLimit(req: Request, maxBytes: number): Promise<{ body: string; oversized: boolean }> {
+export async function readBodyWithLimit(
+  req: Request,
+  maxBytes: number
+): Promise<{ body: string; oversized: boolean }> {
   const result = await readRequestBody(req, maxBytes)
   return result.tooLarge ? { body: '', oversized: true } : { body: result.text, oversized: false }
 }
 
-export function trackStreamActivity(response: Response, session: Pick<Session, 'lastAccess'>): Response {
+export function trackStreamActivity(
+  response: Response,
+  session: Pick<Session, 'lastAccess'>
+): Response {
   const contentType = response.headers.get('content-type') ?? ''
   if (!response.body || !contentType.includes('text/event-stream')) return response
   const tracked = response.body.pipeThrough(
@@ -118,7 +124,10 @@ export class InMemoryEventStore implements EventStore {
     return this.events.has(eventId)
   }
 
-  async replayEventsAfter(lastEventId: string, { send }: { send: (eventId: string, message: JSONRPCMessage) => Promise<void> }): Promise<string> {
+  async replayEventsAfter(
+    lastEventId: string,
+    { send }: { send: (eventId: string, message: JSONRPCMessage) => Promise<void> }
+  ): Promise<string> {
     if (!lastEventId || !this.events.has(lastEventId)) return ''
     const streamId = this.events.get(lastEventId)!.streamId
     // Snapshot then iterate in insertion order, which is the store order; no id sort needed.
@@ -126,7 +135,10 @@ export class InMemoryEventStore implements EventStore {
     let found = false
     for (const [id, { streamId: sId, message }] of snapshot) {
       if (sId !== streamId) continue
-      if (id === lastEventId) { found = true; continue }
+      if (id === lastEventId) {
+        found = true
+        continue
+      }
       if (found) await send(id, message)
     }
     return streamId
@@ -159,7 +171,8 @@ async function peekInitialize(
   logger: Logger,
   maxBodyBytes: number
 ): Promise<PeekResult> {
-  if (req.method !== 'POST') return { oversized: false, request: req, agentName: 'unknown', isInitialize: false }
+  if (req.method !== 'POST')
+    return { oversized: false, request: req, agentName: 'unknown', isInitialize: false }
   const { body, oversized } = await readBodyWithLimit(req, maxBodyBytes)
   if (oversized) {
     logger.warn('peekInitialize: request body exceeds the size limit', { maxBodyBytes })
@@ -170,14 +183,16 @@ async function peekInitialize(
   let isInitialize = false
   try {
     const parsed = JSON.parse(body)
-    const init = Array.isArray(parsed) ? parsed.find(m => m?.method === 'initialize') : parsed
+    const init = Array.isArray(parsed) ? parsed.find((m) => m?.method === 'initialize') : parsed
     isInitialize = init?.method === 'initialize'
     const name = init?.params?.clientInfo?.name
     if (typeof name === 'string' && name.length > 0) agentName = name
   } catch (err) {
     // A non-JSON body is a client error, not a server fault: log it for diagnosis and keep
     // treating the request as a non-initialize one (the caller answers 400).
-    logger.debug('peekInitialize: failed to parse request body', { err: err instanceof Error ? err.message : String(err) })
+    logger.debug('peekInitialize: failed to parse request body', {
+      err: err instanceof Error ? err.message : String(err)
+    })
   }
   return { oversized: false, request, agentName, isInitialize }
 }
@@ -187,13 +202,33 @@ async function peekInitialize(
 const JSONRPC_SESSION_NOT_FOUND = -32001
 const JSONRPC_BAD_REQUEST = -32000
 
-const SESSION_NOT_FOUND = { jsonrpc: '2.0', error: { code: JSONRPC_SESSION_NOT_FOUND, message: 'Session not found' }, id: null }
-const SESSION_REQUIRED = { jsonrpc: '2.0', error: { code: JSONRPC_BAD_REQUEST, message: 'Bad Request: Mcp-Session-Id header is required' }, id: null }
-const LAST_EVENT_ID_NOT_REPLAYABLE = { jsonrpc: '2.0', error: { code: JSONRPC_BAD_REQUEST, message: "Bad Request: Last-Event-ID is not in this session's replay window" }, id: null }
+const SESSION_NOT_FOUND = {
+  jsonrpc: '2.0',
+  error: { code: JSONRPC_SESSION_NOT_FOUND, message: 'Session not found' },
+  id: null
+}
+const SESSION_REQUIRED = {
+  jsonrpc: '2.0',
+  error: { code: JSONRPC_BAD_REQUEST, message: 'Bad Request: Mcp-Session-Id header is required' },
+  id: null
+}
+const LAST_EVENT_ID_NOT_REPLAYABLE = {
+  jsonrpc: '2.0',
+  error: {
+    code: JSONRPC_BAD_REQUEST,
+    message: "Bad Request: Last-Event-ID is not in this session's replay window"
+  },
+  id: null
+}
 
 // Projection from a full Task to the minimal read shape used by the /api/tasks list endpoint.
 // /api/task/:id returns the whole task row (see docs/http-endpoints.md), so it is not projected here.
-export function projectTask(task: Task): { id: number; title: string; status: TaskStatus; priority: TaskPriority } {
+export function projectTask(task: Task): {
+  id: number
+  title: string
+  status: TaskStatus
+  priority: TaskPriority
+} {
   return { id: task.id, title: task.title, status: task.status, priority: task.priority }
 }
 
@@ -201,7 +236,10 @@ export function projectTask(task: Task): { id: number; title: string; status: Ta
 function handleTaskList(svc: TaskService, url: URL): Response {
   const project = url.searchParams.get('project') ?? undefined
   const status = url.searchParams.get('status') ?? undefined
-  if (status !== undefined && !TASK_STATUS_VALUES.includes(status as (typeof TASK_STATUS_VALUES)[number])) {
+  if (
+    status !== undefined &&
+    !TASK_STATUS_VALUES.includes(status as (typeof TASK_STATUS_VALUES)[number])
+  ) {
     return Response.json({ error: 'INVALID: invalid status' }, { status: 400 })
   }
   const limitRaw = url.searchParams.get('limit')
@@ -244,7 +282,16 @@ function handleTaskView(svc: TaskService, pathname: string): Response {
 export { isLoopbackHost } from './config'
 
 export function startHttp(opts: StartHttpOptions) {
-  const { svc, port, host, dbPath, maxSessions = DEFAULT_HTTP_MAX_SESSIONS, sessionTtlMs = DEFAULT_HTTP_SESSION_TTL_MS, logger, onShutdown } = opts
+  const {
+    svc,
+    port,
+    host,
+    dbPath,
+    maxSessions = DEFAULT_HTTP_MAX_SESSIONS,
+    sessionTtlMs = DEFAULT_HTTP_SESSION_TTL_MS,
+    logger,
+    onShutdown
+  } = opts
   const svcLogger = logger ?? createLogger('http', 'off')
   if (!isLoopbackHost(host)) {
     svcLogger.warn('listening on non-loopback host; HTTP has no authentication by design', { host })
@@ -298,7 +345,10 @@ export function startHttp(opts: StartHttpOptions) {
           // The SDK must reach replayEventsAfter's synchronous lookup without an intervening
           // async yield; an SDK change there could allow eviction after this check.
           if (lastEventId && !session.replayWindow.knowsEvent(lastEventId)) {
-            svcLogger.warn('mcp replay refused: Last-Event-ID outside the replay window', { session: sessionId, lastEventId })
+            svcLogger.warn('mcp replay refused: Last-Event-ID outside the replay window', {
+              session: sessionId,
+              lastEventId
+            })
             return Response.json(LAST_EVENT_ID_NOT_REPLAYABLE, { status: 400 })
           }
           return trackStreamActivity(await session.transport.handleRequest(req), session)
@@ -307,7 +357,9 @@ export function startHttp(opts: StartHttpOptions) {
         // Modern (2026-07-28) traffic carries the per-request envelope and is served
         // statelessly by the modern handler; legacy (2025) traffic keeps the
         // sessionful transport below so sessions and Last-Event-ID replay survive.
-        const isLegacy = await isLegacyRequest(req, undefined, { maxRequestBodySize: DEFAULT_HTTP_MAX_BODY_BYTES })
+        const isLegacy = await isLegacyRequest(req, undefined, {
+          maxRequestBodySize: DEFAULT_HTTP_MAX_BODY_BYTES
+        })
         if (!isLegacy) {
           return await modernHandler.fetch(req)
         }
@@ -334,7 +386,12 @@ export function startHttp(opts: StartHttpOptions) {
             // never runs the peek, so without this it would fall back to the SDK's 4 MiB default.
             maxRequestBodySize: DEFAULT_HTTP_MAX_BODY_BYTES,
             onsessioninitialized: (id) => {
-              registry.open(id, { transport, lastAccess: Date.now(), agent: peek.agentName, replayWindow: eventStore })
+              registry.open(id, {
+                transport,
+                lastAccess: Date.now(),
+                agent: peek.agentName,
+                replayWindow: eventStore
+              })
             },
             onsessionclosed: (id) => {
               registry.close(id)
@@ -372,6 +429,11 @@ export function startHttp(opts: StartHttpOptions) {
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
 
-  svcLogger.info('ziptask started', { version: VERSION, host, port: server.port, dbPath: dbPath ?? '' })
+  svcLogger.info('ziptask started', {
+    version: VERSION,
+    host,
+    port: server.port,
+    dbPath: dbPath ?? ''
+  })
   return server
 }

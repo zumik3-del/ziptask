@@ -12,7 +12,11 @@ import { startTestServer } from './test-context'
 // anchor is still in the store (a named stream id) and which events follow it (the ids sent).
 async function replayIds(store: InMemoryEventStore, anchor: string) {
   const ids: string[] = []
-  const streamId = await store.replayEventsAfter(anchor, { send: async (eventId) => { ids.push(eventId) } })
+  const streamId = await store.replayEventsAfter(anchor, {
+    send: async (eventId) => {
+      ids.push(eventId)
+    }
+  })
   return { streamId, ids }
 }
 
@@ -28,14 +32,20 @@ describe('event store pruning on session close (#767)', () => {
     const storedIds: string[] = []
     let clearCalls = 0
     const storeSpy = spyOn(InMemoryEventStore.prototype, 'storeEvent').mockImplementation(
-      async function (this: InMemoryEventStore, streamId: string, message: Parameters<InMemoryEventStore['storeEvent']>[1]) {
+      async function (
+        this: InMemoryEventStore,
+        streamId: string,
+        message: Parameters<InMemoryEventStore['storeEvent']>[1]
+      ) {
         if (!stores.includes(this)) stores.push(this)
         const eventId = await realStoreEvent.call(this, streamId, message)
         storedIds.push(eventId)
         return eventId
       }
     )
-    const clearSpy = spyOn(InMemoryEventStore.prototype, 'clear').mockImplementation(function (this: InMemoryEventStore) {
+    const clearSpy = spyOn(InMemoryEventStore.prototype, 'clear').mockImplementation(function (
+      this: InMemoryEventStore
+    ) {
       clearCalls++
       realClear.call(this)
     })
@@ -105,7 +115,14 @@ describe('bounded event store (#812)', () => {
     // Fill beyond the event limit
     const ids: string[] = []
     for (let i = 0; i < MAX_EVENT_STORE_EVENTS + overflow; i++) {
-      ids.push(await store.storeEvent('test-stream', { jsonrpc: '2.0', id: i, method: `m${i}`, params: {} }))
+      ids.push(
+        await store.storeEvent('test-stream', {
+          jsonrpc: '2.0',
+          id: i,
+          method: `m${i}`,
+          params: {}
+        })
+      )
     }
 
     // Ids address individual events, so a collision would silently drop one.
@@ -135,14 +152,21 @@ describe('bounded event store (#812)', () => {
     // Fill beyond limit
     const ids: string[] = []
     for (let i = 0; i < 1100; i++) {
-      const id = await store.storeEvent('stream-a', { jsonrpc: '2.0', id: i, method: 'test', params: {} })
+      const id = await store.storeEvent('stream-a', {
+        jsonrpc: '2.0',
+        id: i,
+        method: 'test',
+        params: {}
+      })
       ids.push(id)
     }
 
     // Oldest events should be evicted, so first few ids no longer exist
     const sent: Array<{ id: string; msg: any }> = []
     const resultStreamId = await store.replayEventsAfter(ids[0], {
-      send: async (eid, msg) => { sent.push({ id: eid, msg }) }
+      send: async (eid, msg) => {
+        sent.push({ id: eid, msg })
+      }
     })
     // Should return empty since the oldest event was evicted
     expect(resultStreamId).toBe('')
@@ -154,9 +178,24 @@ describe('bounded event store (#812)', () => {
     const store = new InMemoryEventStore()
 
     // Add events and track their IDs
-    const id1 = await store.storeEvent('stream-b', { jsonrpc: '2.0', id: 1, method: 'a', params: {} })
-    const _id2 = await store.storeEvent('stream-b', { jsonrpc: '2.0', id: 2, method: 'b', params: {} })
-    const _id3 = await store.storeEvent('stream-b', { jsonrpc: '2.0', id: 3, method: 'c', params: {} })
+    const id1 = await store.storeEvent('stream-b', {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'a',
+      params: {}
+    })
+    const _id2 = await store.storeEvent('stream-b', {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'b',
+      params: {}
+    })
+    const _id3 = await store.storeEvent('stream-b', {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'c',
+      params: {}
+    })
 
     const sent: Array<{ id: string; method: string }> = []
     const resultStreamId = await store.replayEventsAfter(id1, {
@@ -167,8 +206,8 @@ describe('bounded event store (#812)', () => {
     expect(resultStreamId).toBe('stream-b')
     // Should have sent at least one event after id1
     expect(sent.length).toBeGreaterThanOrEqual(1)
-    expect(sent.some(s => s.method === 'b')).toBe(true)
-    expect(sent.some(s => s.method === 'c')).toBe(true)
+    expect(sent.some((s) => s.method === 'b')).toBe(true)
+    expect(sent.some((s) => s.method === 'c')).toBe(true)
   })
 
   test('replayEventsAfter delivers the whole same-millisecond burst tail in insertion order (#812 regression)', async () => {
@@ -218,17 +257,45 @@ describe('bounded event store (#812)', () => {
       attempts++
       const store = new InMemoryEventStore()
       const startedAt = Date.now()
-      const idA = await store.storeEvent('stream-a', { jsonrpc: '2.0', id: 1, method: 'a1', params: {} })
-      const idB = await store.storeEvent('stream-b', { jsonrpc: '2.0', id: 2, method: 'b1', params: {} })
-      const idA2 = await store.storeEvent('stream-a', { jsonrpc: '2.0', id: 3, method: 'a2', params: {} })
-      const idB2 = await store.storeEvent('stream-b', { jsonrpc: '2.0', id: 4, method: 'b2', params: {} })
+      const idA = await store.storeEvent('stream-a', {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'a1',
+        params: {}
+      })
+      const idB = await store.storeEvent('stream-b', {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'b1',
+        params: {}
+      })
+      const idA2 = await store.storeEvent('stream-a', {
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'a2',
+        params: {}
+      })
+      const idB2 = await store.storeEvent('stream-b', {
+        jsonrpc: '2.0',
+        id: 4,
+        method: 'b2',
+        params: {}
+      })
       if (startedAt !== Date.now()) continue
 
       checked++
       // Replaying from a stream-a anchor must not leak stream-b events, even though
       // both streams share the millisecond and therefore the id prefix ordering.
-      expect(await replayFrom(store, idA)).toEqual({ streamId: 'stream-a', ids: [idA2], methods: ['a2'] })
-      expect(await replayFrom(store, idB)).toEqual({ streamId: 'stream-b', ids: [idB2], methods: ['b2'] })
+      expect(await replayFrom(store, idA)).toEqual({
+        streamId: 'stream-a',
+        ids: [idA2],
+        methods: ['a2']
+      })
+      expect(await replayFrom(store, idB)).toEqual({
+        streamId: 'stream-b',
+        ids: [idB2],
+        methods: ['b2']
+      })
     }
     expect(checked).toBe(SAME_MS_BURSTS)
   })

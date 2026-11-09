@@ -35,7 +35,7 @@ const LOG_LEVEL_ORDER: Record<LogLevel, number> = { off: 0, error: 1, warn: 2, i
 
 export function matchLogLevel(raw: string): LogLevel | undefined {
   const normalized = raw.toLowerCase()
-  return LOG_LEVELS.find(level => level === normalized)
+  return LOG_LEVELS.find((level) => level === normalized)
 }
 
 // Level comparison lives next to the level list so a new level cannot be added without saying

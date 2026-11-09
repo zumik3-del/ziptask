@@ -49,7 +49,7 @@ describe('observability logging', () => {
   }
 
   function recordOf(records: JsonRecord[], msg: string): JsonRecord {
-    const found = records.find(r => r.msg === msg)
+    const found = records.find((r) => r.msg === msg)
     if (found === undefined) throw new Error(`no "${msg}" record in: ${JSON.stringify(records)}`)
     return found
   }
@@ -76,7 +76,14 @@ describe('observability logging', () => {
 
     const startup = recordOf(captureRecords(), 'ziptask started')
     expect(Object.keys(startup).sort()).toEqual([
-      'dbPath', 'host', 'level', 'logger', 'msg', 'port', 'ts', 'version'
+      'dbPath',
+      'host',
+      'level',
+      'logger',
+      'msg',
+      'port',
+      'ts',
+      'version'
     ])
     expect(startup.version).toBe(VERSION)
     expect(startup.host).toBe('127.0.0.1')
@@ -100,7 +107,9 @@ describe('observability logging', () => {
     const open = recordOf(captureRecords(), 'session open')
     expect(open.agent).toBe('agent-verify')
     expect(open.session).toBe(transport.sessionId)
-    expect(String(open.session)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    expect(String(open.session)).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    )
     expect(open.level).toBe('info')
     expect(open.logger).toBe('test')
 
@@ -134,7 +143,9 @@ describe('observability logging', () => {
     const port = srv.port
 
     // Inject a throwing getTaskView to trigger the error path
-    ;(srv.svc as any).getTaskView = () => { throw new Error('boom') }
+    ;(srv.svc as any).getTaskView = () => {
+      throw new Error('boom')
+    }
 
     const res = await fetch(`http://127.0.0.1:${port}/api/task/1`)
     expect(res.status).toBe(500)
@@ -155,7 +166,9 @@ describe('observability logging', () => {
 
     const circular: Record<string, unknown> = {}
     circular.self = circular
-    ;(srv.svc as any).getTaskView = () => { throw circular }
+    ;(srv.svc as any).getTaskView = () => {
+      throw circular
+    }
 
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/1`)
     expect(res.status).toBe(500)
@@ -181,7 +194,9 @@ describe('observability logging', () => {
 
     // A serializable non-Error throw: the shape survives, so the record can be acted on
     // instead of collapsing to the "[object Object]" the err slot would have produced.
-    ;(srv.svc as any).getTaskView = () => { throw { code: 'E_CUSTOM', detail: 'not an Error' } }
+    ;(srv.svc as any).getTaskView = () => {
+      throw { code: 'E_CUSTOM', detail: 'not an Error' }
+    }
 
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/1`)
     expect(res.status).toBe(500)
@@ -213,8 +228,8 @@ describe('observability logging', () => {
     const open = recordOf(records, 'session open')
     expect(open.agent).toBe(evilName)
     expect(open.session).toBe(transport.sessionId)
-    expect(records.filter(r => r.msg === 'forged record')).toEqual([])
-    expect(records.filter(r => r.logger === 'forged')).toEqual([])
+    expect(records.filter((r) => r.msg === 'forged record')).toEqual([])
+    expect(records.filter((r) => r.logger === 'forged')).toEqual([])
 
     await client.close()
     srv.stop()
@@ -288,7 +303,9 @@ describe('session keep-alive fix (#753/#754)', () => {
       return realSetInterval(fn, ms as number)
     }) as unknown as typeof setInterval)
     return {
-      run: () => { for (const sweep of sweeps) sweep() },
+      run: () => {
+        for (const sweep of sweeps) sweep()
+      },
       restore: () => spy.mockRestore()
     }
   }
@@ -309,7 +326,7 @@ describe('session keep-alive fix (#753/#754)', () => {
         'mcp-protocol-version': '2025-06-18'
       },
       body: JSON.stringify({ jsonrpc: '2.0', id: 4711, method: 'tools/list', params: {} })
-    }).then(res => res.status)
+    }).then((res) => res.status)
   }
 
   test('a request on an existing session refreshes lastAccess', async () => {
@@ -350,7 +367,10 @@ describe('session keep-alive fix (#753/#754)', () => {
       // Both sessions are now older than the 200ms TTL, so both are sweep-eligible before the
       // request below: the surviving session is spared by the refresh, not by an inert sweep.
       await Bun.sleep(300)
-      const result = await active.client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
+      const result = await active.client.callTool({
+        name: 'list_tasks',
+        arguments: { project: 'test' }
+      })
       expect(result).toBeDefined()
 
       sweeper.run()
@@ -369,8 +389,12 @@ describe('session keep-alive fix (#753/#754)', () => {
 describe('stale session recovery', () => {
   let srv: TestServer
 
-  beforeEach(() => { srv = startTestServer() })
-  afterEach(() => { srv.stop() })
+  beforeEach(() => {
+    srv = startTestServer()
+  })
+  afterEach(() => {
+    srv.stop()
+  })
 
   function mcpRequest(sessionId: string, body: unknown): Promise<Response> {
     return fetch(`http://127.0.0.1:${srv.port}/mcp`, {
@@ -385,9 +409,14 @@ describe('stale session recovery', () => {
   }
 
   test('unknown mcp-session-id → 404 Session not found (client re-init trigger)', async () => {
-    const res = await mcpRequest('bogus-stale-session', { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })
+    const res = await mcpRequest('bogus-stale-session', {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+      params: {}
+    })
     expect(res.status).toBe(404)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.error.code).toBe(-32001)
     expect(body.error.message).toBe('Session not found')
   })
@@ -400,20 +429,28 @@ describe('stale session recovery', () => {
     expect(staleId).toBeDefined()
     await transport.terminateSession()
 
-    const res = await mcpRequest(staleId!, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
+    const res = await mcpRequest(staleId!, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+      params: {}
+    })
     expect(res.status).toBe(404)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.error.code).toBe(-32001)
   })
 
   test('sessionless non-initialize request → 400 Mcp-Session-Id required', async () => {
     const res = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream'
+      },
       body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })
     })
     expect(res.status).toBe(400)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.error.code).toBe(-32000)
     expect(body.error.message).toContain('Mcp-Session-Id')
   })

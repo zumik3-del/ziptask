@@ -10,37 +10,62 @@ import { TERMINAL_STATUSES } from './core/tasks'
 import { DEFAULT_REPORTER } from './defaults'
 import { ENV_MAPPINGS, DEFAULTS, loadSettings } from './config'
 import {
-  handleCreateTask, handleGetTask, handleListTasks, handleClaimTask,
-  handleListQueue, handleUpdateStatus
+  handleCreateTask,
+  handleGetTask,
+  handleListTasks,
+  handleClaimTask,
+  handleListQueue,
+  handleUpdateStatus
 } from './mcp/task-tools'
 import { handleAddComment, handleGetTimeline } from './mcp/comment-tools'
 import {
-  handleCreateProject, handleListProjects, handleUpdateProject, handleDeleteProject
+  handleCreateProject,
+  handleListProjects,
+  handleUpdateProject,
+  handleDeleteProject
 } from './mcp/project-tools'
-import { createTestDb, closeTestDb, seedProject, json, text, makeTempDbPath, removeTempDb } from './test-context'
+import {
+  createTestDb,
+  closeTestDb,
+  seedProject,
+  json,
+  text,
+  makeTempDbPath,
+  removeTempDb
+} from './test-context'
 
 let db: Database
 let repo: TaskRepo
 // deliberately NO `scope`: the tests that assert fail-closed refusals must not have a fallback
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15 }) })
-afterEach(() => { closeTestDb(db) })
+beforeEach(() => {
+  db = createTestDb()
+  repo = new TaskRepo(db)
+  svc = new TaskService(repo, { leaseTtlMin: 15 })
+})
+afterEach(() => {
+  closeTestDb(db)
+})
 
 const insertRow = (opts: { title: string; reporter: string; projectId: number | null }): number =>
   repo.insertTask({
     title: opts.title,
     description: null,
     priority: 'p2',
-        reporter: opts.reporter,
+    reporter: opts.reporter,
     depends_on: '[]',
     now: '2026-01-01T00:00:00.000Z',
     projectId: opts.projectId
   }).id
 
-const createIn = (title: string, project: string, extra: { depends_on?: number[]; epic_id?: number; epic?: boolean } = {}): number =>
-  json(handleCreateTask(svc, { title, reporter: 'dev', project, ...extra })).id as number
+const createIn = (
+  title: string,
+  project: string,
+  extra: { depends_on?: number[]; epic_id?: number; epic?: boolean } = {}
+): number => json(handleCreateTask(svc, { title, reporter: 'dev', project, ...extra })).id as number
 
-const queueIn = (project: string) => text(handleListQueue(svc, { project })).split('\n').filter(Boolean)
+const queueIn = (project: string) =>
+  text(handleListQueue(svc, { project })).split('\n').filter(Boolean)
 
 // ADR D1: the last statement of the frozen v4 prefix (schema_version = 22).
 const V4_STATEMENT_COUNT = 22
@@ -53,7 +78,9 @@ const FROZEN_V4_PREFIX_SHA256 = '15b4ea25663d669f5fcb6fec57e0d85cd8433994a9b56c3
 
 // `list_projects` pipes `slug|folder|open`; the open column is the only thing these tests read.
 function openCountOf(slug: string): string | undefined {
-  const line = text(handleListProjects(svc, {})).split('\n').find(l => l.startsWith(`${slug}|`))
+  const line = text(handleListProjects(svc, {}))
+    .split('\n')
+    .find((l) => l.startsWith(`${slug}|`))
   return line?.split('|')[2]
 }
 
@@ -72,12 +99,16 @@ function setUpdatedAt(slug: string, iso: string): void {
 // (not a re-typed literal): it names which rows the tool counted, so a filter that keeps or drops
 // the wrong status fails on the member list and not only on the total.
 function openTaskTitles(project: string): string[] {
-  const terminal = TERMINAL_STATUSES.map(s => `'${s}'`).join(', ')
-  return (db.query(`
+  const terminal = TERMINAL_STATUSES.map((s) => `'${s}'`).join(', ')
+  return (
+    db
+      .query(`
     SELECT t.title FROM tasks t JOIN projects p ON p.id = t.project_id
     WHERE p.slug = ? AND t.status NOT IN (${terminal})
     ORDER BY t.id
-  `).all(project) as { title: string }[]).map(r => r.title)
+  `)
+      .all(project) as { title: string }[]
+  ).map((r) => r.title)
 }
 
 type ToolResult = {
@@ -124,9 +155,14 @@ describe('projects: fresh DB and migration v4 -> v5 (ADR D1)', () => {
     try {
       const fresh = openDatabase(path)
       expect((fresh.query('SELECT COUNT(*) AS n FROM projects').get() as { n: number }).n).toBe(0)
-      expect((fresh.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number }).version).toBe(MIGRATIONS.length)
+      expect(
+        (fresh.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number })
+          .version
+      ).toBe(MIGRATIONS.length)
       fresh.close()
-    } finally { removeTempDb(path) }
+    } finally {
+      removeTempDb(path)
+    }
   })
 
   test('v4 -> v5 upgrade parks every pre-existing row in the reserved legacy project', () => {
@@ -135,41 +171,61 @@ describe('projects: fresh DB and migration v4 -> v5 (ADR D1)', () => {
       buildV4Db(path)
       const upgraded = openDatabase(path)
 
-      expect((upgraded.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number }).version).toBe(MIGRATIONS.length)
+      expect(
+        (upgraded.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number })
+          .version
+      ).toBe(MIGRATIONS.length)
 
-      const projects = upgraded.query('SELECT id, slug, folder_path, created_at FROM projects').all() as any[]
+      const projects = upgraded
+        .query('SELECT id, slug, folder_path, created_at FROM projects')
+        .all() as any[]
       expect(projects).toHaveLength(1)
       expect(projects[0].slug).toBe('legacy')
       expect(projects[0].folder_path).toBe('')
       // pure-SQL strftime('%Y-%m-%dT%H:%M:%fZ','now') must stay byte-comparable with nowIso()
       expect(projects[0].created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
 
-      expect((upgraded.query('SELECT COUNT(*) AS n FROM tasks WHERE project_id IS NULL').get() as { n: number }).n).toBe(0)
-      const joined = upgraded.query(
-        'SELECT t.title, p.slug FROM tasks t JOIN projects p ON p.id = t.project_id ORDER BY t.id'
-      ).all() as any[]
-      expect(joined.map(r => r.slug)).toEqual(['legacy', 'legacy', 'legacy'])
-      expect(joined.map(r => r.title)).toEqual(['v4 done', 'v4 queued', 'v4 failed'])
+      expect(
+        (
+          upgraded.query('SELECT COUNT(*) AS n FROM tasks WHERE project_id IS NULL').get() as {
+            n: number
+          }
+        ).n
+      ).toBe(0)
+      const joined = upgraded
+        .query(
+          'SELECT t.title, p.slug FROM tasks t JOIN projects p ON p.id = t.project_id ORDER BY t.id'
+        )
+        .all() as any[]
+      expect(joined.map((r) => r.slug)).toEqual(['legacy', 'legacy', 'legacy'])
+      expect(joined.map((r) => r.title)).toEqual(['v4 done', 'v4 queued', 'v4 failed'])
 
-      const indexes = (upgraded.query("SELECT name FROM sqlite_master WHERE type='index'").all() as { name: string }[])
-        .map(i => i.name)
+      const indexes = (
+        upgraded.query("SELECT name FROM sqlite_master WHERE type='index'").all() as {
+          name: string
+        }[]
+      ).map((i) => i.name)
       expect(indexes).toContain('idx_tasks_project_status_priority')
 
       // tasks carries the self-FK (epic_id) plus the v5 project FK; NO ACTION is the delete backstop
       const fks = upgraded.query('PRAGMA foreign_key_list(tasks)').all() as any[]
-      const projectFk = fks.filter(f => f.table === 'projects')
+      const projectFk = fks.filter((f) => f.table === 'projects')
       expect(projectFk).toHaveLength(1)
       expect(projectFk[0].from).toBe('project_id')
       expect(projectFk[0].on_delete).toBe('NO ACTION')
-      expect(fks.some(f => f.from === 'epic_id' && f.table === 'tasks')).toBe(true)
+      expect(fks.some((f) => f.from === 'epic_id' && f.table === 'tasks')).toBe(true)
       upgraded.close()
-    } finally { removeTempDb(path) }
+    } finally {
+      removeTempDb(path)
+    }
   })
 
   test('migration statements 1..22 stay byte-identical (append-only)', () => {
     const frozen = MIGRATIONS.slice(0, V4_STATEMENT_COUNT)
     expect(frozen).toHaveLength(V4_STATEMENT_COUNT)
-    expect(createHash('sha256').update(JSON.stringify(frozen)).digest('hex')).toBe(FROZEN_V4_PREFIX_SHA256)
+    expect(createHash('sha256').update(JSON.stringify(frozen)).digest('hex')).toBe(
+      FROZEN_V4_PREFIX_SHA256
+    )
     // a released statement must never be dropped or rewritten in place; only appended
     expect(MIGRATIONS.length).toBeGreaterThan(V4_STATEMENT_COUNT)
     expect(MIGRATIONS.length).toBe(32)
@@ -200,7 +256,9 @@ describe('projects: CRUD contract (ADR D4)', () => {
     expect(row.folder_path).toBe('/tmp/opencode/My Project')
 
     // an explicit slug does not skip normalization
-    expect(json(handleCreateProject(svc, { slug: 'rawname', folder_path: '/srv/only-slash/' })).slug).toBe('rawname')
+    expect(
+      json(handleCreateProject(svc, { slug: 'rawname', folder_path: '/srv/only-slash/' })).slug
+    ).toBe('rawname')
     expect(repo.projectBySlug('rawname')!.folder_path).toBe('/srv/only-slash')
     expect(openCountOf('rawname')).toBe('0')
 
@@ -221,10 +279,14 @@ describe('projects: CRUD contract (ADR D4)', () => {
     expect(repo.projectBySlug('rel2')).toBeNull()
     expect(repo.projectSlugs()).toEqual(['test'])
     // empty stays a different refusal, not the new one
-    expect(text(handleCreateProject(svc, { folder_path: '' }))).toBe('INVALID: folder_path required')
+    expect(text(handleCreateProject(svc, { folder_path: '' }))).toBe(
+      'INVALID: folder_path required'
+    )
 
     // RL1: folder_path is a caller-side annotation, so nothing is stat()ed and nothing must exist
-    const missing = json(handleCreateProject(svc, { slug: 'ghost', folder_path: '/nope/does/not/exist' }))
+    const missing = json(
+      handleCreateProject(svc, { slug: 'ghost', folder_path: '/nope/does/not/exist' })
+    )
     expect(missing.slug).toBe('ghost')
     expect(repo.projectBySlug('ghost')!.folder_path).toBe('/nope/does/not/exist')
   })
@@ -240,18 +302,31 @@ describe('projects: CRUD contract (ADR D4)', () => {
     repo.transaction(() => {
       seedProject(db, 'alpha')
       seedProject(db, 'beta')
-      repo.insertProject({ slug: 'gamma', folderPath: '/tmp/opencode/a|b', now: '2026-01-01T00:00:00.000Z' })
+      repo.insertProject({
+        slug: 'gamma',
+        folderPath: '/tmp/opencode/a|b',
+        now: '2026-01-01T00:00:00.000Z'
+      })
       const alphaId = repo.projectBySlug('alpha')!.id
       const betaId = repo.projectBySlug('beta')!.id
-      for (const [title, projectId] of [['a1', alphaId], ['a2', alphaId], ['b1', betaId]] as const) {
+      for (const [title, projectId] of [
+        ['a1', alphaId],
+        ['a2', alphaId],
+        ['b1', betaId]
+      ] as const) {
         repo.insertTask({
-          title, description: null, priority: 'p2', reporter: 'dev',
-          depends_on: '[]', now: '2026-01-01T00:00:00.000Z', projectId
+          title,
+          description: null,
+          priority: 'p2',
+          reporter: 'dev',
+          depends_on: '[]',
+          now: '2026-01-01T00:00:00.000Z',
+          projectId
         })
       }
     })
     const lines = text(handleListProjects(svc, {})).split('\n')
-    expect(lines.map(l => l.split('|')[0])).toEqual(['alpha', 'beta', 'gamma', 'test'])
+    expect(lines.map((l) => l.split('|')[0])).toEqual(['alpha', 'beta', 'gamma', 'test'])
     expect(lines[0]).toBe('alpha||2')
     expect(lines[1]).toBe('beta||1')
     expect(lines[2]).toBe('gamma|/tmp/opencode/a/b|0')
@@ -264,17 +339,24 @@ describe('projects: CRUD contract (ADR D4)', () => {
       seedProject(db, 'alpha')
       seedProject(db, 'beta')
       seedProject(db, 'gamma')
-      createIn('a1', 'alpha')                  // queued
-      a2 = createIn('a2', 'alpha')             // in_progress
-      const a3 = createIn('a3', 'alpha')       // done
-      const a4 = createIn('a4', 'alpha')       // failed
-      const a5 = createIn('a5', 'alpha')       // canceled
-      createIn('b1', 'beta')                   // queued
-      const g1 = createIn('g1', 'gamma')       // done
-      const g2 = createIn('g2', 'gamma')       // failed
-      const g3 = createIn('g3', 'gamma')       // canceled
+      createIn('a1', 'alpha') // queued
+      a2 = createIn('a2', 'alpha') // in_progress
+      const a3 = createIn('a3', 'alpha') // done
+      const a4 = createIn('a4', 'alpha') // failed
+      const a5 = createIn('a5', 'alpha') // canceled
+      createIn('b1', 'beta') // queued
+      const g1 = createIn('g1', 'gamma') // done
+      const g2 = createIn('g2', 'gamma') // failed
+      const g3 = createIn('g3', 'gamma') // canceled
       json(handleClaimTask(svc, { agent: 'dev', task_id: a2 }))
-      for (const [id, status] of [[a3, 'done'], [a4, 'failed'], [a5, 'canceled'], [g1, 'done'], [g2, 'failed'], [g3, 'canceled']] as const) {
+      for (const [id, status] of [
+        [a3, 'done'],
+        [a4, 'failed'],
+        [a5, 'canceled'],
+        [g1, 'done'],
+        [g2, 'failed'],
+        [g3, 'canceled']
+      ] as const) {
         setStatus(id, status)
       }
     })
@@ -318,7 +400,9 @@ describe('projects: CRUD contract (ADR D4)', () => {
     // slug is immutable after create: passing it is now an unknown argument.
     const rename = handleUpdateProject(svc, { project: 'alpha', slug: 'alpha2' } as any)
     expect(rename.isError).toBe(true)
-    expect(text(rename)).toBe('INVALID: unknown argument slug on update_project (accepted: archived, folder_path, project)')
+    expect(text(rename)).toBe(
+      'INVALID: unknown argument slug on update_project (accepted: archived, folder_path, project)'
+    )
     expect(repo.projectBySlug('alpha')).not.toBeNull()
   })
 
@@ -340,7 +424,7 @@ describe('projects: CRUD contract (ADR D4)', () => {
     expect(json(res)).toEqual({ slug: 'alpha' })
 
     const after = repo.projectBySlug('alpha')!
-    expect(after.folder_path).toBe('/srv/work/alpha')        // trailing slash stripped
+    expect(after.folder_path).toBe('/srv/work/alpha') // trailing slash stripped
     expect(after.slug).toBe(before.slug)
     expect(after.created_at).toBe(before.created_at)
     expect(after.archived_at).toBe(before.archived_at)
@@ -352,7 +436,9 @@ describe('projects: CRUD contract (ADR D4)', () => {
     json(handleUpdateProject(svc, { project: 'beta', archived: true }))
     const archivedAt = repo.projectBySlug('beta')!.archived_at
     expect(archivedAt).not.toBeNull()
-    expect(json(handleUpdateProject(svc, { project: 'beta', folder_path: '/srv/work/beta' })).slug).toBe('beta')
+    expect(
+      json(handleUpdateProject(svc, { project: 'beta', folder_path: '/srv/work/beta' })).slug
+    ).toBe('beta')
     expect(repo.projectBySlug('beta')!.archived_at).toBe(archivedAt)
     expect(repo.projectBySlug('beta')!.folder_path).toBe('/srv/work/beta')
   })
@@ -372,7 +458,9 @@ describe('projects: CRUD contract (ADR D4)', () => {
     expect(text(relativeToCwd)).toBe('INVALID: folder_path must be an absolute path')
 
     // an absolute path is accepted with no existence check here either
-    expect(json(handleUpdateProject(svc, { project: 'alpha', folder_path: '/nope/does/not/exist' })).slug).toBe('alpha')
+    expect(
+      json(handleUpdateProject(svc, { project: 'alpha', folder_path: '/nope/does/not/exist' })).slug
+    ).toBe('alpha')
     expect(repo.projectBySlug('alpha')!.folder_path).toBe('/nope/does/not/exist')
   })
 
@@ -380,8 +468,12 @@ describe('projects: CRUD contract (ADR D4)', () => {
     seedProject(db, 'alpha')
     seedProject(db, 'beta')
     const shared = '/srv/work/shared'
-    expect(okJson(handleUpdateProject(svc, { project: 'alpha', folder_path: shared }))).toEqual({ slug: 'alpha' })
-    expect(okJson(handleUpdateProject(svc, { project: 'beta', folder_path: shared }))).toEqual({ slug: 'beta' })
+    expect(okJson(handleUpdateProject(svc, { project: 'alpha', folder_path: shared }))).toEqual({
+      slug: 'alpha'
+    })
+    expect(okJson(handleUpdateProject(svc, { project: 'beta', folder_path: shared }))).toEqual({
+      slug: 'beta'
+    })
     expect(repo.projectBySlug('alpha')!.folder_path).toBe(shared)
     expect(repo.projectBySlug('beta')!.folder_path).toBe(shared)
 
@@ -389,7 +481,12 @@ describe('projects: CRUD contract (ADR D4)', () => {
     expect(created.isError).toBeUndefined()
     expect(repo.projectBySlug('gamma')!.folder_path).toBe(shared)
     expect(text(handleListProjects(svc, {}))).toBe(
-      ['alpha|/srv/work/shared|0', 'beta|/srv/work/shared|0', 'gamma|/srv/work/shared|0', 'test||0'].join('\n')
+      [
+        'alpha|/srv/work/shared|0',
+        'beta|/srv/work/shared|0',
+        'gamma|/srv/work/shared|0',
+        'test||0'
+      ].join('\n')
     )
   })
 
@@ -438,7 +535,11 @@ describe('projects: CRUD contract (ADR D4)', () => {
     seedProject(db, 'alpha')
     createIn('a1', 'alpha')
     let thrown: Error | null = null
-    try { db.run('DELETE FROM projects WHERE slug = ?', ['alpha']) } catch (err) { thrown = err as Error }
+    try {
+      db.run('DELETE FROM projects WHERE slug = ?', ['alpha'])
+    } catch (err) {
+      thrown = err as Error
+    }
     expect(thrown).toBeInstanceOf(Error)
     expect(thrown!.message).toContain('FOREIGN KEY constraint failed')
     expect(repo.projectBySlug('alpha')).not.toBeNull()
@@ -461,11 +562,19 @@ describe('projects: fail-closed refusals (ADR D2, E1-E4)', () => {
       ['claim_task auto-pick', handleClaimTask(svc, { agent: 'dev' })]
     ]
     for (const [shape, res] of refusals) {
-      expect(`${shape}: ${res.isError ? text(res) : 'NO ERROR'}`).toBe(`${shape}: INVALID: project required`)
+      expect(`${shape}: ${res.isError ? text(res) : 'NO ERROR'}`).toBe(
+        `${shape}: INVALID: project required`
+      )
     }
-    expect((db.query('SELECT COUNT(*) AS n FROM tasks').get() as { n: number }).n).toBe(before.tasks)
-    expect((db.query('SELECT COUNT(*) AS n FROM audit_log').get() as { n: number }).n).toBe(before.audit)
-    expect((db.query('SELECT COUNT(*) AS n FROM projects').get() as { n: number }).n).toBe(before.projects)
+    expect((db.query('SELECT COUNT(*) AS n FROM tasks').get() as { n: number }).n).toBe(
+      before.tasks
+    )
+    expect((db.query('SELECT COUNT(*) AS n FROM audit_log').get() as { n: number }).n).toBe(
+      before.audit
+    )
+    expect((db.query('SELECT COUNT(*) AS n FROM projects').get() as { n: number }).n).toBe(
+      before.projects
+    )
   })
 
   test('an unknown slug lists the known slugs; no projects at all tells the caller what to do', () => {
@@ -495,26 +604,40 @@ describe('projects: fail-closed refusals (ADR D2, E1-E4)', () => {
         "INVALID: unknown project '*' (no projects defined; create one with create_project)"
       )
       fresh.close()
-    } finally { removeTempDb(emptyPath) }
+    } finally {
+      removeTempDb(emptyPath)
+    }
   })
 
   test('by-id shapes do not declare project: passing it is an unknown-argument refusal (E4)', () => {
     const id = createIn('a1', 'test')
     const direct = handleGetTask(svc, { id, fields: ['id'], project: 'test' } as never)
     expect(direct.isError).toBe(true)
-    expect(text(direct)).toBe('INVALID: unknown argument project on get_task (accepted: fields, id)')
+    expect(text(direct)).toBe(
+      'INVALID: unknown argument project on get_task (accepted: fields, id)'
+    )
 
     // one enum per by-id tool: the guard reads the shape literal, so the accepted list is the contract
     const refusal = 'INVALID: unknown argument project on'
-    expect(text(handleUpdateStatus(svc, { id, agent: 'dev', status: 'review', project: 'test' } as never)))
-      .toBe(`${refusal} update_status (accepted: agent, comment, id, renew, reset_attempts, status, version)`)
-    expect(text(handleAddComment(svc, { id, agent: 'dev', content: 'x', project: 'test' } as never)))
-      .toBe(`${refusal} add_comment (accepted: agent, comment, content, id, text)`)
-    expect(text(handleGetTimeline(svc, { id, project: 'test' } as never)))
-      .toBe(`${refusal} get_timeline (accepted: id, limit)`)
+    expect(
+      text(
+        handleUpdateStatus(svc, { id, agent: 'dev', status: 'review', project: 'test' } as never)
+      )
+    ).toBe(
+      `${refusal} update_status (accepted: agent, comment, id, renew, reset_attempts, status, version)`
+    )
+    expect(
+      text(handleAddComment(svc, { id, agent: 'dev', content: 'x', project: 'test' } as never))
+    ).toBe(`${refusal} add_comment (accepted: agent, comment, content, id, text)`)
+    expect(text(handleGetTimeline(svc, { id, project: 'test' } as never))).toBe(
+      `${refusal} get_timeline (accepted: id, limit)`
+    )
 
     // refused, not applied: the row and its version are untouched, and no comment was appended
-    expect(json(handleGetTask(svc, { id, fields: ['status', 'version'] }))).toEqual({ status: 'queued', version: 1 })
+    expect(json(handleGetTask(svc, { id, fields: ['status', 'version'] }))).toEqual({
+      status: 'queued',
+      version: 1
+    })
     expect((db.query('SELECT COUNT(*) AS n FROM comments').get() as { n: number }).n).toBe(0)
   })
 
@@ -529,8 +652,9 @@ describe('projects: fail-closed refusals (ADR D2, E1-E4)', () => {
     expect(repo.getTaskRow(b1)!.assignee).toBe('dev')
 
     // the same value on the auto-pick branch is validated, because that branch is the scoped one
-    expect(text(handleClaimTask(svc, { agent: 'dev', project: 'bogus-slug' })))
-      .toBe("INVALID: unknown project 'bogus-slug' (known: alpha, beta, test)")
+    expect(text(handleClaimTask(svc, { agent: 'dev', project: 'bogus-slug' }))).toBe(
+      "INVALID: unknown project 'bogus-slug' (known: alpha, beta, test)"
+    )
   })
 })
 
@@ -543,8 +667,13 @@ describe('projects: enumeration isolation on all three paths (ADR D2)', () => {
     const b1 = createIn('b1', 'beta')
 
     // listTasks orders created_at DESC, id DESC: the newest row of each project comes first
-    expect(json(handleListTasks(svc, { project: 'alpha' })).tasks.map((t: any) => t.id)).toEqual([a2, a1])
-    expect(json(handleListTasks(svc, { project: 'beta' })).tasks.map((t: any) => t.id)).toEqual([b1])
+    expect(json(handleListTasks(svc, { project: 'alpha' })).tasks.map((t: any) => t.id)).toEqual([
+      a2,
+      a1
+    ])
+    expect(json(handleListTasks(svc, { project: 'beta' })).tasks.map((t: any) => t.id)).toEqual([
+      b1
+    ])
     expect(json(handleListTasks(svc, { project: 'alpha' })).total).toBe(2)
     expect(json(handleListTasks(svc, { project: 'beta' })).total).toBe(1)
 
@@ -576,8 +705,12 @@ describe('projects: enumeration isolation on all three paths (ADR D2)', () => {
     const byId = json(handleGetTask(svc, { id: a1, fields: ['id', 'project'] }))
     expect(byId.project).toBe('alpha')
     expect('project_id' in json(handleGetTask(svc, { id: a1, fields: ['project_id'] }))).toBe(false)
-    expect(json(handleListTasks(svc, { project: 'alpha', fields: ['id', 'project'] })).tasks[0].project).toBe('alpha')
-    expect(json(handleClaimTask(svc, { agent: 'dev', project: 'alpha', fields: ['project'] })).project).toBe('alpha')
+    expect(
+      json(handleListTasks(svc, { project: 'alpha', fields: ['id', 'project'] })).tasks[0].project
+    ).toBe('alpha')
+    expect(
+      json(handleClaimTask(svc, { agent: 'dev', project: 'alpha', fields: ['project'] })).project
+    ).toBe('alpha')
   })
 
   test('a by-id claim stays unscoped (D2 rule 5)', () => {
@@ -610,12 +743,16 @@ describe('projects: legacy and archived refusals (ADR D3 G1/G2, locked 6)', () =
     expect(refused.isError).toBe(true)
     expect(text(refused)).toBe("INVALID: project 'twin' is archived")
 
-    expect(json(handleListTasks(svc, { project: 'twin' })).tasks.map((t: any) => t.id)).toEqual([id])
+    expect(json(handleListTasks(svc, { project: 'twin' })).tasks.map((t: any) => t.id)).toEqual([
+      id
+    ])
     expect(queueIn('twin')).toEqual([`${id}|p2|t1`])
     expect(json(handleClaimTask(svc, { agent: 'dev', project: 'twin' })).id).toBe(id)
 
     json(handleUpdateProject(svc, { project: 'twin', archived: false }))
-    expect(json(handleCreateTask(svc, { title: 't2', reporter: 'dev', project: 'twin' })).id).toBeGreaterThan(id)
+    expect(
+      json(handleCreateTask(svc, { title: 't2', reporter: 'dev', project: 'twin' })).id
+    ).toBeGreaterThan(id)
   })
 })
 
@@ -626,11 +763,21 @@ describe('projects: cross-project invariants (ADR D3 G3/G4)', () => {
     const b1 = createIn('b1', 'beta')
     const bEpic = createIn('b epic', 'beta', { epic: true })
 
-    const dep = handleCreateTask(svc, { title: 'x', reporter: 'dev', project: 'alpha', depends_on: [b1] })
+    const dep = handleCreateTask(svc, {
+      title: 'x',
+      reporter: 'dev',
+      project: 'alpha',
+      depends_on: [b1]
+    })
     expect(dep.isError).toBe(true)
     expect(text(dep)).toBe(`INVALID: dependency #${b1} belongs to project 'beta'`)
 
-    const epic = handleCreateTask(svc, { title: 'x', reporter: 'dev', project: 'alpha', epic_id: bEpic })
+    const epic = handleCreateTask(svc, {
+      title: 'x',
+      reporter: 'dev',
+      project: 'alpha',
+      epic_id: bEpic
+    })
     expect(epic.isError).toBe(true)
     expect(text(epic)).toBe(`INVALID: epic #${bEpic} belongs to project 'beta'`)
 
@@ -645,11 +792,13 @@ describe('projects: cross-project invariants (ADR D3 G3/G4)', () => {
 describe('projects: no configured default project (ADR D2 rule 2, D6, R1)', () => {
   test('neither loadSettings nor ENV_MAPPINGS nor DEFAULTS carries a project key', () => {
     const settings = loadSettings({ env: {}, argv: [] })
-    expect(Object.keys(settings).filter(k => /project/i.test(k))).toEqual([])
+    expect(Object.keys(settings).filter((k) => /project/i.test(k))).toEqual([])
     expect(JSON.stringify(settings)).not.toContain('project')
-    expect(ENV_MAPPINGS.filter(m => /project/i.test(m.env) || /project/i.test(m.path))).toEqual([])
-    expect(Object.keys(DEFAULTS).filter(k => /project/i.test(k))).toEqual([])
-    expect(Object.keys(DEFAULTS.defaults).filter(k => /project/i.test(k))).toEqual([])
+    expect(ENV_MAPPINGS.filter((m) => /project/i.test(m.env) || /project/i.test(m.path))).toEqual(
+      []
+    )
+    expect(Object.keys(DEFAULTS).filter((k) => /project/i.test(k))).toEqual([])
+    expect(Object.keys(DEFAULTS.defaults).filter((k) => /project/i.test(k))).toEqual([])
   })
 
   test('a service without scope ignores the env and refuses an unscoped call', () => {
@@ -657,14 +806,28 @@ describe('projects: no configured default project (ADR D2 rule 2, D6, R1)', () =
     process.env.ZIPTASK_PROJECT = 'alpha'
     try {
       const bare = new TaskService(repo, { leaseTtlMin: 15 })
-      expect(bare.listQueue({})).toEqual({ ok: false, error: { code: 'INVALID', message: 'project required' } })
-      expect(bare.createTask({ title: 'x', reporter: DEFAULT_REPORTER })).toEqual({ ok: false, error: { code: 'INVALID', message: 'project required' } })
-      expect(bare.listTasks({})).toEqual({ ok: false, error: { code: 'INVALID', message: 'project required' } })
-      expect(bare.claimTask({ agent: 'dev' })).toEqual({ ok: false, error: { code: 'INVALID', message: 'project required' } })
+      expect(bare.listQueue({})).toEqual({
+        ok: false,
+        error: { code: 'INVALID', message: 'project required' }
+      })
+      expect(bare.createTask({ title: 'x', reporter: DEFAULT_REPORTER })).toEqual({
+        ok: false,
+        error: { code: 'INVALID', message: 'project required' }
+      })
+      expect(bare.listTasks({})).toEqual({
+        ok: false,
+        error: { code: 'INVALID', message: 'project required' }
+      })
+      expect(bare.claimTask({ agent: 'dev' })).toEqual({
+        ok: false,
+        error: { code: 'INVALID', message: 'project required' }
+      })
       // only the by-id and ids escapes stay open without a scope
       const id = createIn('a1', 'alpha')
       expect(bare.getTasksByIds([id]).ok).toBe(true)
       expect(bare.claimTask({ agent: 'dev', taskId: id }).ok).toBe(true)
-    } finally { delete process.env.ZIPTASK_PROJECT }
+    } finally {
+      delete process.env.ZIPTASK_PROJECT
+    }
   })
 })
