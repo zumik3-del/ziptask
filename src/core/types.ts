@@ -1,5 +1,60 @@
 import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, CommentType } from './tasks'
 
+// The write/read shapes the store slices share with their implementation and the services with
+// each other: one name per literal, so a parameter, a patch and a result page cannot drift apart.
+
+export type InsertTaskInput = {
+  title: string
+  description: string | null
+  priority: TaskPriority
+  reporter: string
+  depends_on: string
+  now: string
+  maxAttempts?: number
+  epicId?: number
+  isEpic?: boolean
+  projectId?: number | null
+}
+
+export type ListTasksFilters = {
+  assignee?: string
+  status?: TaskStatus
+  updatedSinceIso?: string
+  epicId?: number
+  isEpic?: boolean
+  limit: number
+  projectId?: number
+}
+
+export type UpdateTaskPatch = {
+  title?: string
+  description?: string | null
+  priority?: TaskPriority
+  dependsOn?: string
+}
+
+// The epic roll-up: one read, so a caller cannot count some statuses and miss others.
+export type ChildStatusCounts = {
+  total: number
+  open: number
+  done: number
+  failed: number
+  canceled: number
+}
+
+// The get_task answer: the row, the unsatisfied deps, and (for an epic) the child roll-up.
+export type TaskView = {
+  task: Readonly<Task>
+  blockedBy: number[]
+  subtasks?: ChildStatusCounts
+}
+
+// The list_tasks answer: one page plus the filtered total.
+export type TaskListPage = { tasks: ReadonlyArray<Readonly<Task>>; total: number }
+
+// The batch answer: one entry per requested id, in request order; a missing task is null.
+export type TaskBatch = { items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }
+
 // Lease reaping needs only the sweep, its CAS transition and (via AuditStore) the audit row.
 export interface LeaseStore {
   expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>>
@@ -15,28 +70,9 @@ export interface LeaseStore {
 // Task-scoped storage: task CRUD, deps, leases, epic roll-up. No project/comment/audit methods.
 export interface TaskStore {
   getTaskRow(id: number): Task | null
-  insertTask(task: {
-    title: string
-    description: string | null
-    priority: TaskPriority
-    reporter: string
-    depends_on: string
-    now: string
-    maxAttempts?: number
-    epicId?: number
-    isEpic?: boolean
-    projectId?: number | null
-  }): { id: number; status: CreatedTaskStatus }
+  insertTask(task: InsertTaskInput): { id: number; status: CreatedTaskStatus }
   deleteTask(id: number): void
-  listTasks(filters: {
-    assignee?: string
-    status?: TaskStatus
-    updatedSinceIso?: string
-    epicId?: number
-    isEpic?: boolean
-    limit: number
-    projectId?: number
-  }): { rows: Task[]; total: number }
+  listTasks(filters: ListTasksFilters): { rows: Task[]; total: number }
   queuedCandidates(limit: number, projectId: number, offset?: number): Task[]
   depsOf(id: number): string | null
   statusesOf(ids: number[]): Map<number, TaskStatus>
@@ -58,26 +94,10 @@ export interface TaskStore {
     holder?: string | null,
     resetAttempts?: 0 | 1
   ): number
-  updateTaskFields(
-    id: number,
-    expectedVersion: number,
-    patch: {
-      title?: string
-      description?: string | null
-      priority?: TaskPriority
-      dependsOn?: string
-    },
-    now: string
-  ): number
+  updateTaskFields(id: number, expectedVersion: number, patch: UpdateTaskPatch, now: string): number
   transaction<T>(fn: () => T): T
   nonTerminalChildCount(epicId: number): number
-  childStatusCounts(epicId: number): {
-    total: number
-    open: number
-    done: number
-    failed: number
-    canceled: number
-  }
+  childStatusCounts(epicId: number): ChildStatusCounts
   promoteEpicWithMirror(
     id: number,
     agent: string,

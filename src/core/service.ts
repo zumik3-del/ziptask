@@ -2,7 +2,10 @@ import type { Task, TaskPriority, CreatedTaskStatus, Clock } from './tasks'
 import { MAX_LEASE_TTL_MIN, asClock } from './tasks'
 import type {
   CommentRow,
+  TaskBatch,
+  TaskListPage,
   TaskServiceStore,
+  TaskView,
   TimelineRow,
   SvcResult,
   UpdateStatusData,
@@ -96,23 +99,15 @@ export class TaskService {
     return this.lifecycle.createTask(args)
   }
 
-  getTaskView(id: number): SvcResult<{
-    task: Readonly<Task>
-    blockedBy: number[]
-    subtasks?: { total: number; open: number; done: number; failed: number; canceled: number }
-  }> {
+  getTaskView(id: number): SvcResult<TaskView> {
     return this.query.getTaskView(id)
   }
 
-  listTasks(
-    args: ListTasksArgs
-  ): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number }> {
+  listTasks(args: ListTasksArgs): SvcResult<TaskListPage> {
     return this.query.listTasks(args)
   }
 
-  getTasksByIds(
-    ids: number[]
-  ): SvcResult<{ items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
+  getTasksByIds(ids: number[]): SvcResult<TaskBatch> {
     return this.query.getTasksByIds(ids)
   }
 

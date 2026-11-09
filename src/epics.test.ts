@@ -15,6 +15,7 @@ import {
   handleListTasks
 } from './mcp/task-tools'
 import {
+  versionOf as versionIn,
   createTestDb,
   closeTestDb,
   getTaskRow,
@@ -43,8 +44,7 @@ afterEach(() => {
 // below reads this before and after, so "the row did not move" is an assertion, not an assumption.
 const auditCount = (id: number): number =>
   (db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n
-const versionOf = (id: number): number =>
-  json(handleGetTask(svc, { id, fields: ['version'] })).version
+const versionOf = (id: number) => versionIn(svc, id)
 
 describe('epic creation', () => {
   test('epic: true creates non-claimable task with is_epic=1', () => {
@@ -812,10 +812,6 @@ describe('promotion cannot destroy in-flight work (review #1740 P1)', () => {
       handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: versionOf(id) })
     }
     return id
-  }
-
-  function versionOf(id: number): number {
-    return json(handleGetTask(svc, { id, fields: ['version'] })).version
   }
 
   for (const status of ['in_progress', 'review', 'blocked'] as const) {

@@ -210,6 +210,17 @@ export function asClock(input: unknown): Clock | null {
   return null
 }
 
+// The one fallback for a consumer holding an optional clock: the injected clock when there is one,
+// the process-wide source otherwise. Same semantics as nowIso()/monotonicNowMs(), named once so a
+// consumer cannot pick a different fallback for one of the two readings.
+export function clockNowMs(clock: Clock | null): number {
+  return clock ? clock.nowMs() : monotonicNowMs()
+}
+
+export function clockNowIso(clock: Clock | null): string {
+  return clock ? clock.nowIso() : nowIso()
+}
+
 export const MAX_TITLE_LENGTH = 200
 export const MAX_AGENT_LENGTH = 200
 export const MAX_CONTENT_LENGTH = 10000

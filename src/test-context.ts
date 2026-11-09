@@ -176,6 +176,21 @@ export function json(res: any): any {
   return JSON.parse(textOf(res))
 }
 
+// The version as the wire reports it, so a test writes against the state it observes instead of
+// assuming a bump count.
+export function versionOf(svc: TaskService, id: number): number {
+  return json(handleGetTask(svc, { id, fields: ['version'] })).version
+}
+
+export type AuditRow = { action: string; old_value: string | null; new_value: string | null }
+
+// The audit trail of one task in write order; a test filters it by action.
+export function auditRows(db: Database, id: number): AuditRow[] {
+  return db
+    .query('SELECT action, old_value, new_value FROM audit_log WHERE task_id = ? ORDER BY id')
+    .all(id) as AuditRow[]
+}
+
 export function driveToDone(svc: TaskService, id: number, agent: string) {
   handleClaimTask(svc, { agent, task_id: id })
   const v1 = json(handleGetTask(svc, { id, fields: ['version'] })).version

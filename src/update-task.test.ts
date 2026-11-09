@@ -10,7 +10,16 @@ import {
   handleUpdateStatus,
   handleUpdateTask
 } from './mcp/task-tools'
-import { createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text } from './test-context'
+import {
+  auditRows as auditRowsIn,
+  versionOf as versionIn,
+  createTestDb,
+  closeTestDb,
+  insertTaskRow,
+  getTaskRow,
+  json,
+  text
+} from './test-context'
 
 let db: Database
 let repo: TaskRepo
@@ -32,12 +41,8 @@ const createTaskRow = (opts: any = {}) =>
     depends_on: opts.depends_on
   })
 const row = (id: number) => getTaskRow(db, id)
-const versionOf = (id: number): number =>
-  json(handleGetTask(svc, { id, fields: ['version'] })).version
-const auditRows = (id: number) =>
-  db
-    .query('SELECT action, old_value, new_value FROM audit_log WHERE task_id = ? ORDER BY id')
-    .all(id) as Array<{ action: string; old_value: string | null; new_value: string | null }>
+const versionOf = (id: number) => versionIn(svc, id)
+const auditRows = (id: number) => auditRowsIn(db, id)
 const countAudit = (id: number, action: string): number =>
   (
     db

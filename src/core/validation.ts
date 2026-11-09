@@ -37,10 +37,8 @@ export function agentError(agent: string): SvcError | null {
   return requiredError(agent, 'agent') ?? tooLongError(agent, MAX_AGENT_LENGTH, 'agent')
 }
 
-export function contentError(content: string): SvcError | null {
-  return requiredError(content, 'content') ?? tooLongError(content, MAX_CONTENT_LENGTH, 'content')
-}
-
-export function commentError(comment: string): SvcError | null {
-  return requiredError(comment, 'comment') ?? tooLongError(comment, MAX_CONTENT_LENGTH, 'comment')
+// A free-text body: a comment and a task description both share the same limit and the same two
+// refusals, so the field name is the only thing that differs between the call sites.
+export function textError(value: string, field: string): SvcError | null {
+  return requiredError(value, field) ?? tooLongError(value, MAX_CONTENT_LENGTH, field)
 }

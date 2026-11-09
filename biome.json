@@ -105,6 +105,7 @@
                   "../core/tasks": {
                     "allowImportNames": [
                       "asClock",
+                      "clockNowIso",
                       "Task",
                       "TaskStatus",
                       "TaskPriority",
@@ -121,14 +122,18 @@
                   "../core/types": {
                     "allowImportNames": [
                       "AuditStore",
+                      "ChildStatusCounts",
                       "CommentRow",
                       "CommentStore",
+                      "InsertTaskInput",
                       "LeaseStore",
+                      "ListTasksFilters",
                       "ProjectListItem",
                       "ProjectRow",
                       "ProjectStore",
                       "Store",
-                      "TaskStore"
+                      "TaskStore",
+                      "UpdateTaskPatch"
                     ]
                   }
                 },

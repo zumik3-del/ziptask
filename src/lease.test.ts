@@ -13,6 +13,7 @@ import {
 } from './mcp/task-tools'
 import { handleGetTimeline } from './mcp/comment-tools'
 import {
+  versionOf as versionIn,
   createTestDb,
   closeTestDb,
   insertTaskRow,
@@ -43,8 +44,7 @@ const HOLDER = 'developer'
 const HOUR_MS = 3600_000
 
 const row = (id: number) => getTaskRow(db, id)
-const versionOf = (id: number): number =>
-  json(handleGetTask(svc, { id, fields: ['version'] })).version
+const versionOf = (id: number) => versionIn(svc, id)
 const leaseMs = (id: number): number => new Date(row(id).lease_expires_at).getTime()
 // A full window from now: 14 min of slack under the 15 min lease_ttl_min. Comparing against the
 // clock instead of the previous deadline keeps the assertion free of millisecond races, and it is

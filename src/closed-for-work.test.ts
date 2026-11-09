@@ -14,6 +14,8 @@ import {
 } from './mcp/task-tools'
 import { handleListProjects } from './mcp/project-tools'
 import {
+  auditRows as auditRowsIn,
+  versionOf as versionIn,
   createTestDb,
   closeTestDb,
   insertTaskRow,
@@ -43,12 +45,8 @@ afterEach(() => {
 
 const createTaskRow = (title: string) => insertTaskRow(repo, { title, reporter: 'dev' })
 const row = (id: number) => getTaskRow(db, id)
-const versionOf = (id: number): number =>
-  json(handleGetTask(svc, { id, fields: ['version'] })).version
-const auditRows = (id: number) =>
-  db
-    .query('SELECT action, old_value, new_value FROM audit_log WHERE task_id = ? ORDER BY id')
-    .all(id) as Array<{ action: string; old_value: string | null; new_value: string | null }>
+const versionOf = (id: number) => versionIn(svc, id)
+const auditRows = (id: number) => auditRowsIn(db, id)
 const countAudit = (id: number, action: string): number =>
   (
     db

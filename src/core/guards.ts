@@ -12,13 +12,7 @@ import {
 } from './tasks'
 import type { TaskStore, SvcError } from './types'
 import { parseDeps, depsSatisfied, collapseDeps } from './deps'
-import {
-  requiredError,
-  tooLongError,
-  optionalFieldError,
-  epicError,
-  commentError
-} from './validation'
+import { requiredError, tooLongError, optionalFieldError, epicError, textError } from './validation'
 import { RESERVED_PROJECT_SLUG } from './project-slug'
 
 // Only the reads a guard performs: a guard never writes, so it cannot reach the mutating half.
@@ -78,8 +72,10 @@ export function editableWindowError(task: Task): SvcError | null {
 
 // An epic is never leased. The exact wire string is written here once, so claim_task and the
 // update_status acquisition guard can never drift apart.
+const epicNotClaimableMessage = (id: number): string => `#${id} is an epic, not claimable`
+
 export function epicNotClaimableError(task: Task): SvcError | null {
-  return task.is_epic ? { code: 'INVALID', message: `#${task.id} is an epic, not claimable` } : null
+  return task.is_epic ? { code: 'INVALID', message: epicNotClaimableMessage(task.id) } : null
 }
 
 export function claimEligibilityError(task: Task, store: DepsStore): SvcError | null {
@@ -291,7 +287,7 @@ export function updateStatusGuard(
     return { code: 'INVALID', message: `${task.status} → ${args.status}` }
   }
   if (task.is_epic && args.status === 'in_progress' && task.status !== 'in_progress') {
-    return { code: 'INVALID', message: `#${task.id} is an epic, not claimable` }
+    return { code: 'INVALID', message: epicNotClaimableMessage(task.id) }
   }
   if (!isValidTransition(task.status, args.status)) {
     return { code: 'INVALID', message: `${task.status} → ${args.status}` }
@@ -343,7 +339,7 @@ export function updateTaskGuard(
     requiredError(args.agent, 'agent') ?? tooLongError(args.agent, MAX_AGENT_LENGTH, 'agent')
   if (agentErr) return agentErr
   if (args.comment !== undefined) {
-    const commentErr = commentError(args.comment)
+    const commentErr = textError(args.comment, 'comment')
     if (commentErr) return commentErr
   }
   if (args.version !== undefined && task.version !== args.version) {

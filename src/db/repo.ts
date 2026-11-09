@@ -1,22 +1,19 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
-import type {
-  Task,
-  TaskStatus,
-  TaskPriority,
-  CreatedTaskStatus,
-  CommentType,
-  Clock
-} from '../core/tasks'
-import { asClock, clampCursor, clampLimit, nowIso, TERMINAL_STATUSES } from '../core/tasks'
+import type { Task, TaskStatus, CreatedTaskStatus, CommentType, Clock } from '../core/tasks'
+import { asClock, clampCursor, clampLimit, clockNowIso, TERMINAL_STATUSES } from '../core/tasks'
 import type {
   AuditStore,
+  ChildStatusCounts,
   CommentRow,
   CommentStore,
+  InsertTaskInput,
   LeaseStore,
+  ListTasksFilters,
   ProjectListItem,
   ProjectRow,
   ProjectStore,
-  TaskStore
+  TaskStore,
+  UpdateTaskPatch
 } from '../core/types'
 import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
 import {
@@ -54,11 +51,6 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     this.clock = asClock(clock)
   }
 
-  private monotonicIso(): string {
-    if (this.clock) return this.clock.nowIso()
-    return nowIso()
-  }
-
   private inClause(count: number): string {
     return `IN (${Array.from({ length: count }, () => '?').join(',')})`
   }
@@ -75,18 +67,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     return row ? toTask(row) : null
   }
 
-  insertTask(task: {
-    title: string
-    description: string | null
-    priority: TaskPriority
-    reporter: string
-    depends_on: string
-    now: string
-    maxAttempts?: number
-    epicId?: number
-    isEpic?: boolean
-    projectId?: number | null
-  }): { id: number; status: CreatedTaskStatus } {
+  insertTask(task: InsertTaskInput): { id: number; status: CreatedTaskStatus } {
     const maxAttempts = task.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const epicId = task.epicId ?? null
     const isEpic = task.isEpic === true
@@ -123,15 +104,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     this.db.run('DELETE FROM tasks WHERE id = ?', [id])
   }
 
-  listTasks(filters: {
-    assignee?: string
-    status?: TaskStatus
-    updatedSinceIso?: string
-    epicId?: number
-    isEpic?: boolean
-    limit: number
-    projectId?: number
-  }): { rows: Task[]; total: number } {
+  listTasks(filters: ListTasksFilters): { rows: Task[]; total: number } {
     const conditions: string[] = []
     const params: (string | number | null)[] = []
     if (filters.projectId !== undefined) {
@@ -272,12 +245,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   updateTaskFields(
     id: number,
     expectedVersion: number,
-    patch: {
-      title?: string
-      description?: string | null
-      priority?: TaskPriority
-      dependsOn?: string
-    },
+    patch: UpdateTaskPatch,
     now: string
   ): number {
     const hasField =
@@ -359,7 +327,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   ): number {
     const result = this.db.run(
       'INSERT INTO comments (task_id, agent, content, type, created_at) VALUES (?, ?, ?, ?, ?)',
-      [taskId, agent, content, type, this.monotonicIso()]
+      [taskId, agent, content, type, clockNowIso(this.clock)]
     )
     return Number(result.lastInsertRowid)
   }
@@ -373,7 +341,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   ): void {
     this.db.run(
       'INSERT INTO audit_log (task_id, agent, action, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [taskId, agent, action, oldValue ?? null, newValue ?? null, this.monotonicIso()]
+      [taskId, agent, action, oldValue ?? null, newValue ?? null, clockNowIso(this.clock)]
     )
   }
 
@@ -419,13 +387,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     return row.cnt
   }
 
-  childStatusCounts(epicId: number): {
-    total: number
-    open: number
-    done: number
-    failed: number
-    canceled: number
-  } {
+  childStatusCounts(epicId: number): ChildStatusCounts {
     const row = this.db
       .query(
         `SELECT
@@ -436,13 +398,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
          COALESCE(SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END), 0) as canceled
        FROM tasks WHERE epic_id = ?`
       )
-      .get(epicId) as {
-      total: number
-      open: number
-      done: number
-      failed: number
-      canceled: number
-    }
+      .get(epicId) as ChildStatusCounts
     return row
   }
 

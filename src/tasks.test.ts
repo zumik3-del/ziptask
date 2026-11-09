@@ -19,6 +19,7 @@ import {
   handleListTasks
 } from './mcp/task-tools'
 import {
+  auditRows as auditRowsIn,
   createTestDb,
   closeTestDb,
   insertTaskRow,
@@ -42,6 +43,7 @@ afterEach(() => {
   closeTestDb(db)
 })
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
+const auditRows = (id: number) => auditRowsIn(db, id)
 
 describe('create_task', () => {
   test('creates task with defaults', () => {
@@ -309,12 +311,10 @@ describe('lease expiry', () => {
     expect(task.status).toBe('queued')
     expect(task.attempts).toBe(1)
     expect(task.lease_expires_at).toBeNull()
-    const auditRows = db
-      .query('SELECT * FROM audit_log WHERE task_id = ? AND action = ?')
-      .all(id, 'lease_expired') as any[]
-    expect(auditRows.length).toBe(1)
-    expect(auditRows[0].old_value).toBe('in_progress')
-    expect(auditRows[0].new_value).toBe('queued')
+    const rows = auditRows(id).filter((r) => r.action === 'lease_expired')
+    expect(rows.length).toBe(1)
+    expect(rows[0].old_value).toBe('in_progress')
+    expect(rows[0].new_value).toBe('queued')
   })
 
   test('max attempts leads to failed', () => {
@@ -330,11 +330,9 @@ describe('lease expiry', () => {
     expect(task.attempts).toBe(4)
     expect(task.lease_expires_at).toBeNull()
     expect(task.completed_at).not.toBeNull()
-    const auditRows = db
-      .query('SELECT * FROM audit_log WHERE task_id = ? AND action = ?')
-      .all(id, 'lease_expired') as any[]
-    expect(auditRows.length).toBe(1)
-    expect(auditRows[0].new_value).toBe('failed')
+    const rows = auditRows(id).filter((r) => r.action === 'lease_expired')
+    expect(rows.length).toBe(1)
+    expect(rows[0].new_value).toBe('failed')
   })
 })
 
@@ -952,7 +950,7 @@ describe('lease_expires_at cleared on exit from in_progress (#767)', () => {
   })
 })
 
-describe('monotonicIso process-wide (#1608 supersedes #795)', () => {
+describe('monotonicNowMs process-wide (#1608 supersedes #795)', () => {
   test("two TaskRepo instances share one monotonic clock, so repo B inherits repo A's advance", () => {
     const dbA = createTestDb()
     const repoA = new TaskRepo(dbA)
