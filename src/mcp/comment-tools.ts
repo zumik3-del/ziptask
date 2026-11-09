@@ -12,6 +12,7 @@ import {
   type ToolResult,
   toToolResult,
   rejectUnknownArgs,
+  registerTool,
   textResult,
   errorTool,
   TaskId
@@ -85,23 +86,19 @@ export function handleGetTimeline(
 }
 
 export function registerCommentTools(server: McpServer, svc: TaskService) {
-  server.registerTool(
-    'add_comment',
-    {
-      description:
-        'Add comment to task. Requires non-empty agent and content (content, or its alias text/comment); one-liner from get_template("comment-success") or "comment-failure"',
-      inputSchema: z.object(ADD_COMMENT_SHAPE).catchall(z.unknown())
-    },
-    async (args) => handleAddComment(svc, args)
-  )
+  registerTool(server, svc, {
+    name: 'add_comment',
+    description:
+      'Add comment to task. Requires non-empty agent and content (content, or its alias text/comment); one-liner from get_template("comment-success") or "comment-failure"',
+    shape: ADD_COMMENT_SHAPE,
+    run: handleAddComment
+  })
 
-  server.registerTool(
-    'get_timeline',
-    {
-      description:
-        'Merged audit_log + comments feed for a task, pipe seq|type|agent|at|text in ascending order; a limit returns the newest N events',
-      inputSchema: z.object(GET_TIMELINE_SHAPE).catchall(z.unknown())
-    },
-    async (args) => handleGetTimeline(svc, args)
-  )
+  registerTool(server, svc, {
+    name: 'get_timeline',
+    description:
+      'Merged audit_log + comments feed for a task, pipe seq|type|agent|at|text in ascending order; a limit returns the newest N events',
+    shape: GET_TIMELINE_SHAPE,
+    run: handleGetTimeline
+  })
 }

@@ -1,7 +1,13 @@
 import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
-import { type ToolResult, toToolResult, rejectUnknownArgs, textResult } from './common'
+import {
+  type ToolResult,
+  toToolResult,
+  rejectUnknownArgs,
+  registerTool,
+  textResult
+} from './common'
 import { sanitizePipe, pipeJoin } from '../core/tasks'
 import { PROJECT_SLUG_PATTERN } from '../core/project-slug'
 
@@ -75,42 +81,34 @@ export function handleDeleteProject(svc: TaskService, args: { project: string })
 }
 
 export function registerProjectTools(server: McpServer, svc: TaskService) {
-  server.registerTool(
-    'create_project',
-    {
-      description: `Create a project; slug? derives from the folder name and must match ${PROJECT_SLUG_PATTERN.source} ("legacy" is reserved). Output {slug}`,
-      inputSchema: z.object(CREATE_PROJECT_SHAPE).catchall(z.unknown())
-    },
-    async (args) => handleCreateProject(svc, args)
-  )
+  registerTool(server, svc, {
+    name: 'create_project',
+    description: `Create a project; slug? derives from the folder name and must match ${PROJECT_SLUG_PATTERN.source} ("legacy" is reserved). Output {slug}`,
+    shape: CREATE_PROJECT_SHAPE,
+    run: handleCreateProject
+  })
 
-  server.registerTool(
-    'list_projects',
-    {
-      description:
-        'Pipe lines slug|folder|open (open = non-terminal tasks), ordered by slug; archived projects are listed identically (the pipe carries no archive flag)',
-      inputSchema: z.object(LIST_PROJECTS_SHAPE).catchall(z.unknown())
-    },
-    async (args) => handleListProjects(svc, args)
-  )
+  registerTool(server, svc, {
+    name: 'list_projects',
+    description:
+      'Pipe lines slug|folder|open (open = non-terminal tasks), ordered by slug; archived projects are listed identically (the pipe carries no archive flag)',
+    shape: LIST_PROJECTS_SHAPE,
+    run: handleListProjects
+  })
 
-  server.registerTool(
-    'update_project',
-    {
-      description:
-        'Update a project by slug (folder_path?, archived?). archived:false is idempotent; INVALID: nothing to update only when no optional argument is given. Output {slug}',
-      inputSchema: z.object(UPDATE_PROJECT_SHAPE).catchall(z.unknown())
-    },
-    async (args) => handleUpdateProject(svc, args)
-  )
+  registerTool(server, svc, {
+    name: 'update_project',
+    description:
+      'Update a project by slug (folder_path?, archived?). archived:false is idempotent; INVALID: nothing to update only when no optional argument is given. Output {slug}',
+    shape: UPDATE_PROJECT_SHAPE,
+    run: handleUpdateProject
+  })
 
-  server.registerTool(
-    'delete_project',
-    {
-      description:
-        'Delete a project that has no tasks; a project with tasks refuses with CONFLICT (archive it instead). Output {deleted:<slug>}',
-      inputSchema: z.object(DELETE_PROJECT_SHAPE).catchall(z.unknown())
-    },
-    async (args) => handleDeleteProject(svc, args)
-  )
+  registerTool(server, svc, {
+    name: 'delete_project',
+    description:
+      'Delete a project that has no tasks; a project with tasks refuses with CONFLICT (archive it instead). Output {deleted:<slug>}',
+    shape: DELETE_PROJECT_SHAPE,
+    run: handleDeleteProject
+  })
 }

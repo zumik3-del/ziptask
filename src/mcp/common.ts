@@ -1,5 +1,7 @@
+import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod/v4'
 import type { Task } from '../core/tasks'
+import type { TaskService } from '../core/service'
 
 import type { SvcResult, SvcError } from '../core/types'
 import { foldResult, formatError } from '../core/result'
@@ -60,5 +62,35 @@ export function rejectUnknownArgs(tool: string, shape: object, args: object): To
   unknown.sort()
   return errorResult(
     `INVALID: unknown argument${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')} on ${tool} (accepted: ${accepted.join(', ')})`
+  )
+}
+
+// One registration seam for every tool: the advertised inputSchema is always
+// z.object(shape).catchall(z.unknown()). Without the catchall the SDK strips an unknown
+// argument before it reaches rejectUnknownArgs, so the INVALID: unknown argument… refusal
+// disappears — keeping the pass-through and the guard here means a new tool cannot forget either.
+export type ToolSpec<S extends z.ZodRawShape> = {
+  name: string
+  description: string
+  shape: S
+  run: (svc: TaskService, args: z.infer<z.ZodObject<S>>) => ToolResult
+}
+
+export function registerTool<S extends z.ZodRawShape>(
+  server: McpServer,
+  svc: TaskService,
+  spec: ToolSpec<S>
+): void {
+  server.registerTool(
+    spec.name,
+    {
+      description: spec.description,
+      inputSchema: z.object(spec.shape).catchall(z.unknown())
+    },
+    async (args) => {
+      const refusal = rejectUnknownArgs(spec.name, spec.shape, args)
+      if (refusal) return refusal
+      return spec.run(svc, args)
+    }
   )
 }
