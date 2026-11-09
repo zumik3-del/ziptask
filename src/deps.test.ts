@@ -102,20 +102,15 @@ describe('deps', () => {
   })
 
   test('auto-claim skips dep-blocked tasks beyond window of 10', () => {
-    // Create 10 dep-blocked tasks (each depends on non-existent task 999)
     for (let i = 0; i < 10; i++) {
       createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
     }
-    // Task 11 has no deps — should be picked despite being 11th in queue
     const freeId = createTaskRow({ title: 'Free', reporter: 'dev' })
     const res = handleClaimTask(svc, { agent: 'agent-1' })
     expect(json(res).id).toBe(freeId)
   })
 
   test('auto-claim pages through >100 dep-blocked tasks to find free one', () => {
-    // 101 dep-blocked tasks force the batch loop past the first page
-    // One transaction: the seeding is 102 inserts, and one WAL commit per row is what made this
-    // the slowest fixture in the suite. The claim itself stays outside the transaction.
     let freeId = 0
     repo.transaction(() => {
       for (let i = 0; i < 101; i++) {
@@ -159,7 +154,6 @@ describe('epic-dep rejection message (#106)', () => {
     const res = handleCreateTask(svc, { title: 'Bad', reporter: 'dev', depends_on: [epicId, 999] })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain(`#${epicId}`)
-    // The first offending id in input order wins: the epic is reported ahead of the unknown 999.
   })
 })
 
@@ -169,8 +163,6 @@ describe('dependency validation (#2244)', () => {
       (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
     return { tasks: count('tasks'), audit: count('audit_log'), comments: count('comments') }
   }
-  // A boundary list needs real rows: an unknown id is refused on its own, so a length test seeded
-  // with fabricated ids would pass for the wrong reason.
   const seedDeps = (count: number): number[] =>
     repo.transaction(() =>
       Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' }))
@@ -253,7 +245,6 @@ describe('corrupt depends_on tolerance (#107)', () => {
 
   test('blocked_by lists dangling deps, matching readiness (never runs but not listed = footgun)', () => {
     const depId = json(handleCreateTask(svc, { title: 'Dep', reporter: 'dev' })).id
-    // A dangling id can no longer be written through the service, so the row is seeded.
     const id = createTaskRow({ title: 'Dependent', reporter: 'dev', depends_on: [depId, 999] })
 
     expect(json(handleGetTask(svc, { id })).blocked_by).toEqual([depId, 999])
@@ -285,14 +276,12 @@ describe('corrupt depends_on tolerance (#107)', () => {
   })
 
   test('depsSatisfied survives corrupt depends_on input', () => {
-    // parseDeps is the gateway; if it returns [], depsSatisfied gets []
     expect(depsSatisfied(repo.statusesOf([]), [])).toBe(true)
   })
 })
 
 describe('queuedCandidates id tie-break (#431)', () => {
   test('same priority + same created_at orders by ascending id', () => {
-    // Insert tasks with explicit same created_at to test tie-break
     const baseTime = '2020-01-01T00:00:00.000Z'
     const idA = repo.insertTask({
       title: 'A',
@@ -321,11 +310,9 @@ describe('queuedCandidates id tie-break (#431)', () => {
       now: baseTime,
       projectId: testProjectId(repo)
     }).id
-    // Set same created_at
     db.run('UPDATE tasks SET created_at = ? WHERE id IN (?, ?, ?)', [baseTime, idA, idB, idC])
 
     const candidates = repo.queuedCandidates(10, testProjectId(repo))
-    // Should order by id ASC when priority and created_at are equal
     expect(candidates.map((t: any) => t.id)).toEqual([idA, idB, idC])
   })
 
@@ -361,16 +348,13 @@ describe('queuedCandidates id tie-break (#431)', () => {
 
 describe('listQueue dep-aware priority ordering (#767)', () => {
   test('lower-priority ready task listed before higher-priority dep-blocked task', () => {
-    // Create a high-priority task that is dep-blocked
     const blockedP0 = createTaskRow({
       title: 'BlockedP0',
       reporter: 'dev',
       priority: 'p0',
       depends_on: [999]
     })
-    // Create a low-priority task that is ready
     const readyP2 = createTaskRow({ title: 'ReadyP2', reporter: 'dev', priority: 'p2' })
-    // Queue should show readyP2 first since blockedP0 is dep-blocked
     const out = text(handleListQueue(svc, {}))
     const lines = out.split('\n').filter((l) => l.trim())
     expect(lines.length).toBe(1)
@@ -388,7 +372,6 @@ describe('listQueue dep-aware priority ordering (#767)', () => {
     const readyP2 = createTaskRow({ title: 'ReadyP2', reporter: 'dev', priority: 'p2' })
     const readyP1 = createTaskRow({ title: 'ReadyP1', reporter: 'dev', priority: 'p1' })
 
-    // listQueue should only show ready tasks
     const queue = text(handleListQueue(svc, {}))
     const queueLines = queue.split('\n').filter((l) => l.trim())
     const queueIds = queueLines.map((line) => Number(line.split('|')[0]))
@@ -396,18 +379,15 @@ describe('listQueue dep-aware priority ordering (#767)', () => {
     expect(queueIds).toContain(readyP2)
     expect(queueIds).not.toContain(blockedP0)
 
-    // auto-claim should pick the highest-priority ready task (P1)
     const claim = json(handleClaimTask(svc, { agent: 'agent-1' }))
     expect(claim.id).toBe(readyP1)
   })
 
   test('all higher-priority tasks dep-blocked: queue returns lowest-priority ready ones', () => {
-    // Block two p0 and one p1 tasks
     for (let i = 0; i < 2; i++) {
       createTaskRow({ title: `BlockedP0${i}`, reporter: 'dev', priority: 'p0', depends_on: [999] })
     }
     createTaskRow({ title: 'BlockedP1', reporter: 'dev', priority: 'p1', depends_on: [999] })
-    // Two ready p2 tasks
     const p2a = createTaskRow({ title: 'ReadyP2a', reporter: 'dev', priority: 'p2' })
     const p2b = createTaskRow({ title: 'ReadyP2b', reporter: 'dev', priority: 'p2' })
 
@@ -429,8 +409,6 @@ describe('collapseDeps purity (#2257)', () => {
   })
 
   test('returns a distinct array even when nothing needs collapsing', () => {
-    // Pins the contract the guard relies on: it may keep the returned array as the normalised list,
-    // so an aliasing fast path (`return deps`) would quietly reintroduce the caller-array rewrite.
     const input = [1, 2, 3]
     expect(collapseDeps(input)).not.toBe(input)
   })

@@ -49,16 +49,12 @@ afterEach(() => {
 })
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
-// The boundary list for depends_on: every dependency must exist, so the ids come from seeded rows
-// rather than from fabricated numbers.
 function existingDeps(count: number): number[] {
   return repo.transaction(() =>
     Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' }))
   )
 }
 
-// The row counts a refusal must not move: a refused call writes no task row, no audit row and no
-// comment, so the three counts are the evidence that nothing was written.
 function storeCounts(): { tasks: number; audit: number; comments: number } {
   const count = (table: string) =>
     (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
@@ -203,7 +199,6 @@ describe('reap cooldown (#104)', () => {
     svc.getTaskView(1)
     expect(reapCallCount).toBe(1)
 
-    // Second read within cooldown window → skip
     svc.listTasks({})
     expect(reapCallCount).toBe(1)
 
@@ -213,14 +208,12 @@ describe('reap cooldown (#104)', () => {
     svc.getTimeline(1)
     expect(reapCallCount).toBe(1)
 
-    // Write path always forces reap
     svc.claimTask({ agent: 'test' })
     expect(reapCallCount).toBe(2)
 
     svc.updateStatus({ id: 1, agent: 'test', status: 'review', version: 1 })
     expect(reapCallCount).toBe(3)
 
-    // Public reap always forces
     svc.lifecycle.reapExpiredLeases()
     expect(reapCallCount).toBe(4)
   })
@@ -266,7 +259,6 @@ describe('auto-claim ceiling (#105)', () => {
     const repo2 = new TaskRepo(db2)
     const svc2 = new TaskService(repo2, { leaseTtlMin: 15, autoClaimCeiling: 100, scope: 'test' })
 
-    // One transaction for the whole fixture: 150 rows, one WAL commit instead of 150.
     repo2.transaction(() => {
       for (let i = 0; i < 150; i++) {
         repo2.insertTask({
@@ -301,7 +293,6 @@ describe('auto-claim ceiling (#105)', () => {
     const repo2 = new TaskRepo(db2)
     const svc2 = new TaskService(repo2, { leaseTtlMin: 15, scope: 'test' })
 
-    // One transaction for the whole fixture: 150 rows, one WAL commit instead of 150.
     repo2.transaction(() => {
       for (let i = 0; i < 150; i++) {
         repo2.insertTask({
@@ -332,8 +323,6 @@ describe('auto-claim ceiling (#105)', () => {
   })
 
   test('parse-once cache: auto-claim with many dep-blocked tasks finds free one', () => {
-    // Regression: parse-once refactor must not change behavior for the common case
-    // One transaction for the fixture rows: one WAL commit instead of one per row.
     repo.transaction(() => {
       for (let i = 0; i < 10; i++) {
         createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
@@ -399,23 +388,17 @@ describe('service defaults from config (#6)', () => {
 
 describe('atomicity: createTask cycle path (#767)', () => {
   test('cycle rejection leaves no partial row or audit for the failed task', () => {
-    // The forward reference can no longer be written through the service, so the row is seeded —
-    // with the create audit row a real creation would have left.
     const a = createTaskRow({ title: 'A', reporter: 'dev', depends_on: [2] })
     repo.auditAppend(a, 'dev', 'create', undefined, 'queued')
     handleCreateTask(svc, { title: 'B', reporter: 'dev', depends_on: [a] })
-    // Task B (id=2) should not exist (cycle rejected)
     expect(getTaskRow(db, 2)).toBeNull()
-    // No audit row for B
     const auditB = db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = 2').get() as {
       n: number
     }
     expect(auditB.n).toBe(0)
-    // Task A exists and has its own create audit
     const taskA = getTaskRow(db, a)
     expect(taskA).not.toBeNull()
     expect(taskA.title).toBe('A')
-    // Query audit using correct bun:sqlite pattern (query().all(variadic))
     const auditARaw = db.query('SELECT * FROM audit_log WHERE task_id = ?').all(a) as any[]
     expect(auditARaw.length).toBeGreaterThan(0)
     expect(auditARaw.some((r: any) => r.action === 'create')).toBe(true)
@@ -435,13 +418,11 @@ describe('atomicity: updateStatus transaction (#767)', () => {
       comment: 'atomic note'
     })
     expect(json(res).status).toBe('review')
-    // Audit row written
     const audits = db
       .query("SELECT * FROM audit_log WHERE task_id = ? AND action = 'update_status'")
       .all(id) as any[]
     expect(audits.length).toBe(1)
     expect(audits[0].new_value).toBe('review')
-    // Comment written
     const comments = db.query('SELECT * FROM comments WHERE task_id = ?').all(id) as any[]
     expect(comments.length).toBe(1)
     expect(comments[0].content).toBe('atomic note')
@@ -451,7 +432,6 @@ describe('atomicity: updateStatus transaction (#767)', () => {
   test('updateStatus with version mismatch writes no audit or comment', () => {
     const id = json(handleCreateTask(svc, { title: 'NoAudit', reporter: 'dev' })).id
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
-    // Use stale version (1 instead of current)
     const res = handleUpdateStatus(svc, {
       id,
       agent: 'agent-1',
@@ -461,12 +441,10 @@ describe('atomicity: updateStatus transaction (#767)', () => {
     })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('CONFLICT')
-    // No audit row
     const audits = db
       .query("SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = 'update_status'")
       .get(id) as { n: number }
     expect(audits.n).toBe(0)
-    // No comment
     const comments = db.query('SELECT COUNT(*) AS n FROM comments WHERE task_id = ?').get(id) as {
       n: number
     }
@@ -496,7 +474,6 @@ describe('CAS: transitionStatus returns changes (#767)', () => {
     const id = createTaskRow({ title: 'CAS', reporter: 'dev' })
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
-    // transitionStatus is on the repo; call it directly
     const changes = repo.transitionStatus(
       id,
       task.version,
@@ -512,7 +489,6 @@ describe('CAS: transitionStatus returns changes (#767)', () => {
     const id = createTaskRow({ title: 'CAS2', reporter: 'dev' })
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
     const task = getTaskRow(db, id)
-    // Use wrong version
     const changes = repo.transitionStatus(
       id,
       task.version + 999,
@@ -522,7 +498,6 @@ describe('CAS: transitionStatus returns changes (#767)', () => {
       null
     )
     expect(changes).toBe(0)
-    // Task status unchanged
     const still = getTaskRow(db, id)
     expect(still.status).toBe('in_progress')
   })
@@ -595,7 +570,6 @@ describe('deleteTask cascade (#795)', () => {
       (db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ?').get(id) as { n: number }).n
     ).toBeGreaterThan(0)
 
-    // bypass deleteTask entirely: only the ON DELETE CASCADE can clean the children
     db.run('DELETE FROM tasks WHERE id = ?', [id])
 
     expect(
@@ -868,8 +842,6 @@ describe('a creation-time assignee is refused (#1872)', () => {
 })
 
 describe('create_task input bounds (#1857)', () => {
-  // Both inputs are stored verbatim, so both are bounded: the schema refuses them on the wire and
-  // the create guard refuses them in the service, with the same two documented strings.
   const LONG_DESCRIPTION = 'd'.repeat(MAX_DESCRIPTION_LENGTH + 1)
   const OK_DESCRIPTION = 'd'.repeat(MAX_DESCRIPTION_LENGTH)
   const TOO_MANY_DEPS = Array.from({ length: MAX_DEPENDS_ON + 1 }, (_, i) => 9000 + i)
@@ -936,18 +908,12 @@ describe('create_task input bounds (#1857)', () => {
 // Before the fix the guard counted UTF-16 units, so a multi-byte description was ACCEPTED by the
 // schema and REFUSED by the guard: the two layers disagreed exactly at the boundary.
 describe('the create_task string bounds count code points (#1874)', () => {
-  // U+1F600: one code point, two UTF-16 units. A bound measured in the wrong unit misses it.
   const EMOJI = '\u{1F600}'
   const multiByte = (n: number): string => EMOJI.repeat(n)
-  // A string of exactly n code points, half ASCII and half multi-byte: a counter that measures
-  // only one kind of character would miss the other.
   const mixed = (n: number): string =>
     'a'.repeat(Math.floor(n / 2)) + EMOJI.repeat(n - Math.floor(n / 2))
-  // The code-point count of a string, measured independently of the production helper.
   const codePoints = (value: string): number => [...value].length
 
-  // The advertised shape, exactly as the MCP layer registers it: the layer the wire validates
-  // against, so a schema/guard disagreement shows up here and not only over the wire.
   function createTaskShape(): any {
     let shape: any
     registerAllTools(
@@ -1002,8 +968,6 @@ describe('the create_task string bounds count code points (#1874)', () => {
 
   describe('a mixed string is measured the same way', () => {
     test('a mixed description of exactly MAX_DESCRIPTION_LENGTH code points is accepted by both layers', () => {
-      // Half ASCII, half multi-byte: 20000 code points in 30000 UTF-16 units. A guard that counts
-      // units refuses it; a guard that counts code points accepts it.
       const description = mixed(MAX_DESCRIPTION_LENGTH)
       expect(codePoints(description)).toBe(MAX_DESCRIPTION_LENGTH)
       expect(description.length).toBeGreaterThan(MAX_DESCRIPTION_LENGTH)
@@ -1141,8 +1105,6 @@ describe('the create_task string bounds count code points (#1874)', () => {
   // asserted, not only the behaviour: a bound that lives in the guard alone is a schema that
   // understates what the service refuses, and the two layers drift apart at the boundary.
   describe('the actor names carry the advertised bound (#1880)', () => {
-    // The registered create_task inputSchema, as JSON Schema: the shape the MCP layer validates
-    // against and advertises, so a bound missing from it shows up here and not only over the wire.
     function advertisedSchema(): any {
       return z.toJSONSchema(createTaskShape())
     }
@@ -1161,7 +1123,6 @@ describe('the create_task string bounds count code points (#1874)', () => {
         .map(([name]) => name)
         .sort()
       expect(bounded).toEqual(['assignee', 'description', 'reporter', 'title'])
-      // The id count is an array bound, so it travels as maxItems - it stays where it was.
       expect(schema.properties.depends_on.maxItems).toBe(MAX_DEPENDS_ON)
     })
 
@@ -1193,8 +1154,6 @@ describe('the create_task string bounds count code points (#1874)', () => {
     })
 
     test('the guard order is pinned: the length refusal comes before the creation refusal', () => {
-      // An over-long assignee is too long FIRST; an in-bounds one reaches the creation refusal.
-      // Both strings are unchanged - the order is what the test pins.
       const over = handleCreateTask(svc, {
         title: 'LongAssignee',
         reporter: 'dev',
@@ -1224,8 +1183,6 @@ describe('the create_task string bounds count code points (#1874)', () => {
     })
 
     test('an assignee of exactly MAX_AGENT_LENGTH code points is not too long: it reaches the creation refusal', () => {
-      // The boundary is exactly 200 code points: the schema accepts it, so the guard answers with
-      // the creation refusal instead of the length one.
       const assignee = multiByte(MAX_AGENT_LENGTH)
       expect(codePoints(assignee)).toBe(MAX_AGENT_LENGTH)
       expect(createTaskShape().safeParse({ title: 'AssigneeAtLimit', assignee }).success).toBe(true)
@@ -1288,8 +1245,6 @@ describe('claimTask taskId branch (F1 #1040)', () => {
     const target = json(
       handleCreateTask(svc, { title: 'Target', reporter: 'dev', priority: 'p3' })
     ).id
-    // The wire-shaped {task_id} leaves core's taskId undefined, so the auto-pick branch
-    // runs and takes the p0 bait. Proof the id/task_id resolution lives at the MCP edge.
     const res = svc.claimTask({ agent: 'test', task_id: target } as any)
     expect(res.ok).toBe(true)
     if (!res.ok) throw new Error('unreachable')
@@ -1310,7 +1265,6 @@ describe('listTasks invalid status filter (#811)', () => {
       svc
     )
     expect(schema.safeParse({ status: 'invalid_status' }).success).toBe(false)
-    // the enum is sourced from TASK_STATUSES, so every status must pass and nothing else may
     for (const status of TASK_STATUSES) {
       expect(`${status}:${schema.safeParse({ status }).success}`).toBe(`${status}:true`)
     }

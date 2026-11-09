@@ -76,7 +76,6 @@ const V4_STATEMENT_COUNT = 22
 //   bun -e 'import {MIGRATIONS} from "./src/db/migrations"; import {createHash} from "node:crypto"; console.log(createHash("sha256").update(JSON.stringify(MIGRATIONS.slice(0,22))).digest("hex"))'
 const FROZEN_V4_PREFIX_SHA256 = '15b4ea25663d669f5fcb6fec57e0d85cd8433994a9b56c369f811029cb1fb016'
 
-// `list_projects` pipes `slug|folder|open`; the open column is the only thing these tests read.
 function openCountOf(slug: string): string | undefined {
   const line = text(handleListProjects(svc, {}))
     .split('\n')
@@ -84,20 +83,14 @@ function openCountOf(slug: string): string | undefined {
   return line?.split('|')[2]
 }
 
-// A raw status flip: the fixture is the state, not the transition (the counter does not care how
-// a row reached a terminal status, and driving each one through the full lifecycle only adds flake).
 function setStatus(id: number, status: string): void {
   db.run('UPDATE tasks SET status = ? WHERE id = ?', [status, id])
 }
 
-// Pin a past timestamp so "updated_at moved" is decidable without racing the millisecond clock.
 function setUpdatedAt(slug: string, iso: string): void {
   db.run('UPDATE projects SET updated_at = ? WHERE slug = ?', [iso, slug])
 }
 
-// The `open` counter as a predicate rather than a number, built from the production status tuple
-// (not a re-typed literal): it names which rows the tool counted, so a filter that keeps or drops
-// the wrong status fails on the member list and not only on the total.
 function openTaskTitles(project: string): string[] {
   const terminal = TERMINAL_STATUSES.map((s) => `'${s}'`).join(', ')
   return (
@@ -116,21 +109,14 @@ type ToolResult = {
   isError?: boolean
 }
 
-// A successful `ToolResult` carries no `isError` at all, so `toBe(false)` is not an available
-// assertion on the success path; parse the body instead, which fails loudly on an error payload.
 function okJson(res: ToolResult): any {
   expect(res.isError).toBeUndefined()
   return json(res)
 }
 
-// replay the frozen v4 prefix, stamp 22, and insert pre-existing rows through raw SQL
 function buildV4Db(path: string): void {
   const raw = new SqliteDb(path)
-  // PRAGMA foreign_keys stays OUTSIDE the transaction: it is a no-op while a transaction is open.
   raw.exec('PRAGMA foreign_keys = ON')
-  // One transaction: the replay is 22 DDL statements plus 5 writes, and one commit per statement
-  // is what made this fixture slow. DDL inside a transaction is what production does too
-  // (src/db/db.ts applyMigrations).
   const build = raw.transaction(() => {
     for (let i = 0; i < V4_STATEMENT_COUNT; i++) raw.exec(MIGRATIONS[i])
     raw.run('DELETE FROM schema_version')
@@ -182,7 +168,6 @@ describe('projects: fresh DB and migration v4 -> v5 (ADR D1)', () => {
       expect(projects).toHaveLength(1)
       expect(projects[0].slug).toBe('legacy')
       expect(projects[0].folder_path).toBe('')
-      // pure-SQL strftime('%Y-%m-%dT%H:%M:%fZ','now') must stay byte-comparable with nowIso()
       expect(projects[0].created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
 
       expect(
@@ -207,7 +192,6 @@ describe('projects: fresh DB and migration v4 -> v5 (ADR D1)', () => {
       ).map((i) => i.name)
       expect(indexes).toContain('idx_tasks_project_status_priority')
 
-      // tasks carries the self-FK (epic_id) plus the v5 project FK; NO ACTION is the delete backstop
       const fks = upgraded.query('PRAGMA foreign_key_list(tasks)').all() as any[]
       const projectFk = fks.filter((f) => f.table === 'projects')
       expect(projectFk).toHaveLength(1)
@@ -226,7 +210,6 @@ describe('projects: fresh DB and migration v4 -> v5 (ADR D1)', () => {
     expect(createHash('sha256').update(JSON.stringify(frozen)).digest('hex')).toBe(
       FROZEN_V4_PREFIX_SHA256
     )
-    // a released statement must never be dropped or rewritten in place; only appended
     expect(MIGRATIONS.length).toBeGreaterThan(V4_STATEMENT_COUNT)
     expect(MIGRATIONS.length).toBe(32)
   })
@@ -255,7 +238,6 @@ describe('projects: CRUD contract (ADR D4)', () => {
     const row = repo.projectBySlug('my-project')!
     expect(row.folder_path).toBe('/tmp/opencode/My Project')
 
-    // an explicit slug does not skip normalization
     expect(
       json(handleCreateProject(svc, { slug: 'rawname', folder_path: '/srv/only-slash/' })).slug
     ).toBe('rawname')
@@ -278,12 +260,9 @@ describe('projects: CRUD contract (ADR D4)', () => {
 
     expect(repo.projectBySlug('rel2')).toBeNull()
     expect(repo.projectSlugs()).toEqual(['test'])
-    // empty stays a different refusal, not the new one
     expect(text(handleCreateProject(svc, { folder_path: '' }))).toBe(
       'INVALID: folder_path required'
     )
-
-    // RL1: folder_path is a caller-side annotation, so nothing is stat()ed and nothing must exist
     const missing = json(
       handleCreateProject(svc, { slug: 'ghost', folder_path: '/nope/does/not/exist' })
     )
@@ -298,7 +277,6 @@ describe('projects: CRUD contract (ADR D4)', () => {
   })
 
   test('list_projects pipes slug|folder|open ordered by slug, with sanitized pipes', () => {
-    // One transaction for the whole fixture: one WAL commit instead of one per seeded row.
     repo.transaction(() => {
       seedProject(db, 'alpha')
       seedProject(db, 'beta')
@@ -333,21 +311,20 @@ describe('projects: CRUD contract (ADR D4)', () => {
   })
 
   test('the open column counts non-terminal tasks only, through the tool shape the reader sees', () => {
-    // One transaction for the whole fixture: one WAL commit instead of one per seeded row.
     let a2 = 0
     repo.transaction(() => {
       seedProject(db, 'alpha')
       seedProject(db, 'beta')
       seedProject(db, 'gamma')
-      createIn('a1', 'alpha') // queued
-      a2 = createIn('a2', 'alpha') // in_progress
-      const a3 = createIn('a3', 'alpha') // done
-      const a4 = createIn('a4', 'alpha') // failed
-      const a5 = createIn('a5', 'alpha') // canceled
-      createIn('b1', 'beta') // queued
-      const g1 = createIn('g1', 'gamma') // done
-      const g2 = createIn('g2', 'gamma') // failed
-      const g3 = createIn('g3', 'gamma') // canceled
+      createIn('a1', 'alpha')
+      a2 = createIn('a2', 'alpha')
+      const a3 = createIn('a3', 'alpha')
+      const a4 = createIn('a4', 'alpha')
+      const a5 = createIn('a5', 'alpha')
+      createIn('b1', 'beta')
+      const g1 = createIn('g1', 'gamma')
+      const g2 = createIn('g2', 'gamma')
+      const g3 = createIn('g3', 'gamma')
       json(handleClaimTask(svc, { agent: 'dev', task_id: a2 }))
       for (const [id, status] of [
         [a3, 'done'],
@@ -360,18 +337,13 @@ describe('projects: CRUD contract (ADR D4)', () => {
         setStatus(id, status)
       }
     })
-    // a2's in_progress comes from the real claim, so an over-broad "open = queued only" fails here
     expect(repo.getTaskRow(a2)!.status).toBe('in_progress')
-    // the counted set, as an oracle: a filter that keeps a terminal status counts 3+, one that
-    // counts every row counts 5; only the exact non-terminal set gives these members
     expect(openTaskTitles('alpha')).toEqual(['a1', 'a2'])
     expect(openTaskTitles('beta')).toEqual(['b1'])
     expect(openTaskTitles('gamma')).toEqual([])
 
-    // alpha: 5 rows, 2 live -> the three terminal statuses are all excluded, not just one spelling
     expect(openCountOf('alpha')).toBe('2')
     expect(openCountOf('beta')).toBe('1')
-    // gamma: every row terminal -> the count must reach zero, so a missing filter is visible
     expect(openCountOf('gamma')).toBe('0')
     expect(text(handleListProjects(svc, {}))).toBe(
       ['alpha||2', 'beta||1', 'gamma||0', 'test||0'].join('\n')
@@ -390,14 +362,12 @@ describe('projects: CRUD contract (ADR D4)', () => {
     expect(json(handleUpdateProject(svc, { project: 'alpha', archived: true })).slug).toBe('alpha')
     expect(repo.projectBySlug('alpha')!.archived_at).not.toBeNull()
 
-    // an archived project still accepts archived:false, and doing it twice changes nothing but updated_at
     const first = json(handleUpdateProject(svc, { project: 'alpha', archived: false }))
     const second = json(handleUpdateProject(svc, { project: 'alpha', archived: false }))
     expect(first.slug).toBe('alpha')
     expect(second.slug).toBe('alpha')
     expect(repo.projectBySlug('alpha')!.archived_at).toBeNull()
 
-    // slug is immutable after create: passing it is now an unknown argument.
     const rename = handleUpdateProject(svc, { project: 'alpha', slug: 'alpha2' } as any)
     expect(rename.isError).toBe(true)
     expect(text(rename)).toBe(
@@ -415,8 +385,6 @@ describe('projects: CRUD contract (ADR D4)', () => {
 
   test('update_project with only folder_path rewrites that column alone and bumps updated_at', () => {
     seedProject(db, 'alpha')
-    // pin the pre-state to a past instant: comparing two nowIso() calls in the same millisecond is
-    // the known lease flake, so the assertion must not depend on the clock ticking between two calls
     setUpdatedAt('alpha', '2026-01-01T00:00:00.000Z')
     const before = repo.projectBySlug('alpha')!
     const res = handleUpdateProject(svc, { project: 'alpha', folder_path: '/srv/work/alpha/' })
@@ -424,14 +392,13 @@ describe('projects: CRUD contract (ADR D4)', () => {
     expect(json(res)).toEqual({ slug: 'alpha' })
 
     const after = repo.projectBySlug('alpha')!
-    expect(after.folder_path).toBe('/srv/work/alpha') // trailing slash stripped
+    expect(after.folder_path).toBe('/srv/work/alpha')
     expect(after.slug).toBe(before.slug)
     expect(after.created_at).toBe(before.created_at)
     expect(after.archived_at).toBe(before.archived_at)
     expect(after.archived_at).toBeNull()
     expect(after.updated_at).not.toBe(before.updated_at)
 
-    // archived_at untouched means staying archived, not being silently unarchived
     seedProject(db, 'beta')
     json(handleUpdateProject(svc, { project: 'beta', archived: true }))
     const archivedAt = repo.projectBySlug('beta')!.archived_at
@@ -453,11 +420,9 @@ describe('projects: CRUD contract (ADR D4)', () => {
     expect(repo.projectBySlug('alpha')!.folder_path).toBe(before.folder_path)
     expect(repo.projectBySlug('alpha')!.updated_at).toBe(before.updated_at)
 
-    // an existing directory is still not enough: absolute is the whole rule
     const relativeToCwd = handleUpdateProject(svc, { project: 'alpha', folder_path: 'src' })
     expect(text(relativeToCwd)).toBe('INVALID: folder_path must be an absolute path')
 
-    // an absolute path is accepted with no existence check here either
     expect(
       json(handleUpdateProject(svc, { project: 'alpha', folder_path: '/nope/does/not/exist' })).slug
     ).toBe('alpha')
@@ -506,7 +471,6 @@ describe('projects: CRUD contract (ADR D4)', () => {
   })
 
   test('delete_project is gated on projectTaskCount: terminal tasks still block, an empty project passes', () => {
-    // a task that is terminal is still a task: the precondition counts rows, not open work
     seedProject(db, 'alpha')
     const a1 = createIn('a1', 'alpha')
     setStatus(a1, 'done')
@@ -516,13 +480,11 @@ describe('projects: CRUD contract (ADR D4)', () => {
     expect(repo.projectTaskCount(repo.projectBySlug('alpha')!.id)).toBe(1)
     expect(repo.projectBySlug('alpha')).not.toBeNull()
 
-    // the same project with its last row gone drops to zero and becomes deletable
     db.run('DELETE FROM tasks WHERE id = ?', [a1])
     expect(repo.projectTaskCount(repo.projectBySlug('alpha')!.id)).toBe(0)
     expect(json(handleDeleteProject(svc, { project: 'alpha' }))).toEqual({ deleted: 'alpha' })
     expect(repo.projectBySlug('alpha')).toBeNull()
 
-    // an empty project that never held a task: count 0, deleted, and its folder is free again
     const empty = json(handleCreateProject(svc, { slug: 'empty', folder_path: '/srv/work/empty' }))
     expect(empty.slug).toBe('empty')
     expect(repo.projectTaskCount(repo.projectBySlug('empty')!.id)).toBe(0)
@@ -617,7 +579,6 @@ describe('projects: fail-closed refusals (ADR D2, E1-E4)', () => {
       'INVALID: unknown argument project on get_task (accepted: fields, id)'
     )
 
-    // one enum per by-id tool: the guard reads the shape literal, so the accepted list is the contract
     const refusal = 'INVALID: unknown argument project on'
     expect(
       text(
@@ -633,7 +594,6 @@ describe('projects: fail-closed refusals (ADR D2, E1-E4)', () => {
       `${refusal} get_timeline (accepted: id, limit)`
     )
 
-    // refused, not applied: the row and its version are untouched, and no comment was appended
     expect(json(handleGetTask(svc, { id, fields: ['status', 'version'] }))).toEqual({
       status: 'queued',
       version: 1
@@ -651,7 +611,6 @@ describe('projects: fail-closed refusals (ADR D2, E1-E4)', () => {
     expect(repo.getTaskRow(b1)!.status).toBe('in_progress')
     expect(repo.getTaskRow(b1)!.assignee).toBe('dev')
 
-    // the same value on the auto-pick branch is validated, because that branch is the scoped one
     expect(text(handleClaimTask(svc, { agent: 'dev', project: 'bogus-slug' }))).toBe(
       "INVALID: unknown project 'bogus-slug' (known: alpha, beta, test)"
     )
@@ -666,7 +625,6 @@ describe('projects: enumeration isolation on all three paths (ADR D2)', () => {
     const a2 = createIn('a2', 'alpha')
     const b1 = createIn('b1', 'beta')
 
-    // listTasks orders created_at DESC, id DESC: the newest row of each project comes first
     expect(json(handleListTasks(svc, { project: 'alpha' })).tasks.map((t: any) => t.id)).toEqual([
       a2,
       a1
@@ -686,7 +644,6 @@ describe('projects: enumeration isolation on all three paths (ADR D2)', () => {
     expect(text(second)).toBe('EMPTY: no claimable tasks')
 
     expect(json(handleClaimTask(svc, { agent: 'dev', project: 'alpha' })).id).toBe(a1)
-    // the beta claim moved b1 only
     expect(repo.getTaskRow(b1)!.status).toBe('in_progress')
     expect(repo.getTaskRow(a2)!.status).toBe('queued')
   })
@@ -781,7 +738,6 @@ describe('projects: cross-project invariants (ADR D3 G3/G4)', () => {
     expect(epic.isError).toBe(true)
     expect(text(epic)).toBe(`INVALID: epic #${bEpic} belongs to project 'beta'`)
 
-    // the same shapes inside one project are accepted
     const a1 = createIn('a1', 'alpha')
     const aEpic = createIn('a epic', 'alpha', { epic: true })
     expect(createIn('dep ok', 'alpha', { depends_on: [a1] })).toBeGreaterThan(0)
@@ -822,7 +778,6 @@ describe('projects: no configured default project (ADR D2 rule 2, D6, R1)', () =
         ok: false,
         error: { code: 'INVALID', message: 'project required' }
       })
-      // only the by-id and ids escapes stay open without a scope
       const id = createIn('a1', 'alpha')
       expect(bare.getTasksByIds([id]).ok).toBe(true)
       expect(bare.claimTask({ agent: 'dev', taskId: id }).ok).toBe(true)

@@ -134,8 +134,6 @@ describe('unknown-argument rejection on claim_task (F1 #1040)', () => {
 
   test('no reap side effect on the rejected path (reap counter untouched)', () => {
     createTask('Bait', 'p0')
-    // A write-path claim always forces a reap (service.claimTask → _doReap); the guard
-    // short-circuits before that, so a counting store must not be touched.
     const countingRepo = new TaskRepo(db)
     let reaps = 0
     const original = countingRepo.expiredLeases.bind(countingRepo)
@@ -184,10 +182,6 @@ describe('task_id 0 must not auto-pick (F1 #1040)', () => {
 })
 
 describe('unknown-argument rejection on the other handlers (F1 #1040)', () => {
-  // handleGetTemplate is not exported from src/mcp/tools.ts, so get_template is covered
-  // over the wire in src/server.http.test.ts ('argument contract over MCP'). The 7 exported
-  // handlers live here; every row passes args that WOULD mutate or read state if the
-  // guard were absent, so the snapshot equality is a real no-fallthrough assertion.
   function rows(): Array<{ expected: string; call: (id: number) => any }> {
     return [
       {
@@ -280,8 +274,6 @@ describe('unknown-argument rejection on the other handlers (F1 #1040)', () => {
 })
 
 describe('renew / reset_attempts argument contract (F2 #1065 + F3 #1066)', () => {
-  // Both flags hang off update_status and nowhere else: no 11th tool (D-F2-1/D-F3-1), so the
-  // F1 guard must accept them there and still reject them on every other handler.
   function claimed(): number {
     const id = createTask('Working', 'p0')
     const res = handleClaimTask(svc, { agent: 'dev', task_id: id })
@@ -293,11 +285,6 @@ describe('renew / reset_attempts argument contract (F2 #1065 + F3 #1066)', () =>
   test('renew: true is accepted on update_status and reaches the service', () => {
     const id = claimed()
     const before = getTaskRow(db, id)
-    // The claim and the renewal both stamp now + lease_ttl_min, so an un-pinned pre-state collides
-    // with the post-state whenever both land in the same millisecond and "changed" would be asserting
-    // on the clock (that is what turned run 36742457188 red). A deadline one second out leaves 14
-    // minutes between the pre-state and anything a renewal can write, so the post-conditions below
-    // hold by construction instead of by luck.
     const pinned = new Date(monotonicNowMs() + 1000).toISOString()
     db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [pinned, id])
 
@@ -313,8 +300,6 @@ describe('renew / reset_attempts argument contract (F2 #1065 + F3 #1066)', () =>
 
     const after = getTaskRow(db, id)
     expect(after.lease_expires_at).not.toBe(pinned)
-    // 14 min of slack under the 15 min lease_ttl_min. Strictly stronger than "changed": a deadline
-    // one second out can only reach a full window if the renewal recomputed it from now.
     expect(new Date(after.lease_expires_at).getTime()).toBeGreaterThan(
       monotonicNowMs() + 14 * 60_000
     )

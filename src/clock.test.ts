@@ -8,13 +8,6 @@ import { InMemoryEventStore } from './server'
 import { formatError } from './core/result'
 import { createTestDb, closeTestDb, getTaskRow, taskStoreStubs } from './test-context'
 
-// The clock contract (task #1848): asClock is the single owner of the accepted clock shapes and
-// every clock consumer (TaskRepo, TaskService, LeaseReaper) normalises through it, so the service
-// and its reaper cannot disagree about the time source. These tests drive every accepted shape
-// through both halves, plus the reset seam that puts the process-wide counter back on the wall
-// clock. The injected time is in the past on purpose: a stamp that equals the wall clock would
-// pass even if the injection were ignored.
-
 const INJECTED_ISO = '2020-01-01T00:00:00.000Z'
 const INJECTED_MS = Date.parse(INJECTED_ISO)
 const LEASE_TTL_MIN = 15
@@ -23,7 +16,6 @@ const REAP_COOLDOWN_SEC = 60
 
 type ClockShape = { name: string; clock: unknown }
 
-// Every shape asClock documents (src/core/tasks.ts), in the order of that doc block.
 const SHAPES: ClockShape[] = [
   { name: 'a bare nowMs function', clock: () => INJECTED_MS },
   { name: '{ nowIso }', clock: { nowIso: () => INJECTED_ISO } },
@@ -32,16 +24,11 @@ const SHAPES: ClockShape[] = [
   { name: '{ clock: { nowIso } }', clock: { clock: { nowIso: () => INJECTED_ISO } } }
 ]
 
-// The reset seam is process-wide, so a test that uses it puts the counter back where it was: the
-// ordering guarantee holds between two resets, and a later file must not inherit a dropped counter.
-// The counter only moves forward, so restoring it means advancing it back up.
 const restoreCounter = (to: number): void => {
   let current = monotonicNowMs()
   while (current < to) current = monotonicNowMs()
 }
 
-// A store that records the stamp the reaper hands it, so the sweep time is observed and not
-// inferred from a row that may have been written by something else.
 const capturingStore = () => {
   const stamps: string[] = []
   const store = taskStoreStubs({
@@ -107,9 +94,6 @@ describe('the service and its reaper share one clock', () => {
 
         const claimed = svc.claimTask({ agent: 'dev', taskId: created.data.id })
         if (!claimed.ok) throw new Error(`claimTask failed: ${formatError(claimed.error)}`)
-        // The lease window is computed from the millisecond source, so it pins the injected now
-        // and not just the injected stamp: a service that read the wall clock here would put the
-        // deadline years ahead of the injected one.
         expect(getTaskRow(db, created.data.id).lease_expires_at).toBe(
           new Date(INJECTED_MS + LEASE_TTL_MIN * MINUTE_MS).toISOString()
         )
@@ -131,8 +115,6 @@ describe('the service and its reaper share one clock', () => {
         const id = created.data.id
         const claimed = svc.claimTask({ agent: 'dev', taskId: id })
         if (!claimed.ok) throw new Error(`claimTask failed: ${formatError(claimed.error)}`)
-        // A lease that expired one minute before the injected now: only a sweep that reads the
-        // injected clock finds this row.
         db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [
           new Date(INJECTED_MS - MINUTE_MS).toISOString(),
           id
@@ -143,8 +125,6 @@ describe('the service and its reaper share one clock', () => {
         const reaped = getTaskRow(db, id)
         expect(reaped.status).toBe('queued')
         expect(reaped.attempts).toBe(1)
-        // The sweep stamp is the injected time, not the wall clock: the reaper and the service
-        // must not fall apart on the same row.
         expect(reaped.updated_at).toBe(INJECTED_ISO)
       } finally {
         closeTestDb(db)
@@ -177,8 +157,6 @@ describe('the reaper accepts every accepted shape', () => {
       const { store, stamps } = capturingStore()
       const reaper = new LeaseReaper(store, REAP_COOLDOWN_SEC, true, shape.clock)
       expect(() => reaper.reap()).not.toThrow()
-      // The sweep stamp is the injected time: a reaper that ignores the shape would sweep with
-      // the wall clock instead, which is the silent half of the old defect.
       expect(stamps).toEqual([INJECTED_ISO])
     })
 
@@ -195,8 +173,6 @@ describe('the process-wide clock reset seam', () => {
   test('resetMonotonicClock() puts the counter back on the wall clock', () => {
     const prior = monotonicNowMs()
     try {
-      // Push the counter a second past the wall clock: the reset has to drop those steps, so a
-      // stamp back on the wall clock proves the counter was reset and not merely read.
       for (let i = 0; i < 1000; i++) monotonicNowMs()
       const ahead = monotonicNowMs()
       resetMonotonicClock()
@@ -240,9 +216,6 @@ describe('the process-wide clock reset seam', () => {
       await store.storeEvent('stream-1', message)
       const after = monotonicNowMs()
       const wallDrift = Date.now() - wallStart
-      // The counter advances by one per call and by whatever the wall clock gained meanwhile.
-      // Transport traffic must not spend a step of its own, so three stored events may not move
-      // the counter by three.
       expect(after).toBeGreaterThan(baseline)
       expect(after - baseline).toBeLessThanOrEqual(wallDrift + 1)
     } finally {

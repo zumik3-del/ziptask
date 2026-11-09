@@ -16,10 +16,6 @@ import {
   MAX_TITLE_LENGTH
 } from './core/tasks'
 
-// The HTTP/MCP surface: the task-view endpoint, the schema guards in front of the tools, and the
-// argument contract as it reaches the wire. Session lifecycle and the event store live in the
-// sibling files (server.session.test.ts, server.event-store.test.ts).
-
 function getId(result: ReturnType<TaskService['createTask']>): number {
   if (!result.ok) throw new Error('createTask failed')
   return result.data.id
@@ -88,7 +84,6 @@ describe('GET /api/task/:id HTTP endpoint', () => {
 
   test('resolution comment type is preserved', async () => {
     const id = getId(srv.svc.createTask({ title: 'Resolution task', reporter: 'dev' }))
-    // drive through claim + review to done
     const claimOk = srv.svc.claimTask({ agent: 'tester', taskId: id })
     expect(claimOk.ok).toBe(true)
     const v1 = getVersion(srv.db, id)
@@ -163,7 +158,6 @@ describe('GET /api/task/:id HTTP endpoint', () => {
 
   test('blocked_by empty when all deps satisfied', async () => {
     const depId = getId(srv.svc.createTask({ title: 'Done dep', reporter: 'dev' }))
-    // drive dep to done via claim + two status transitions
     const claimOk = srv.svc.claimTask({ agent: 'dev', taskId: depId })
     expect(claimOk.ok).toBe(true)
     const v1 = getVersion(srv.db, depId)
@@ -318,7 +312,6 @@ describe('MCP schema guards (#431)', () => {
   const taskCount = (): number =>
     (srv.db.query('SELECT COUNT(*) AS n FROM tasks').get() as { n: number }).n
 
-  // A dependency must exist, so a boundary list of ids is seeded with real rows.
   const seedDeps = (count: number): number[] =>
     Array.from({ length: count }, (_, i) =>
       getId(srv.svc.createTask({ title: `Dep ${i}`, reporter: 'dev' }))
@@ -407,8 +400,6 @@ describe('MCP schema guards (#431)', () => {
       }
     })
     expect(res.isError).toBe(true)
-    // The documented string reaches the wire verbatim; zod v4 appends the argument path
-    // (" at description"), so the assertion pins the documented part, not the SDK suffix.
     expect(textOf(res)).toContain(
       'Input validation error: Invalid arguments for tool create_task: description: INVALID: description too long'
     )
@@ -425,7 +416,6 @@ describe('MCP schema guards (#431)', () => {
     expect(textOf(tooHigh)).toContain(
       'Input validation error: Invalid arguments for tool claim_task: lease_ttl_min: INVALID: lease_ttl_min too large'
     )
-    // Refused at the schema, so the row is untouched.
     const row = srv.db.query('SELECT status, assignee FROM tasks WHERE id = ?').get(id) as any
     expect(row).toMatchObject({ status: 'queued', assignee: null })
 
@@ -498,10 +488,8 @@ describe('MCP schema guards (#431)', () => {
   // refused by BOTH. Before the fix the guard counted UTF-16 units, so the schema accepted a
   // multi-byte description the guard refused.
   describe('the create_task string bounds count code points over the wire (#1874)', () => {
-    // U+1F600: one code point, two UTF-16 units.
     const EMOJI = '\u{1F600}'
     const multiByte = (n: number): string => EMOJI.repeat(n)
-    // The code-point count of a string, measured independently of the production helper.
     const codePoints = (value: string): number => [...value].length
 
     test('the advertised schema carries the code-point bounds', async () => {
@@ -542,8 +530,6 @@ describe('MCP schema guards (#431)', () => {
         'Input validation error: Invalid arguments for tool create_task: title: INVALID: title too long'
       )
       expect(taskCount()).toBe(before)
-      // The title's observable wire shape changed with the fix: the bound is now advertised, so
-      // the refusal comes from the schema (SDK-wrapped). A direct service call sees the bare one.
       expect(srv.svc.createTask({ title, reporter: 'dev' })).toEqual({
         ok: false,
         error: { code: 'INVALID', message: 'title too long' }
@@ -559,7 +545,6 @@ describe('MCP schema guards (#431)', () => {
       expect(textOf(wire)).toBe(
         'Input validation error: Invalid arguments for tool create_task: description: INVALID: description too long'
       )
-      // The service sees the bare refusal: the SDK wrapper is the wire's, not the domain's.
       expect(srv.svc.createTask({ title: 'Direct', reporter: 'dev', description })).toEqual({
         ok: false,
         error: { code: 'INVALID', message: 'description too long' }
@@ -595,7 +580,6 @@ describe('MCP schema guards (#431)', () => {
     // schema refuses first, so the refusal arrives SDK-wrapped, while a direct service call still
     // sees the bare INVALID string.
     describe('the actor names carry the advertised bound over the wire (#1880)', () => {
-      // The three counts a refusal must not move: no task row, no audit row, no comment.
       const storeCounts = (): { tasks: number; audit: number; comments: number } => {
         const count = (table: string) =>
           (srv.db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
@@ -622,7 +606,6 @@ describe('MCP schema guards (#431)', () => {
           'Input validation error: Invalid arguments for tool create_task: reporter: INVALID: reporter too long'
         )
         expect(storeCounts()).toEqual(before)
-        // The service sees the bare refusal: the SDK wrapper is the wire's, not the domain's.
         expect(srv.svc.createTask({ title: 'Long reporter', reporter })).toEqual({
           ok: false,
           error: { code: 'INVALID', message: 'reporter too long' }
@@ -673,7 +656,6 @@ describe('MCP schema guards (#431)', () => {
       })
 
       test('an assignee of exactly MAX_AGENT_LENGTH code points reaches the guard refusal', async () => {
-        // The boundary is exactly 200 code points: the schema accepts it, so the guard answers.
         const assignee = multiByte(MAX_AGENT_LENGTH)
         const res: any = await client.callTool({
           name: 'create_task',
@@ -749,7 +731,6 @@ describe('argument contract over MCP (F1 #1040)', () => {
       )
       expect(queue).toContain(`${target}|p0|Intended`)
 
-      // Still genuinely claimable afterwards — no lease, no attempts bump.
       const claim: any = await client.callTool({
         name: 'claim_task',
         arguments: { agent: 'tester', task_id: target }
@@ -1012,7 +993,6 @@ describe('argument contract over MCP (F1 #1040)', () => {
   })
 })
 
-// CORS on the browser-facing /api/* surface and the request-body cap that protects peekInitialize.
 describe('CORS on /api/* (#1704)', () => {
   let srv: TestServer
 
@@ -1081,8 +1061,6 @@ describe('request body size limit (#1704)', () => {
   })
 
   test('a body under the cap is processed normally (no 413)', async () => {
-    // A non-initialize request answers 400 SESSION_REQUIRED — deterministic proof the request
-    // reached the handler instead of being cut off by the size limit.
     const body = JSON.stringify({
       jsonrpc: '2.0',
       id: 1,

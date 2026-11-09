@@ -361,12 +361,10 @@ describe('update_task: validation', () => {
   })
 
   test('depends_on project mismatch refused', () => {
-    // create a second project and a task there
     db.run(
       "INSERT INTO projects (slug, folder_path, created_at, updated_at) VALUES ('other', '', ?, ?)",
       [new Date().toISOString(), new Date().toISOString()]
     )
-    // insert task in other project directly
     const otherProjectId = (db.query("SELECT id FROM projects WHERE slug='other'").get() as any).id
     const otherTaskId = repo.insertTask({
       title: 'Other',
@@ -387,7 +385,6 @@ describe('update_task: validation', () => {
     const a = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id as number
     const b = json(handleCreateTask(svc, { title: 'B', reporter: 'dev', depends_on: [a] }))
       .id as number
-    // make a depend on b -> cycle
     const beforeVersion = row(a).version
     const beforeDeps = row(a).depends_on
     const before = storeCounts()
@@ -401,8 +398,6 @@ describe('update_task: validation', () => {
 })
 
 describe('update_task: dependency validation (#2244)', () => {
-  // A boundary list needs real rows: an unknown id is refused on its own, so a length test seeded
-  // with fabricated ids would pass for the wrong reason.
   const seedDeps = (count: number): number[] =>
     repo.transaction(() =>
       Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' }))

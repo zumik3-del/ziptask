@@ -9,11 +9,6 @@ import { VERSION } from './version'
 import { startTestServer } from './test-context'
 import type { TestServer } from './test-context'
 
-// Session lifecycle and the records it emits: keep-alive/reaping, recovery from a stale id, the
-// session cap, and the JSON observability stream (open/close/500) that pins those transitions.
-// The HTTP/MCP contract itself lives in server.http.test.ts, the event store in
-// server.event-store.test.ts.
-
 type JsonRecord = Record<string, unknown>
 
 describe('observability logging', () => {
@@ -26,10 +21,6 @@ describe('observability logging', () => {
     return snap
   }
 
-  // A non-JSON line (a stray stderr write from the runtime or the SDK) is skipped rather
-  // than thrown on: a regression that drops back to text logging then fails the lookup
-  // below instead of the parser. A `{`-line that does NOT parse is the opposite case —
-  // it is a broken or forged record, so it is reported instead of dropped.
   function captureRecords(): JsonRecord[] {
     const records: JsonRecord[] = []
     const unparseable: string[] = []
@@ -130,7 +121,6 @@ describe('observability logging', () => {
 
     const close = recordOf(captureRecords(), 'session close')
     expect(close.agent).toBe('close-agent')
-    // the close must name the same session the open did, or the pair cannot be correlated
     expect(close.session).toBe(open.session)
     expect(close.session).toBe(sessionId)
     expect(close.level).toBe('info')
@@ -142,7 +132,6 @@ describe('observability logging', () => {
     const srv = startTestServer({ logger: makeCaptureLogger() })
     const port = srv.port
 
-    // Inject a throwing getTaskView to trigger the error path
     ;(srv.svc as any).getTaskView = () => {
       throw new Error('boom')
     }
@@ -177,9 +166,6 @@ describe('observability logging', () => {
     const err = recordOf(captureRecords(), 'http handler error')
     expect(err.level).toBe('error')
     expect(err.logger).toBe('test')
-    // normalizeError wraps the non-Error throw as { thrown }, so it lands in the fields
-    // slot, not the err one: the record carries no err key, and the circular reference
-    // is caught by the serializer, which drops the structured fields and reports why.
     expect(Object.keys(err).includes('err')).toBe(false)
     expect(typeof err.fieldsUnserializable).toBe('string')
     expect(err.fieldsUnserializable as string).not.toBe('')
@@ -192,8 +178,6 @@ describe('observability logging', () => {
   test('a non-Error throw keeps its provenance in a thrown field and still answers 500', async () => {
     const srv = startTestServer({ logger: makeCaptureLogger() })
 
-    // A serializable non-Error throw: the shape survives, so the record can be acted on
-    // instead of collapsing to the "[object Object]" the err slot would have produced.
     ;(srv.svc as any).getTaskView = () => {
       throw { code: 'E_CUSTOM', detail: 'not an Error' }
     }
@@ -206,7 +190,6 @@ describe('observability logging', () => {
     expect(err.level).toBe('error')
     expect(err.logger).toBe('test')
     expect(err.thrown).toEqual({ code: 'E_CUSTOM', detail: 'not an Error' })
-    // the err slot is reserved for Errors: no message/stack pair is invented here
     expect(Object.keys(err).includes('err')).toBe(false)
     expect(Object.keys(err).includes('stack')).toBe(false)
 
@@ -216,9 +199,6 @@ describe('observability logging', () => {
   test('a newline in the agent name stays inside one record and forges no session open', async () => {
     const srv = startTestServer({ logger: makeCaptureLogger() })
 
-    // clientInfo.name is caller-controlled, so it is the one field a client can aim at
-    // the log stream with. captureRecords() throws on an unparseable { line, so the
-    // forged payload showing up as its own record is the other way this test fails.
     const evilName = 'evil\n{"level":"error","logger":"forged","msg":"forged record"}'
     const client = new Client({ name: evilName, version: '1.0.0' })
     const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${srv.port}/mcp`))
@@ -258,16 +238,13 @@ describe('session keep-alive fix (#753/#754)', () => {
       headers: { 'content-type': 'text/event-stream; charset=utf-8' }
     })
     const wrapped = trackStreamActivity(res, session)
-    expect(wrapped).not.toBe(res) // new Response created
+    expect(wrapped).not.toBe(res)
     expect(wrapped.headers.get('content-type')).toBe('text/event-stream; charset=utf-8')
 
-    // Consume the body to trigger the TransformStream
     const before = Date.now()
     const reader = wrapped.body!.getReader()
     const { value } = await reader.read()
     expect(value).toEqual(encoder.encode('data: hello\n\n'))
-    // The refresh is a real clock read, not a non-zero sentinel: a chunk must move lastAccess
-    // into the window this read happened in.
     expect(session.lastAccess).toBeGreaterThanOrEqual(before)
     expect(session.lastAccess).toBeLessThanOrEqual(Date.now())
   })
@@ -278,8 +255,8 @@ describe('session keep-alive fix (#753/#754)', () => {
       headers: { 'content-type': 'application/json' }
     })
     const wrapped = trackStreamActivity(res, session)
-    expect(wrapped).toBe(res) // same reference — no wrapping
-    expect(session.lastAccess).toBe(42) // not mutated
+    expect(wrapped).toBe(res)
+    expect(session.lastAccess).toBe(42)
   })
 
   test('trackStreamActivity passes through responses with no body', () => {
@@ -290,8 +267,6 @@ describe('session keep-alive fix (#753/#754)', () => {
     expect(session.lastAccess).toBe(0)
   })
 
-  // The session sweeper is driven directly instead of waited for: it runs on a 60s interval, so
-  // any wall-clock wait short enough for a test would only prove the interval had not fired yet.
   function captureSessionSweeper() {
     const sweeps: Array<() => void> = []
     const realSetInterval = globalThis.setInterval
@@ -336,8 +311,6 @@ describe('session keep-alive fix (#753/#754)', () => {
     try {
       const { client, transport } = await connectClient(srv.port, 'keepalive-agent')
       const sessionId = transport.sessionId
-      // The spy hands over the live Session the server keeps in its map, so the refresh is read
-      // directly instead of being inferred from a second call merely succeeding.
       const session = activity.mock.calls.at(-1)?.[1]
       expect(session).toBeDefined()
       if (!session) throw new Error('trackStreamActivity was never called')
@@ -347,8 +320,8 @@ describe('session keep-alive fix (#753/#754)', () => {
       const result = await client.callTool({ name: 'list_tasks', arguments: { project: 'test' } })
       expect(result).toBeDefined()
 
-      expect(transport.sessionId).toBe(sessionId) // the existing session was reused, not re-initialized
-      expect(activity.mock.calls.at(-1)?.[1]).toBe(session) // one shared Session object, all along
+      expect(transport.sessionId).toBe(sessionId)
+      expect(activity.mock.calls.at(-1)?.[1]).toBe(session)
       expect(session.lastAccess).toBeGreaterThan(stale)
       await client.close()
     } finally {
@@ -364,8 +337,6 @@ describe('session keep-alive fix (#753/#754)', () => {
       const active = await connectClient(srv.port, 'keepalive-agent')
       const idle = await connectClient(srv.port, 'quiet-agent')
 
-      // Both sessions are now older than the 200ms TTL, so both are sweep-eligible before the
-      // request below: the surviving session is spared by the refresh, not by an inert sweep.
       await Bun.sleep(300)
       const result = await active.client.callTool({
         name: 'list_tasks',
@@ -471,13 +442,11 @@ describe('session cap (#767)', () => {
     const srv = startTestServer({ maxSessions: 1 })
     const port = srv.port
 
-    // First client connects fine
     const client1 = new Client({ name: 'cap-agent-1', version: '1.0.0' })
     const transport1 = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`))
     await client1.connect(transport1)
     expect(transport1.sessionId).toBeDefined()
 
-    // Second client should get 429 (session cap reached)
     const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: 'POST',
       headers: {

@@ -90,9 +90,6 @@ describe('schema guard (v1.6)', () => {
       const db = openDatabase(path)
       db.close()
       const db2 = openDatabase(path)
-      // One transaction for the downgrade: the eight DDL/data statements would otherwise be eight
-      // WAL commits, which is what made this fixture slow. PRAGMA is not involved here, so the
-      // transaction is safe (the migration replay below does keep its PRAGMA outside).
       const downgrade = db2.transaction(() => {
         db2.run('DROP INDEX IF EXISTS idx_tasks_epic_id')
         db2.run('ALTER TABLE tasks DROP COLUMN epic_id')
@@ -189,16 +186,11 @@ describe('schema guard (v1.6)', () => {
   })
 
   test('v3 -> v4 rebuild preserves child rows and adds ON DELETE CASCADE', () => {
-    // 12 = statements before the v4 rebuild block; pinning it keeps the v3->v4 boundary explicit
     const V3_STATEMENT_COUNT = 12
     const path = makeTempDbPath('schema-guard')
     try {
       const raw = new Database(path)
-      // PRAGMA foreign_keys stays OUTSIDE the transaction: it is a no-op while a transaction is open.
       raw.exec('PRAGMA foreign_keys = ON')
-      // One transaction: the replay is 12 DDL statements plus 4 writes, and one commit per
-      // statement is what made this fixture slow. DDL inside a transaction is what production
-      // does too (src/db/db.ts applyMigrations).
       let id = 0
       const build = raw.transaction(() => {
         for (let i = 0; i < V3_STATEMENT_COUNT; i++) raw.exec(MIGRATIONS[i])
