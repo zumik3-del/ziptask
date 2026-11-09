@@ -10,7 +10,7 @@ MCP task tracker for AI agents: the state layer (statuses, deps, leases, version
 - Config: optional `settings.json` (`--settings` or `ZIPTASK_SETTINGS`), then env overrides (`ZIPTASK_DB`, `ZIPTASK_PORT`, …) — `docs/configuration.md`.
 
 ## 3. Verification commands
-- `bun test` · `bunx biome check src/ scripts/` · `bunx tsc --noEmit` · smoke `bun run src/smoke.ts` (tester only, once per batch).
+- `bun test` · `bunx biome check src/ scripts/` · `bunx tsc --noEmit` · smoke `bun run src/smoke.ts`.
 
 ## 4. Code conventions
 - No comments in code, except where an explanation is strictly necessary (non-obvious invariant, security note, ADR reference); extend or generalise an existing module before writing a new one.
@@ -30,10 +30,10 @@ MCP task tracker for AI agents: the state layer (statuses, deps, leases, version
 ## 6. Branching & hosting
 - Remote: GitHub `zumik3-del/ziptask`. Never commit `data/`, `.test-data/`, `node_modules/`.
 - Git scan safety: never enumerate every ref or run `git ls-tree -r`/`git show` per ref — that fan-out can retain GBs. Prefer `rg` on checked-out files; for history use a named ref, an explicit path, `--max-count` and bounded output.
-- Release (merge-driven): bump `version` on `dev` (`chore: bump version to X.Y.Z`), PR dev→main, merge. `release.yml` on `main` creates the tag + Release with `ziptask-linux-x86_64` and `ziptask-<TAG>-linux-x86_64.tar.gz`; install/update/uninstall go through the vendored `deploy/` framework.
+- Release (merge-driven): bump `version` on `dev` (`chore: bump version to X.Y.Z`), open the PR dev→main; the user merges. `release.yml` on `main` creates the tag + Release with `ziptask-linux-x86_64` and `ziptask-<TAG>-linux-x86_64.tar.gz`; install/update/uninstall go through the vendored `deploy/` framework.
 
 ## 7. Memory conventions
-- SynaptoMind: always pass `cwd=/mnt/external/zum/PROJECTS/local/ziptask`; the project slug is stated once in §10.
+- SynaptoMind `cwd`: `/mnt/external/zum/PROJECTS/local/ziptask` (slug in §10).
 
 ## 8. Known pitfalls
 - Do not reintroduce webhooks/Redis/Hono — rejected (pull model, MCP-only).
@@ -41,8 +41,7 @@ MCP task tracker for AI agents: the state layer (statuses, deps, leases, version
 - Re-parenting between epics has no API tool (`epic_id` is immutable): use the SQL recipe in `docs/epics.md`; verify the target is a non-terminal, non-sub-task epic and bump `version = version + 1` in the same statement, so a stale client version cannot match a row whose `epic_id` moved.
 
 ## 9. Delegation map
-Roles and handoff rules → global `AGENTS.md` (`~/.config/opencode/AGENTS.md`); project delta: the §3 commands each role verifies against.
+Roles and handoffs → global `AGENTS.md`; project delta: each role verifies against the §3 commands.
 
 ## 10. Workspace & communication
-- Project slug: `ziptask` — state it once, here, and use it verbatim for both systems: the `forgejo_artifacts` `project:` argument (documents → `authelia/artifacts` under `ziptask/`) and the tracker `project:` on enumerating calls (`docs/projects.md`; both register independently, never infer one from the other).
-- Code → this repo.
+- Project slug: `ziptask` — state it once, here, and use it verbatim for both systems: the `forgejo_artifacts` `project:` argument (documents under `ziptask/`) and the tracker `project:` argument (`docs/projects.md`); the two register independently, never infer one from the other.
