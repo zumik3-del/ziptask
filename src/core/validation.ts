@@ -9,14 +9,22 @@ export function requiredError(value: string | null | undefined, field: string): 
 // The refusal is the ordinary "<field> required", so a null never crashes the guard on its length.
 // The length is counted in code points (`codePointLength`), the unit the advertised schema measures
 // in, so both layers refuse the same strings.
-export function tooLongError(value: string | null | undefined, max: number, field: string): SvcError | null {
+export function tooLongError(
+  value: string | null | undefined,
+  max: number,
+  field: string
+): SvcError | null {
   if (value === null || value === undefined) return requiredError(value, field)
   return codePointLength(value) > max ? { code: 'INVALID', message: `${field} too long` } : null
 }
 
 // The guard for an optional field: absent (undefined) passes, a present value is checked — a null
 // is refused as missing, a string over the limit is refused as too long.
-export function optionalFieldError(value: string | null | undefined, max: number, field: string): SvcError | null {
+export function optionalFieldError(
+  value: string | null | undefined,
+  max: number,
+  field: string
+): SvcError | null {
   if (value === undefined) return null
   return tooLongError(value, max, field)
 }

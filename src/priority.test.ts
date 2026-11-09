@@ -12,7 +12,15 @@ import { formatError } from './core/result'
 import { handleCreateTask, handleGetTask, handleListQueue, handleListTasks } from './mcp/task-tools'
 import { registerAllTools } from './mcp/tools'
 import { loadSettings } from './config'
-import { createTestDb, closeTestDb, getTaskRow, json, text, startTestServer, textOf } from './test-context'
+import {
+  createTestDb,
+  closeTestDb,
+  getTaskRow,
+  json,
+  text,
+  startTestServer,
+  textOf
+} from './test-context'
 import type { TestServer } from './test-context'
 
 // The refusal the service and the schema share, pinned as the literal text the contract
@@ -25,14 +33,27 @@ const PRIORITY_MESSAGE = 'priority must be one of p0, p1, p2, p3 or the number 0
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
-afterEach(() => { closeTestDb(db) })
+beforeEach(() => {
+  db = createTestDb()
+  repo = new TaskRepo(db)
+  svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' })
+})
+afterEach(() => {
+  closeTestDb(db)
+})
 
 // The create_task inputSchema as the MCP layer registers it: the shape the wire validates
 // against and advertises, so a schema/service disagreement shows up here and not only over the wire.
 function createTaskShape(): any {
   let shape: any
-  registerAllTools({ registerTool: (name: string, cfg: any) => { if (name === 'create_task') shape = cfg.inputSchema } } as any, svc)
+  registerAllTools(
+    {
+      registerTool: (name: string, cfg: any) => {
+        if (name === 'create_task') shape = cfg.inputSchema
+      }
+    } as any,
+    svc
+  )
   return shape
 }
 
@@ -66,7 +87,7 @@ function branchAccepts(branch: any, value: unknown): boolean {
 // The value set the published schema accepts.
 function advertises(property: any, value: unknown): boolean {
   const branches: any[] = Array.isArray(property?.anyOf) ? property.anyOf : [property]
-  return branches.some(branch => branchAccepts(branch, value))
+  return branches.some((branch) => branchAccepts(branch, value))
 }
 
 // The accepted shapes, derived from the canonical list: the canonical "pN", the number N and
@@ -81,7 +102,27 @@ const ACCEPTED_PRIORITIES: unknown[] = [
 // runtime refuses every digit outside 0..3, so an advertisement that accepts any single digit
 // would over-state the accepted set.
 const REFUSED_PRIORITIES: unknown[] = [
-  ' ', 'p4', 5, -1, 2.5, 'high', '', 'P2', '00', '03', ' 0', '0 ', '4', '9', '10', null, true, false, {}, [], Number.NaN
+  ' ',
+  'p4',
+  5,
+  -1,
+  2.5,
+  'high',
+  '',
+  'P2',
+  '00',
+  '03',
+  ' 0',
+  '0 ',
+  '4',
+  '9',
+  '10',
+  null,
+  true,
+  false,
+  {},
+  [],
+  Number.NaN
 ]
 
 const createWith = (title: string, priority: unknown) =>
@@ -90,12 +131,15 @@ const createWith = (title: string, priority: unknown) =>
 // The row counts a refusal must not move: a refused call writes no task row, no audit row and
 // no comment, so the three counts are the evidence that nothing was written.
 function storeCounts(): { tasks: number; audit: number; comments: number } {
-  const count = (table: string) => (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+  const count = (table: string) =>
+    (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
   return { tasks: count('tasks'), audit: count('audit_log'), comments: count('comments') }
 }
 
 const pipeLine = (id: number): string =>
-  text(handleListQueue(svc, { limit: 100 })).split('\n').find(line => line.startsWith(`${id}|`)) ?? ''
+  text(handleListQueue(svc, { limit: 100 }))
+    .split('\n')
+    .find((line) => line.startsWith(`${id}|`)) ?? ''
 
 describe('the numeric priority input (#1908)', () => {
   test('the number 2, the digit string "2" and the canonical "p2" all store "p2"', () => {
@@ -109,7 +153,11 @@ describe('the numeric priority input (#1908)', () => {
 
     // The read-back is part of the contract: every accepted shape comes back as the canonical
     // string, from the task view and from the queue line alike.
-    for (const [id, title] of [[asNumber, 'Number'], [asDigitString, 'DigitString'], [asCanonical, 'Canonical']] as const) {
+    for (const [id, title] of [
+      [asNumber, 'Number'],
+      [asDigitString, 'DigitString'],
+      [asCanonical, 'Canonical']
+    ] as const) {
       expect(json(handleGetTask(svc, { id })).priority).toBe('p2')
       expect(pipeLine(id)).toBe(`${id}|p2|${title}`)
     }
@@ -125,9 +173,18 @@ describe('the numeric priority input (#1908)', () => {
 
   test('every accepted shape stores the canonical "pN" and nothing else', () => {
     const accepted: Array<[unknown, string]> = [
-      ['p0', 'p0'], ['p1', 'p1'], ['p2', 'p2'], ['p3', 'p3'],
-      [0, 'p0'], [1, 'p1'], [2, 'p2'], [3, 'p3'],
-      ['0', 'p0'], ['1', 'p1'], ['2', 'p2'], ['3', 'p3']
+      ['p0', 'p0'],
+      ['p1', 'p1'],
+      ['p2', 'p2'],
+      ['p3', 'p3'],
+      [0, 'p0'],
+      [1, 'p1'],
+      [2, 'p2'],
+      [3, 'p3'],
+      ['0', 'p0'],
+      ['1', 'p1'],
+      ['2', 'p2'],
+      ['3', 'p3']
     ]
     for (const [input, canonical] of accepted) {
       const id = json(createWith(`Shape ${JSON.stringify(input)}`, input)).id as number
@@ -145,8 +202,10 @@ describe('the numeric priority input (#1908)', () => {
   test('list_tasks reports the canonical form, not the shape the caller wrote', () => {
     const id = json(createWith('Listed', 2)).id as number
 
-    const listed = json(handleListTasks(svc, { fields: ['id', 'priority'] })) as { tasks: Array<{ id: number; priority: string }> }
-    const row = listed.tasks.find(task => task.id === id)
+    const listed = json(handleListTasks(svc, { fields: ['id', 'priority'] })) as {
+      tasks: Array<{ id: number; priority: string }>
+    }
+    const row = listed.tasks.find((task) => task.id === id)
     expect(row?.priority).toBe('p2')
   })
 
@@ -196,7 +255,8 @@ describe('the strings that only look like a digit', () => {
 
   test('a refused look-alike writes no task row', () => {
     const before = storeCounts()
-    for (const input of [...whitespace, ...digitAdjacent, ...otherDigits, 'P2']) createWith('Look alike', input)
+    for (const input of [...whitespace, ...digitAdjacent, ...otherDigits, 'P2'])
+      createWith('Look alike', input)
     expect(storeCounts()).toEqual(before)
   })
 })
@@ -348,10 +408,17 @@ describe('the priority at the schema layer', () => {
 describe('the configured default accepts the same shapes', () => {
   let testDir: string
   beforeEach(() => {
-    testDir = join('/tmp/opencode', `priority-config-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    testDir = join(
+      '/tmp/opencode',
+      `priority-config-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    )
     mkdirSync(testDir, { recursive: true })
   })
-  afterEach(() => { try { rmSync(testDir, { recursive: true }) } catch {} })
+  afterEach(() => {
+    try {
+      rmSync(testDir, { recursive: true })
+    } catch {}
+  })
 
   const writeSettingsJson = (content: object): string => {
     const path = join(testDir, 'settings.json')
@@ -370,24 +437,32 @@ describe('the configured default accepts the same shapes', () => {
     // handoff is covered here: the loaded default is what the service writes.
     const path = writeSettingsJson({ defaults: { priority: 2 } })
     const settings = loadSettings({ path, env: {}, argv: [] })
-    const configured = new TaskService(repo, { leaseTtlMin: 15, scope: 'test', defaultPriority: settings.defaults.priority as TaskPriority })
+    const configured = new TaskService(repo, {
+      leaseTtlMin: 15,
+      scope: 'test',
+      defaultPriority: settings.defaults.priority as TaskPriority
+    })
 
     const id = json(handleCreateTask(configured, { title: 'Default' })).id as number
     expect(getTaskRow(db, id).priority).toBe('p2')
   })
 
   test('an env override in the digit-string form loads the canonical form', () => {
-    expect(loadSettings({ env: { ZIPTASK_DEFAULTS_PRIORITY: '2' }, argv: [] }).defaults.priority).toBe('p2')
+    expect(
+      loadSettings({ env: { ZIPTASK_DEFAULTS_PRIORITY: '2' }, argv: [] }).defaults.priority
+    ).toBe('p2')
   })
 
   test('an unusable configured default is refused at startup, naming defaults.priority', () => {
     for (const value of ['p4', 'p9', '5', ' ']) {
-      expect(() => loadSettings({ env: { ZIPTASK_DEFAULTS_PRIORITY: value }, argv: [] }))
-        .toThrow(/Invalid configuration after env overrides: defaults\.priority: INVALID: priority must be one of/)
+      expect(() => loadSettings({ env: { ZIPTASK_DEFAULTS_PRIORITY: value }, argv: [] })).toThrow(
+        /Invalid configuration after env overrides: defaults\.priority: INVALID: priority must be one of/
+      )
     }
     const path = writeSettingsJson({ defaults: { priority: 9 } })
-    expect(() => loadSettings({ path, env: {}, argv: [] }))
-      .toThrow(/Invalid settings\.json: .*priority must be one of/s)
+    expect(() => loadSettings({ path, env: {}, argv: [] })).toThrow(
+      /Invalid settings\.json: .*priority must be one of/s
+    )
   })
 })
 
@@ -419,10 +494,16 @@ describe('the create_task schema stays JSON-Schema-convertible', () => {
     // from the list the service accepts.
     expect(branches).toContainEqual({ type: 'string', enum: [...TASK_PRIORITIES] })
     // The number branch: the integers 0..3.
-    expect(branches).toContainEqual({ type: 'integer', minimum: 0, maximum: TASK_PRIORITIES.length - 1 })
+    expect(branches).toContainEqual({
+      type: 'integer',
+      minimum: 0,
+      maximum: TASK_PRIORITIES.length - 1
+    })
     // The digit-string branch: exactly the four digit strings and nothing else. The branch
     // may state them as an enum or as a pattern, so the pin is on the set it accepts.
-    const digitBranch = branches.find(branch => branch.type === 'string' && !(branch.enum ?? []).includes(TASK_PRIORITIES[0]))
+    const digitBranch = branches.find(
+      (branch) => branch.type === 'string' && !(branch.enum ?? []).includes(TASK_PRIORITIES[0])
+    )
     expect(digitBranch).toBeDefined()
     for (const digit of TASK_PRIORITIES.map((_, index) => String(index))) {
       expect(branchAccepts(digitBranch, digit)).toBe(true)
@@ -441,7 +522,11 @@ describe('the create_task schema stays JSON-Schema-convertible', () => {
       const expected = ACCEPTED_PRIORITIES.includes(value)
       const advertised = advertises(property, value)
       const atSchema = createTaskShape().safeParse({ title: 'Agreement', priority: value }).success
-      const atService = svc.createTask({ title: 'Agreement', reporter: 'dev', priority: value as any }).ok
+      const atService = svc.createTask({
+        title: 'Agreement',
+        reporter: 'dev',
+        priority: value as any
+      }).ok
 
       expect(advertised).toBe(expected)
       expect(atSchema).toBe(expected)
@@ -462,7 +547,9 @@ describe('the create_task priority over the wire', () => {
   })
 
   afterEach(async () => {
-    try { await client.close() } catch {}
+    try {
+      await client.close()
+    } catch {}
     srv.stop()
   })
 
@@ -486,7 +573,9 @@ describe('the create_task priority over the wire', () => {
       arguments: { title: 'WireRefused', reporter: 'dev', priority: 'p4', project: 'test' }
     })
     expect(res.isError).toBe(true)
-    expect(textOf(res)).toBe(`Input validation error: Invalid arguments for tool create_task: priority: ${PRIORITY_REFUSAL}`)
+    expect(textOf(res)).toBe(
+      `Input validation error: Invalid arguments for tool create_task: priority: ${PRIORITY_REFUSAL}`
+    )
     expect(taskCount()).toBe(before)
   })
 
@@ -512,7 +601,11 @@ describe('the create_task priority over the wire', () => {
     expect(property.enum).toBeUndefined()
     expect(property.anyOf).toHaveLength(3)
     expect(property.anyOf).toContainEqual({ type: 'string', enum: [...TASK_PRIORITIES] })
-    expect(property.anyOf).toContainEqual({ type: 'integer', minimum: 0, maximum: TASK_PRIORITIES.length - 1 })
+    expect(property.anyOf).toContainEqual({
+      type: 'integer',
+      minimum: 0,
+      maximum: TASK_PRIORITIES.length - 1
+    })
     for (const value of [...ACCEPTED_PRIORITIES, ...REFUSED_PRIORITIES]) {
       expect(advertises(property, value)).toBe(ACCEPTED_PRIORITIES.includes(value))
     }

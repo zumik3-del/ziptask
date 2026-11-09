@@ -9,7 +9,9 @@ import { createLogger, normalizeError } from './logger'
 import { VERSION } from './version'
 
 const settingsWarnings: Array<{ message: string; fields: Record<string, unknown> }> = []
-const settings = loadSettings({ warn: (message, fields) => settingsWarnings.push({ message, fields }) })
+const settings = loadSettings({
+  warn: (message, fields) => settingsWarnings.push({ message, fields })
+})
 const logger = createLogger('app', settings.logging.level)
 for (const { message, fields } of settingsWarnings) logger.warn(message, fields)
 

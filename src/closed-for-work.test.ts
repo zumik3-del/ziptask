@@ -6,11 +6,21 @@ import { epicTargetRefusal } from './core/guards'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
-  handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus, handleListQueue
+  handleCreateTask,
+  handleGetTask,
+  handleClaimTask,
+  handleUpdateStatus,
+  handleListQueue
 } from './mcp/task-tools'
 import { handleListProjects } from './mcp/project-tools'
 import {
-  createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, seedProject
+  createTestDb,
+  closeTestDb,
+  insertTaskRow,
+  getTaskRow,
+  json,
+  text,
+  seedProject
 } from './test-context'
 
 // The closed-for-work contract (#1896). A failed task is closed for work: it carries a
@@ -22,17 +32,29 @@ import {
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
-afterEach(() => { closeTestDb(db) })
+beforeEach(() => {
+  db = createTestDb()
+  repo = new TaskRepo(db)
+  svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' })
+})
+afterEach(() => {
+  closeTestDb(db)
+})
 
 const createTaskRow = (title: string) => insertTaskRow(repo, { title, reporter: 'dev' })
 const row = (id: number) => getTaskRow(db, id)
-const versionOf = (id: number): number => json(handleGetTask(svc, { id, fields: ['version'] })).version
+const versionOf = (id: number): number =>
+  json(handleGetTask(svc, { id, fields: ['version'] })).version
 const auditRows = (id: number) =>
-  db.query('SELECT action, old_value, new_value FROM audit_log WHERE task_id = ? ORDER BY id')
+  db
+    .query('SELECT action, old_value, new_value FROM audit_log WHERE task_id = ? ORDER BY id')
     .all(id) as Array<{ action: string; old_value: string | null; new_value: string | null }>
 const countAudit = (id: number, action: string): number =>
-  (db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = ?').get(id, action) as { n: number }).n
+  (
+    db
+      .query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = ?')
+      .get(id, action) as { n: number }
+  ).n
 
 // The failure, driven through the production verbs: a claim and the in_progress -> failed edge.
 // The version of the failed row is returned, so the caller writes against the state it observes.
@@ -46,7 +68,10 @@ const failTask = (id: number, agent = 'developer'): number => {
 // One #1013 round: a claim that is never finished costs exactly one attempt on the next sweep.
 const burnAttempt = (id: number, agent = 'developer'): void => {
   handleClaimTask(svc, { agent, task_id: id })
-  db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [new Date(Date.now() - 3600_000).toISOString(), id])
+  db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [
+    new Date(Date.now() - 3600_000).toISOString(),
+    id
+  ])
   svc.lifecycle.reapExpiredLeases()
 }
 
@@ -56,7 +81,12 @@ describe('failed -> canceled: the administrative withdrawal (#1896)', () => {
     const failedVersion = failTask(id)
     expect(row(id).status).toBe('failed')
 
-    const res = handleUpdateStatus(svc, { id, agent: 'operator', status: 'canceled', version: failedVersion })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'operator',
+      status: 'canceled',
+      version: failedVersion
+    })
     expect(res.isError).toBeUndefined()
     expect(json(res).status).toBe('canceled')
 
@@ -71,11 +101,14 @@ describe('failed -> canceled: the administrative withdrawal (#1896)', () => {
     const id = createTaskRow('Recorded')
     const failedVersion = failTask(id)
     handleUpdateStatus(svc, {
-      id, agent: 'operator', status: 'canceled', version: failedVersion,
+      id,
+      agent: 'operator',
+      status: 'canceled',
+      version: failedVersion,
       comment: 'withdrawn: the failure stands, the task is only closed out'
     })
 
-    const transitions = auditRows(id).filter(r => r.action === 'update_status')
+    const transitions = auditRows(id).filter((r) => r.action === 'update_status')
     expect(transitions.length).toBe(2)
     expect(transitions[0].old_value).toBe('in_progress')
     expect(transitions[0].new_value).toBe('failed')
@@ -93,7 +126,12 @@ describe('failed -> canceled: the administrative withdrawal (#1896)', () => {
     const id = createTaskRow('NoDone')
     const failedVersion = failTask(id)
 
-    const res = handleUpdateStatus(svc, { id, agent: 'operator', status: 'done', version: failedVersion })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'operator',
+      status: 'done',
+      version: failedVersion
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toContain('INVALID: failed → done')
 
@@ -130,10 +168,16 @@ describe('failed -> canceled: the administrative withdrawal (#1896)', () => {
 
   test('a failed epic can be withdrawn to canceled as well', () => {
     // The same administrative edge on an epic: the failure stands, the epic is only closed out.
-    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true }))
+      .id as number
     handleUpdateStatus(svc, { id: epicId, agent: 'operator', status: 'failed', version: 1 })
 
-    const res = handleUpdateStatus(svc, { id: epicId, agent: 'operator', status: 'canceled', version: 2 })
+    const res = handleUpdateStatus(svc, {
+      id: epicId,
+      agent: 'operator',
+      status: 'canceled',
+      version: 2
+    })
     expect(res.isError).toBeUndefined()
     expect(json(res).status).toBe('canceled')
 
@@ -151,8 +195,12 @@ describe('failed -> canceled: the administrative withdrawal (#1896)', () => {
     expect(before.attempts).toBe(4)
 
     const res = handleUpdateStatus(svc, {
-      id, agent: 'operator', status: 'canceled', version: before.version,
-      reset_attempts: true, comment: 'the budget went on accidents'
+      id,
+      agent: 'operator',
+      status: 'canceled',
+      version: before.version,
+      reset_attempts: true,
+      comment: 'the budget went on accidents'
     })
     expect(res.isError).toBe(true)
     expect(text(res)).toBe(`INVALID: cannot reset attempts on terminal task #${id}`)
@@ -209,7 +257,11 @@ describe('closed for work: the invariants a failed task keeps', () => {
 
   test('a failed dependency does not block its dependents', () => {
     const dep = createTaskRow('Dep')
-    const dependent = insertTaskRow(repo, { title: 'Dependent', reporter: 'dev', depends_on: [dep] })
+    const dependent = insertTaskRow(repo, {
+      title: 'Dependent',
+      reporter: 'dev',
+      depends_on: [dep]
+    })
     failTask(dep)
 
     // the rule itself (src/core/deps.ts)
@@ -219,12 +271,15 @@ describe('closed for work: the invariants a failed task keeps', () => {
     // and what the caller sees
     expect(json(handleGetTask(svc, { id: dependent })).blocked_by).toEqual([])
     expect(text(handleListQueue(svc, {}))).toContain(`${dependent}|`)
-    expect(json(handleClaimTask(svc, { agent: 'developer', task_id: dependent })).id).toBe(dependent)
+    expect(json(handleClaimTask(svc, { agent: 'developer', task_id: dependent })).id).toBe(
+      dependent
+    )
   })
 
   test('a failed child does not keep its epic open', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id as number
-    const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id as number
+    const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId }))
+      .id as number
     failTask(subId)
 
     // the counter behind the CHILDREN guard (src/db/repo.ts nonTerminalChildCount)
@@ -232,27 +287,37 @@ describe('closed for work: the invariants a failed task keeps', () => {
 
     const epic = row(epicId)
     expect(epic.status).toBe('open')
-    const res = handleUpdateStatus(svc, { id: epicId, agent: 'operator', status: 'done', version: epic.version })
+    const res = handleUpdateStatus(svc, {
+      id: epicId,
+      agent: 'operator',
+      status: 'done',
+      version: epic.version
+    })
     expect(res.isError).toBeUndefined()
     expect(json(res).status).toBe('done')
   })
 
   test('a failed task is excluded from the project open count', () => {
     seedProject(db, 'alpha')
-    const id = json(handleCreateTask(svc, { title: 'Alpha task', reporter: 'dev', project: 'alpha' })).id as number
+    const id = json(
+      handleCreateTask(svc, { title: 'Alpha task', reporter: 'dev', project: 'alpha' })
+    ).id as number
     failTask(id)
 
     // the counter (src/db/repo.ts listProjects.open)
-    const alpha = repo.listProjects().find(p => p.slug === 'alpha')
+    const alpha = repo.listProjects().find((p) => p.slug === 'alpha')
     expect(alpha?.open).toBe(0)
     // and the pipe the reader sees
-    const line = text(handleListProjects(svc, {})).split('\n').find(l => l.startsWith('alpha|'))
+    const line = text(handleListProjects(svc, {}))
+      .split('\n')
+      .find((l) => l.startsWith('alpha|'))
     expect(line).toBe('alpha||0')
   })
 
   test('a failed child is excluded from the epic open count', () => {
     const epicId = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev' })).id as number
-    const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId })).id as number
+    const subId = json(handleCreateTask(svc, { title: 'Sub', reporter: 'dev', epic_id: epicId }))
+      .id as number
     failTask(subId)
 
     // the roll-up (src/db/repo.ts childStatusCounts.open)

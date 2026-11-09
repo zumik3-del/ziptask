@@ -8,7 +8,13 @@ import { startTestServer, textOf, TEST_PROJECT_SLUG } from './test-context'
 import type { TestServer } from './test-context'
 import { readBodyWithLimit } from './server'
 import { DEFAULT_HTTP_MAX_BODY_BYTES } from './defaults'
-import { MAX_AGENT_LENGTH, MAX_CONTENT_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_DEPENDS_ON, MAX_TITLE_LENGTH } from './core/tasks'
+import {
+  MAX_AGENT_LENGTH,
+  MAX_CONTENT_LENGTH,
+  MAX_DESCRIPTION_LENGTH,
+  MAX_DEPENDS_ON,
+  MAX_TITLE_LENGTH
+} from './core/tasks'
 
 // The HTTP/MCP surface: the task-view endpoint, the schema guards in front of the tools, and the
 // argument contract as it reaches the wire. Session lifecycle and the event store live in the
@@ -26,22 +32,28 @@ function getVersion(db: Database, id: number): number {
 describe('GET /api/task/:id HTTP endpoint', () => {
   let srv: TestServer
 
-  beforeEach(() => { srv = startTestServer() })
-  afterEach(() => { srv.stop() })
+  beforeEach(() => {
+    srv = startTestServer()
+  })
+  afterEach(() => {
+    srv.stop()
+  })
 
   test('health returns 200', async () => {
     const res = await fetch(`http://127.0.0.1:${srv.port}/health`)
     expect(res.status).toBe(200)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.ok).toBe(true)
     expect(body.version).toBe(VERSION)
   })
 
   test('GET /api/task/:id → 200 with task, blocked_by, comments', async () => {
-    const id = getId(srv.svc.createTask({ title: 'Test task', reporter: 'dev', description: 'a desc' }))
+    const id = getId(
+      srv.svc.createTask({ title: 'Test task', reporter: 'dev', description: 'a desc' })
+    )
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/${id}`)
     expect(res.status).toBe(200)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.task).toBeDefined()
     expect(body.task.id).toBe(id)
     expect(body.task.title).toBe('Test task')
@@ -52,13 +64,15 @@ describe('GET /api/task/:id HTTP endpoint', () => {
   })
 
   test('comments are in chronological order with expected shape', async () => {
-    const id = getId(srv.svc.createTask({ title: 'Commented', reporter: 'dev', description: 'initial desc' }))
+    const id = getId(
+      srv.svc.createTask({ title: 'Commented', reporter: 'dev', description: 'initial desc' })
+    )
     srv.svc.addComment({ id, agent: 'alice', content: 'first comment' })
     srv.svc.addComment({ id, agent: 'bob', content: 'second comment' })
 
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/${id}`)
     expect(res.status).toBe(200)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.comments.length).toBe(2)
     expect(body.comments[0].content).toBe('first comment')
     expect(body.comments[0].agent).toBe('alice')
@@ -67,7 +81,9 @@ describe('GET /api/task/:id HTTP endpoint', () => {
     expect(body.comments[0]).toHaveProperty('created_at')
     expect(body.comments[1].content).toBe('second comment')
     expect(body.comments[1].agent).toBe('bob')
-    expect(new Date(body.comments[0].created_at) <= new Date(body.comments[1].created_at)).toBe(true)
+    expect(new Date(body.comments[0].created_at) <= new Date(body.comments[1].created_at)).toBe(
+      true
+    )
   })
 
   test('resolution comment type is preserved', async () => {
@@ -79,12 +95,18 @@ describe('GET /api/task/:id HTTP endpoint', () => {
     const reviewOk = srv.svc.updateStatus({ id, agent: 'tester', status: 'review', version: v1 })
     expect(reviewOk.ok).toBe(true)
     const v2 = getVersion(srv.db, id)
-    const doneOk = srv.svc.updateStatus({ id, agent: 'tester', status: 'done', version: v2, comment: 'all good' })
+    const doneOk = srv.svc.updateStatus({
+      id,
+      agent: 'tester',
+      status: 'done',
+      version: v2,
+      comment: 'all good'
+    })
     expect(doneOk.ok).toBe(true)
 
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/${id}`)
     expect(res.status).toBe(200)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     const resolutionComment = body.comments.find((c: any) => c.type === 'resolution')
     expect(resolutionComment).toBeDefined()
     expect(resolutionComment.content).toBe('all good')
@@ -94,7 +116,7 @@ describe('GET /api/task/:id HTTP endpoint', () => {
   test('subtasks present for epic, omitted for plain task', async () => {
     const plainId = getId(srv.svc.createTask({ title: 'Plain', reporter: 'dev' }))
     const plainRes = await fetch(`http://127.0.0.1:${srv.port}/api/task/${plainId}`)
-    const plainBody = await plainRes.json() as any
+    const plainBody = (await plainRes.json()) as any
     expect(plainBody.subtasks).toBeUndefined()
 
     const epicResult = srv.svc.createTask({ title: 'Epic root', reporter: 'dev', epic: true })
@@ -103,7 +125,7 @@ describe('GET /api/task/:id HTTP endpoint', () => {
     const subResult = srv.svc.createTask({ title: 'Sub of epic', reporter: 'dev', epic_id: epicId })
     expect(subResult.ok).toBe(true)
     const epicRes = await fetch(`http://127.0.0.1:${srv.port}/api/task/${epicId}`)
-    const epicBody = await epicRes.json() as any
+    const epicBody = (await epicRes.json()) as any
     expect(epicBody.subtasks).toBeDefined()
     expect(epicBody.subtasks.total).toBe(1)
     expect(epicBody.subtasks.open).toBe(1)
@@ -112,7 +134,7 @@ describe('GET /api/task/:id HTTP endpoint', () => {
   test('non-numeric id → 400', async () => {
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/abc`)
     expect(res.status).toBe(400)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.error).toBeDefined()
   })
 
@@ -124,16 +146,18 @@ describe('GET /api/task/:id HTTP endpoint', () => {
   test('unknown id → 404', async () => {
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/99999`)
     expect(res.status).toBe(404)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.error).toBeDefined()
   })
 
   test('blocked_by populated for task with unsatisfied deps', async () => {
     const depId = getId(srv.svc.createTask({ title: 'Dependency', reporter: 'dev' }))
-    const id = getId(srv.svc.createTask({ title: 'Dependent', reporter: 'dev', depends_on: [depId] }))
+    const id = getId(
+      srv.svc.createTask({ title: 'Dependent', reporter: 'dev', depends_on: [depId] })
+    )
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/${id}`)
     expect(res.status).toBe(200)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.blocked_by).toEqual([depId])
   })
 
@@ -143,16 +167,23 @@ describe('GET /api/task/:id HTTP endpoint', () => {
     const claimOk = srv.svc.claimTask({ agent: 'dev', taskId: depId })
     expect(claimOk.ok).toBe(true)
     const v1 = getVersion(srv.db, depId)
-    const reviewOk = srv.svc.updateStatus({ id: depId, agent: 'dev', status: 'review', version: v1 })
+    const reviewOk = srv.svc.updateStatus({
+      id: depId,
+      agent: 'dev',
+      status: 'review',
+      version: v1
+    })
     expect(reviewOk.ok).toBe(true)
     const v2 = getVersion(srv.db, depId)
     const doneOk = srv.svc.updateStatus({ id: depId, agent: 'dev', status: 'done', version: v2 })
     expect(doneOk.ok).toBe(true)
 
-    const id = getId(srv.svc.createTask({ title: 'Satisfied', reporter: 'dev', depends_on: [depId] }))
+    const id = getId(
+      srv.svc.createTask({ title: 'Satisfied', reporter: 'dev', depends_on: [depId] })
+    )
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/${id}`)
     expect(res.status).toBe(200)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.blocked_by).toEqual([])
   })
 })
@@ -160,8 +191,12 @@ describe('GET /api/task/:id HTTP endpoint', () => {
 describe('GET /api/tasks HTTP endpoint', () => {
   let srv: TestServer
 
-  beforeEach(() => { srv = startTestServer() })
-  afterEach(() => { srv.stop() })
+  beforeEach(() => {
+    srv = startTestServer()
+  })
+  afterEach(() => {
+    srv.stop()
+  })
 
   test('GET /api/tasks?project=<slug> returns 200 with { tasks, total } shape', async () => {
     const id1 = getId(srv.svc.createTask({ title: 'Task 1', reporter: 'dev', priority: 'p1' }))
@@ -169,7 +204,7 @@ describe('GET /api/tasks HTTP endpoint', () => {
 
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}`)
     expect(res.status).toBe(200)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.total).toBe(2)
     expect(Array.isArray(body.tasks)).toBe(true)
     expect(body.tasks.length).toBe(2)
@@ -190,7 +225,7 @@ describe('GET /api/tasks HTTP endpoint', () => {
   test('returns empty tasks list and total 0 when project has no tasks', async () => {
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}`)
     expect(res.status).toBe(200)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body).toEqual({ tasks: [], total: 0 })
   })
 
@@ -200,9 +235,11 @@ describe('GET /api/tasks HTTP endpoint', () => {
     const claim = srv.svc.claimTask({ agent: 'dev', taskId: pId })
     expect(claim.ok).toBe(true)
 
-    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&status=in_progress`)
+    const res = await fetch(
+      `http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&status=in_progress`
+    )
     expect(res.status).toBe(200)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.total).toBe(1)
     expect(body.tasks.length).toBe(1)
     expect(body.tasks[0].id).toBe(pId)
@@ -210,9 +247,11 @@ describe('GET /api/tasks HTTP endpoint', () => {
   })
 
   test('status query filter returns 400 with INVALID: invalid status for invalid status', async () => {
-    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&status=nonexistent_status`)
+    const res = await fetch(
+      `http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&status=nonexistent_status`
+    )
     expect(res.status).toBe(400)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.error).toBe('INVALID: invalid status')
   })
 
@@ -221,9 +260,11 @@ describe('GET /api/tasks HTTP endpoint', () => {
     getId(srv.svc.createTask({ title: 'Task 2', reporter: 'dev' }))
     getId(srv.svc.createTask({ title: 'Task 3', reporter: 'dev' }))
 
-    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&limit=2`)
+    const res = await fetch(
+      `http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&limit=2`
+    )
     expect(res.status).toBe(200)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.total).toBe(3)
     expect(body.tasks.length).toBe(2)
   })
@@ -231,9 +272,11 @@ describe('GET /api/tasks HTTP endpoint', () => {
   test('limit query param returns 400 with INVALID: invalid limit for negative or non-integer values', async () => {
     const badLimits = ['-1', '0', 'abc', '1.5', 'NaN']
     for (const bad of badLimits) {
-      const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&limit=${bad}`)
+      const res = await fetch(
+        `http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}&limit=${bad}`
+      )
       expect(res.status).toBe(400)
-      const body = await res.json() as any
+      const body = (await res.json()) as any
       expect(body.error).toBe('INVALID: invalid limit')
     }
   })
@@ -242,14 +285,14 @@ describe('GET /api/tasks HTTP endpoint', () => {
     ;(srv.svc.projects as any).scope = undefined
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks`)
     expect(res.status).toBe(400)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.error).toBe('INVALID: project required')
   })
 
   test('unknown project returns 400 with INVALID: unknown project...', async () => {
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=unknown_project`)
     expect(res.status).toBe(400)
-    const body = await res.json() as any
+    const body = (await res.json()) as any
     expect(body.error).toContain("INVALID: unknown project 'unknown_project'")
   })
 })
@@ -266,7 +309,9 @@ describe('MCP schema guards (#431)', () => {
   })
 
   afterEach(async () => {
-    try { await client.close() } catch {}
+    try {
+      await client.close()
+    } catch {}
     srv.stop()
   })
 
@@ -275,7 +320,9 @@ describe('MCP schema guards (#431)', () => {
 
   // A dependency must exist, so a boundary list of ids is seeded with real rows.
   const seedDeps = (count: number): number[] =>
-    Array.from({ length: count }, (_, i) => getId(srv.svc.createTask({ title: `Dep ${i}`, reporter: 'dev' })))
+    Array.from({ length: count }, (_, i) =>
+      getId(srv.svc.createTask({ title: `Dep ${i}`, reporter: 'dev' }))
+    )
 
   test('updated_since out of zod range is rejected by MCP layer', async () => {
     const tooHigh = await client.callTool({
@@ -296,18 +343,30 @@ describe('MCP schema guards (#431)', () => {
       name: 'create_task',
       arguments: { title: 'SinceTest', reporter: 'dev' }
     })
-    const all = await client.callTool({ name: 'list_tasks', arguments: { updated_since: 0, project: 'test' } })
+    const all = await client.callTool({
+      name: 'list_tasks',
+      arguments: { updated_since: 0, project: 'test' }
+    })
     expect(textOf(all)).not.toBeNull()
 
-    const future = await client.callTool({ name: 'list_tasks', arguments: { updated_since: Date.now() + 60_000, project: 'test' } })
+    const future = await client.callTool({
+      name: 'list_tasks',
+      arguments: { updated_since: Date.now() + 60_000, project: 'test' }
+    })
     expect(textOf(future)).toContain('0')
   })
 
   test('list_tasks status enum rejects an unknown status and accepts a valid one', async () => {
-    const bad = await client.callTool({ name: 'list_tasks', arguments: { status: 'invalid_status' } })
+    const bad = await client.callTool({
+      name: 'list_tasks',
+      arguments: { status: 'invalid_status' }
+    })
     expect(bad.isError).toBe(true)
 
-    const good = await client.callTool({ name: 'list_tasks', arguments: { status: 'queued', project: 'test' } })
+    const good = await client.callTool({
+      name: 'list_tasks',
+      arguments: { status: 'queued', project: 'test' }
+    })
     expect(good.isError).toBeUndefined()
   })
 
@@ -326,7 +385,12 @@ describe('MCP schema guards (#431)', () => {
 
     const good = await client.callTool({
       name: 'create_task',
-      arguments: { title: 'Valid dep', reporter: 'dev', depends_on: [getId(srv.svc.createTask({ title: 'Dep', reporter: 'dev' }))], project: 'test' }
+      arguments: {
+        title: 'Valid dep',
+        reporter: 'dev',
+        depends_on: [getId(srv.svc.createTask({ title: 'Dep', reporter: 'dev' }))],
+        project: 'test'
+      }
     })
     expect(good.isError).toBeUndefined()
   })
@@ -335,12 +399,19 @@ describe('MCP schema guards (#431)', () => {
     const before = taskCount()
     const res: any = await client.callTool({
       name: 'create_task',
-      arguments: { title: 'Long description', reporter: 'dev', description: 'd'.repeat(MAX_DESCRIPTION_LENGTH + 1), project: 'test' }
+      arguments: {
+        title: 'Long description',
+        reporter: 'dev',
+        description: 'd'.repeat(MAX_DESCRIPTION_LENGTH + 1),
+        project: 'test'
+      }
     })
     expect(res.isError).toBe(true)
     // The documented string reaches the wire verbatim; zod v4 appends the argument path
     // (" at description"), so the assertion pins the documented part, not the SDK suffix.
-    expect(textOf(res)).toContain('Input validation error: Invalid arguments for tool create_task: description: INVALID: description too long')
+    expect(textOf(res)).toContain(
+      'Input validation error: Invalid arguments for tool create_task: description: INVALID: description too long'
+    )
     expect(taskCount()).toBe(before)
   })
 
@@ -351,7 +422,9 @@ describe('MCP schema guards (#431)', () => {
       arguments: { agent: 'tester', task_id: id, lease_ttl_min: 1441 }
     })
     expect(tooHigh.isError).toBe(true)
-    expect(textOf(tooHigh)).toContain('Input validation error: Invalid arguments for tool claim_task: lease_ttl_min: INVALID: lease_ttl_min too large')
+    expect(textOf(tooHigh)).toContain(
+      'Input validation error: Invalid arguments for tool claim_task: lease_ttl_min: INVALID: lease_ttl_min too large'
+    )
     // Refused at the schema, so the row is untouched.
     const row = srv.db.query('SELECT status, assignee FROM tasks WHERE id = ?').get(id) as any
     expect(row).toMatchObject({ status: 'queued', assignee: null })
@@ -361,7 +434,9 @@ describe('MCP schema guards (#431)', () => {
       arguments: { agent: 'tester', task_id: id, lease_ttl_min: Number.MAX_SAFE_INTEGER }
     })
     expect(huge.isError).toBe(true)
-    expect(textOf(huge)).toContain('Input validation error: Invalid arguments for tool claim_task: lease_ttl_min: INVALID: lease_ttl_min too large')
+    expect(textOf(huge)).toContain(
+      'Input validation error: Invalid arguments for tool claim_task: lease_ttl_min: INVALID: lease_ttl_min too large'
+    )
 
     const atCap: any = await client.callTool({
       name: 'claim_task',
@@ -374,7 +449,12 @@ describe('MCP schema guards (#431)', () => {
   test('create_task accepts a description exactly at the limit on the wire (#1857)', async () => {
     const res: any = await client.callTool({
       name: 'create_task',
-      arguments: { title: 'At limit', reporter: 'dev', description: 'd'.repeat(MAX_DESCRIPTION_LENGTH), project: 'test' }
+      arguments: {
+        title: 'At limit',
+        reporter: 'dev',
+        description: 'd'.repeat(MAX_DESCRIPTION_LENGTH),
+        project: 'test'
+      }
     })
     expect(res.isError).toBeUndefined()
     const id = JSON.parse(textOf(res)).id
@@ -394,7 +474,9 @@ describe('MCP schema guards (#431)', () => {
       }
     })
     expect(res.isError).toBe(true)
-    expect(textOf(res)).toContain('Input validation error: Invalid arguments for tool create_task: depends_on: INVALID: depends_on too long')
+    expect(textOf(res)).toContain(
+      'Input validation error: Invalid arguments for tool create_task: depends_on: INVALID: depends_on too long'
+    )
     expect(taskCount()).toBe(before)
   })
 
@@ -424,7 +506,7 @@ describe('MCP schema guards (#431)', () => {
 
     test('the advertised schema carries the code-point bounds', async () => {
       const listed = await client.listTools()
-      const create = (listed.tools as any[]).find(t => t.name === 'create_task')!
+      const create = (listed.tools as any[]).find((t) => t.name === 'create_task')!
       const props = create.inputSchema.properties
       expect(props.title.maxLength).toBe(MAX_TITLE_LENGTH)
       expect(props.description.maxLength).toBe(MAX_DESCRIPTION_LENGTH)
@@ -434,10 +516,17 @@ describe('MCP schema guards (#431)', () => {
       const before = taskCount()
       const res: any = await client.callTool({
         name: 'create_task',
-        arguments: { title: 'Long description', reporter: 'dev', description: multiByte(MAX_DESCRIPTION_LENGTH + 1), project: 'test' }
+        arguments: {
+          title: 'Long description',
+          reporter: 'dev',
+          description: multiByte(MAX_DESCRIPTION_LENGTH + 1),
+          project: 'test'
+        }
       })
       expect(res.isError).toBe(true)
-      expect(textOf(res)).toBe('Input validation error: Invalid arguments for tool create_task: description: INVALID: description too long')
+      expect(textOf(res)).toBe(
+        'Input validation error: Invalid arguments for tool create_task: description: INVALID: description too long'
+      )
       expect(taskCount()).toBe(before)
     })
 
@@ -449,12 +538,16 @@ describe('MCP schema guards (#431)', () => {
         arguments: { title, reporter: 'dev', project: 'test' }
       })
       expect(res.isError).toBe(true)
-      expect(textOf(res)).toBe('Input validation error: Invalid arguments for tool create_task: title: INVALID: title too long')
+      expect(textOf(res)).toBe(
+        'Input validation error: Invalid arguments for tool create_task: title: INVALID: title too long'
+      )
       expect(taskCount()).toBe(before)
       // The title's observable wire shape changed with the fix: the bound is now advertised, so
       // the refusal comes from the schema (SDK-wrapped). A direct service call sees the bare one.
-      expect(srv.svc.createTask({ title, reporter: 'dev' }))
-        .toEqual({ ok: false, error: { code: 'INVALID', message: 'title too long' } })
+      expect(srv.svc.createTask({ title, reporter: 'dev' })).toEqual({
+        ok: false,
+        error: { code: 'INVALID', message: 'title too long' }
+      })
     })
 
     test('the wire answer and the direct service answer differ only in the SDK wrapper', async () => {
@@ -463,10 +556,14 @@ describe('MCP schema guards (#431)', () => {
         name: 'create_task',
         arguments: { title: 'Direct', reporter: 'dev', description, project: 'test' }
       })
-      expect(textOf(wire)).toBe('Input validation error: Invalid arguments for tool create_task: description: INVALID: description too long')
+      expect(textOf(wire)).toBe(
+        'Input validation error: Invalid arguments for tool create_task: description: INVALID: description too long'
+      )
       // The service sees the bare refusal: the SDK wrapper is the wire's, not the domain's.
-      expect(srv.svc.createTask({ title: 'Direct', reporter: 'dev', description }))
-        .toEqual({ ok: false, error: { code: 'INVALID', message: 'description too long' } })
+      expect(srv.svc.createTask({ title: 'Direct', reporter: 'dev', description })).toEqual({
+        ok: false,
+        error: { code: 'INVALID', message: 'description too long' }
+      })
     })
 
     test('a multi-byte description exactly at the limit is accepted on the wire', async () => {
@@ -500,13 +597,14 @@ describe('MCP schema guards (#431)', () => {
     describe('the actor names carry the advertised bound over the wire (#1880)', () => {
       // The three counts a refusal must not move: no task row, no audit row, no comment.
       const storeCounts = (): { tasks: number; audit: number; comments: number } => {
-        const count = (table: string) => (srv.db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+        const count = (table: string) =>
+          (srv.db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
         return { tasks: count('tasks'), audit: count('audit_log'), comments: count('comments') }
       }
 
       test('the advertised schema carries the reporter and assignee bounds', async () => {
         const listed = await client.listTools()
-        const create = (listed.tools as any[]).find(t => t.name === 'create_task')!
+        const create = (listed.tools as any[]).find((t) => t.name === 'create_task')!
         const props = create.inputSchema.properties
         expect(props.reporter.maxLength).toBe(MAX_AGENT_LENGTH)
         expect(props.assignee.maxLength).toBe(MAX_AGENT_LENGTH)
@@ -520,11 +618,15 @@ describe('MCP schema guards (#431)', () => {
           arguments: { title: 'Long reporter', reporter, project: 'test' }
         })
         expect(res.isError).toBe(true)
-        expect(textOf(res)).toBe('Input validation error: Invalid arguments for tool create_task: reporter: INVALID: reporter too long')
+        expect(textOf(res)).toBe(
+          'Input validation error: Invalid arguments for tool create_task: reporter: INVALID: reporter too long'
+        )
         expect(storeCounts()).toEqual(before)
         // The service sees the bare refusal: the SDK wrapper is the wire's, not the domain's.
-        expect(srv.svc.createTask({ title: 'Long reporter', reporter }))
-          .toEqual({ ok: false, error: { code: 'INVALID', message: 'reporter too long' } })
+        expect(srv.svc.createTask({ title: 'Long reporter', reporter })).toEqual({
+          ok: false,
+          error: { code: 'INVALID', message: 'reporter too long' }
+        })
       })
 
       test('a multi-byte reporter exactly at the limit is accepted on the wire', async () => {
@@ -547,10 +649,14 @@ describe('MCP schema guards (#431)', () => {
           arguments: { title: 'Long assignee', reporter: 'dev', assignee, project: 'test' }
         })
         expect(res.isError).toBe(true)
-        expect(textOf(res)).toBe('Input validation error: Invalid arguments for tool create_task: assignee: INVALID: assignee too long')
+        expect(textOf(res)).toBe(
+          'Input validation error: Invalid arguments for tool create_task: assignee: INVALID: assignee too long'
+        )
         expect(storeCounts()).toEqual(before)
-        expect(srv.svc.createTask({ title: 'Long assignee', reporter: 'dev', assignee }))
-          .toEqual({ ok: false, error: { code: 'INVALID', message: 'assignee too long' } })
+        expect(srv.svc.createTask({ title: 'Long assignee', reporter: 'dev', assignee })).toEqual({
+          ok: false,
+          error: { code: 'INVALID', message: 'assignee too long' }
+        })
       })
 
       test('an in-bounds assignee is refused by the guard, not by the schema', async () => {
@@ -560,7 +666,9 @@ describe('MCP schema guards (#431)', () => {
           arguments: { title: 'Assignee', reporter: 'dev', assignee: 'boss', project: 'test' }
         })
         expect(res.isError).toBe(true)
-        expect(textOf(res)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+        expect(textOf(res)).toBe(
+          'INVALID: assignee is refused at creation: a task holds a lease only from in_progress'
+        )
         expect(storeCounts()).toEqual(before)
       })
 
@@ -572,7 +680,9 @@ describe('MCP schema guards (#431)', () => {
           arguments: { title: 'Assignee at limit', reporter: 'dev', assignee, project: 'test' }
         })
         expect(res.isError).toBe(true)
-        expect(textOf(res)).toBe('INVALID: assignee is refused at creation: a task holds a lease only from in_progress')
+        expect(textOf(res)).toBe(
+          'INVALID: assignee is refused at creation: a task holds a lease only from in_progress'
+        )
       })
     })
   })
@@ -590,13 +700,19 @@ describe('argument contract over MCP (F1 #1040)', () => {
   })
 
   afterEach(async () => {
-    try { await client.close() } catch {}
+    try {
+      await client.close()
+    } catch {}
     srv.stop()
   })
 
   function storeSnapshot() {
     return {
-      tasks: srv.db.query('SELECT id, status, version, assignee, attempts, lease_expires_at FROM tasks ORDER BY id').all(),
+      tasks: srv.db
+        .query(
+          'SELECT id, status, version, assignee, attempts, lease_expires_at FROM tasks ORDER BY id'
+        )
+        .all(),
       audit: srv.db.query('SELECT id, task_id, agent, action FROM audit_log ORDER BY id').all(),
       comments: srv.db.query('SELECT id, task_id, content FROM comments ORDER BY id').all()
     }
@@ -604,27 +720,40 @@ describe('argument contract over MCP (F1 #1040)', () => {
 
   describe('claim_task by task_id', () => {
     test('task_id alone claims that task over the wire', async () => {
-      const target = getId(srv.svc.createTask({ title: 'Canonical', reporter: 'dev', priority: 'p0' }))
-      const res: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: target } })
+      const target = getId(
+        srv.svc.createTask({ title: 'Canonical', reporter: 'dev', priority: 'p0' })
+      )
+      const res: any = await client.callTool({
+        name: 'claim_task',
+        arguments: { agent: 'tester', task_id: target }
+      })
       expect(JSON.parse(textOf(res)).id).toBe(target)
     })
   })
 
   describe('unknown-argument rejection', () => {
     test('claim_task with a bogus key is rejected and the task stays claimable', async () => {
-      const target = getId(srv.svc.createTask({ title: 'Intended', reporter: 'dev', priority: 'p0' }))
+      const target = getId(
+        srv.svc.createTask({ title: 'Intended', reporter: 'dev', priority: 'p0' })
+      )
 
       const res: any = await client.callTool({
-        name: 'claim_task', arguments: { agent: 'tester', task_id: target, bogus: 1 }
+        name: 'claim_task',
+        arguments: { agent: 'tester', task_id: target, bogus: 1 }
       })
       expect(res.isError).toBe(true)
       expect(textOf(res)).toContain('INVALID: unknown argument bogus')
 
-      const queue = textOf(await client.callTool({ name: 'list_queue', arguments: { project: 'test' } }))
+      const queue = textOf(
+        await client.callTool({ name: 'list_queue', arguments: { project: 'test' } })
+      )
       expect(queue).toContain(`${target}|p0|Intended`)
 
       // Still genuinely claimable afterwards — no lease, no attempts bump.
-      const claim: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: target } })
+      const claim: any = await client.callTool({
+        name: 'claim_task',
+        arguments: { agent: 'tester', task_id: target }
+      })
       expect(JSON.parse(textOf(claim)).id).toBe(target)
     })
 
@@ -640,7 +769,7 @@ describe('argument contract over MCP (F1 #1040)', () => {
       const version = getVersion(srv.db, id)
       const listed = await client.listTools()
       const schemas = new Map<string, any>(
-        (listed.tools as any[]).map(t => [t.name, t.inputSchema as any])
+        (listed.tools as any[]).map((t) => [t.name, t.inputSchema as any])
       )
       expect(schemas.size).toBe(14)
 
@@ -665,7 +794,9 @@ describe('argument contract over MCP (F1 #1040)', () => {
       const before = storeSnapshot()
       for (const [tool, args] of calls) {
         const schema = schemas.get(tool)!
-        const accepted = Object.keys(schema.properties ?? {}).sort().join(', ')
+        const accepted = Object.keys(schema.properties ?? {})
+          .sort()
+          .join(', ')
         const res: any = await client.callTool({ name: tool, arguments: args })
         expect(`${tool}: ${res.isError}`).toBe(`${tool}: true`)
         expect(`${tool}: ${textOf(res)}`).toBe(
@@ -682,36 +813,55 @@ describe('argument contract over MCP (F1 #1040)', () => {
       const tools = listed.tools as any[]
       expect(tools.length).toBe(14)
       for (const t of tools) {
-        expect(`${t.name}:${JSON.stringify(t.inputSchema.additionalProperties)}`)
-          .toBe(`${t.name}:{}`)
+        expect(`${t.name}:${JSON.stringify(t.inputSchema.additionalProperties)}`).toBe(
+          `${t.name}:{}`
+        )
         expect(`${t.name}:${t.inputSchema.additionalProperties}`).not.toBe(`${t.name}:false`)
       }
     })
 
     test('claim_task no longer advertises the id alias', async () => {
       const listed = await client.listTools()
-      const claim = (listed.tools as any[]).find(t => t.name === 'claim_task')!
+      const claim = (listed.tools as any[]).find((t) => t.name === 'claim_task')!
       const props = claim.inputSchema.properties
-      expect(Object.keys(props).sort()).toEqual(['agent', 'fields', 'lease_ttl_min', 'project', 'task_id'])
+      expect(Object.keys(props).sort()).toEqual([
+        'agent',
+        'fields',
+        'lease_ttl_min',
+        'project',
+        'task_id'
+      ])
     })
 
     test('update_status advertises renew and reset_attempts as booleans', async () => {
       const listed = await client.listTools()
-      const update = (listed.tools as any[]).find(t => t.name === 'update_status')!
+      const update = (listed.tools as any[]).find((t) => t.name === 'update_status')!
       const props = update.inputSchema.properties
-      expect(Object.keys(props).sort()).toEqual(['agent', 'comment', 'id', 'renew', 'reset_attempts', 'status', 'version'])
+      expect(Object.keys(props).sort()).toEqual([
+        'agent',
+        'comment',
+        'id',
+        'renew',
+        'reset_attempts',
+        'status',
+        'version'
+      ])
       expect(props.renew.type).toBe('boolean')
       expect(props.reset_attempts.type).toBe('boolean')
     })
 
     test('the actor and comment bounds are advertised on every schema that carries them', async () => {
       const listed = await client.listTools()
-      const tools = new Map((listed.tools as any[]).map(t => [t.name, t]))
+      const tools = new Map((listed.tools as any[]).map((t) => [t.name, t]))
       for (const name of ['claim_task', 'update_status', 'add_comment']) {
-        expect((tools.get(name)!.inputSchema.properties as any).agent.maxLength).toBe(MAX_AGENT_LENGTH)
+        expect((tools.get(name)!.inputSchema.properties as any).agent.maxLength).toBe(
+          MAX_AGENT_LENGTH
+        )
       }
-      expect((tools.get('update_status')!.inputSchema.properties as any).comment.maxLength).toBe(MAX_CONTENT_LENGTH)
-      const addComment = (tools.get('add_comment')!.inputSchema.properties as any)
+      expect((tools.get('update_status')!.inputSchema.properties as any).comment.maxLength).toBe(
+        MAX_CONTENT_LENGTH
+      )
+      const addComment = tools.get('add_comment')!.inputSchema.properties as any
       for (const key of ['content', 'text', 'comment']) {
         expect(addComment[key].maxLength).toBe(MAX_CONTENT_LENGTH)
       }
@@ -727,7 +877,11 @@ describe('argument contract over MCP (F1 #1040)', () => {
   describe('renew / reset_attempts over the wire (F2 #1065 + F3 #1066)', () => {
     async function claimOverWire(title: string): Promise<number> {
       const id = getId(srv.svc.createTask({ title, reporter: 'dev', priority: 'p0' }))
-      const claim = JSON.parse(textOf(await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: id } })))
+      const claim = JSON.parse(
+        textOf(
+          await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: id } })
+        )
+      )
       expect(claim.id).toBe(id)
       return id
     }
@@ -736,28 +890,49 @@ describe('argument contract over MCP (F1 #1040)', () => {
       const id = await claimOverWire('Wire')
       const version = getVersion(srv.db, id)
 
-      const res = JSON.parse(textOf(await client.callTool({
-        name: 'update_status',
-        arguments: { id, agent: 'tester', status: 'in_progress', renew: true, version }
-      })))
+      const res = JSON.parse(
+        textOf(
+          await client.callTool({
+            name: 'update_status',
+            arguments: { id, agent: 'tester', status: 'in_progress', renew: true, version }
+          })
+        )
+      )
       expect(res).toEqual({ id, status: 'in_progress', version: version + 1 })
-      const row = srv.db.query('SELECT lease_expires_at, attempts, assignee FROM tasks WHERE id = ?').get(id) as any
+      const row = srv.db
+        .query('SELECT lease_expires_at, attempts, assignee FROM tasks WHERE id = ?')
+        .get(id) as any
       expect(row.lease_expires_at).not.toBeNull()
       expect(row.attempts).toBe(0)
       expect(row.assignee).toBe('tester')
     })
 
     test('a refund over MCP echoes attempts and refunds the row', async () => {
-      const id = getId(srv.svc.createTask({ title: 'Wire refund', reporter: 'dev', priority: 'p0' }))
+      const id = getId(
+        srv.svc.createTask({ title: 'Wire refund', reporter: 'dev', priority: 'p0' })
+      )
       await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: id } })
       srv.db.run('UPDATE tasks SET attempts = 3 WHERE id = ?', [id])
 
-      const res = JSON.parse(textOf(await client.callTool({
-        name: 'update_status',
-        arguments: { id, agent: 'tester', status: 'blocked', version: getVersion(srv.db, id), reset_attempts: true, comment: 'spent on accidental claims' }
-      })))
+      const res = JSON.parse(
+        textOf(
+          await client.callTool({
+            name: 'update_status',
+            arguments: {
+              id,
+              agent: 'tester',
+              status: 'blocked',
+              version: getVersion(srv.db, id),
+              reset_attempts: true,
+              comment: 'spent on accidental claims'
+            }
+          })
+        )
+      )
       expect(res.attempts).toBe(0)
-      const row = srv.db.query('SELECT attempts, max_attempts FROM tasks WHERE id = ?').get(id) as any
+      const row = srv.db
+        .query('SELECT attempts, max_attempts FROM tasks WHERE id = ?')
+        .get(id) as any
       expect(row.attempts).toBe(0)
       expect(row.max_attempts).toBe(3)
     })
@@ -769,7 +944,13 @@ describe('argument contract over MCP (F1 #1040)', () => {
 
       const res: any = await client.callTool({
         name: 'update_status',
-        arguments: { id, agent: 'tester', status: 'in_progress', version: getVersion(srv.db, id), renew: 'yes' }
+        arguments: {
+          id,
+          agent: 'tester',
+          status: 'in_progress',
+          version: getVersion(srv.db, id),
+          renew: 'yes'
+        }
       })
       expect(res.isError).toBe(true)
       expect(textOf(res)).toContain('renew: Invalid input: expected boolean, received string')
@@ -783,10 +964,19 @@ describe('argument contract over MCP (F1 #1040)', () => {
 
       const res: any = await client.callTool({
         name: 'update_status',
-        arguments: { id, agent: 'tester', status: 'blocked', version: getVersion(srv.db, id), reset_attempts: 1, comment: 'x' }
+        arguments: {
+          id,
+          agent: 'tester',
+          status: 'blocked',
+          version: getVersion(srv.db, id),
+          reset_attempts: 1,
+          comment: 'x'
+        }
       })
       expect(res.isError).toBe(true)
-      expect(textOf(res)).toContain('reset_attempts: Invalid input: expected boolean, received number')
+      expect(textOf(res)).toContain(
+        'reset_attempts: Invalid input: expected boolean, received number'
+      )
       expect(storeSnapshot()).toEqual(before)
     })
   })
@@ -796,18 +986,28 @@ describe('argument contract over MCP (F1 #1040)', () => {
       const bait = getId(srv.svc.createTask({ title: 'Bait', reporter: 'dev', priority: 'p0' }))
       const before = storeSnapshot()
 
-      const res: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', task_id: 0 } })
+      const res: any = await client.callTool({
+        name: 'claim_task',
+        arguments: { agent: 'tester', task_id: 0 }
+      })
       expect(res.isError).toBe(true)
       expect(textOf(res)).not.toContain('INTERNAL')
       expect(storeSnapshot()).toEqual(before)
-      expect((srv.db.query('SELECT status FROM tasks WHERE id = ?').get(bait) as any).status).toBe('queued')
+      expect((srv.db.query('SELECT status FROM tasks WHERE id = ?').get(bait) as any).status).toBe(
+        'queued'
+      )
     })
 
     test('claim_task with id 0 is rejected and claims nothing', async () => {
       const bait = getId(srv.svc.createTask({ title: 'Bait', reporter: 'dev', priority: 'p0' }))
-      const res: any = await client.callTool({ name: 'claim_task', arguments: { agent: 'tester', id: 0 } })
+      const res: any = await client.callTool({
+        name: 'claim_task',
+        arguments: { agent: 'tester', id: 0 }
+      })
       expect(res.isError).toBe(true)
-      expect((srv.db.query('SELECT status FROM tasks WHERE id = ?').get(bait) as any).status).toBe('queued')
+      expect((srv.db.query('SELECT status FROM tasks WHERE id = ?').get(bait) as any).status).toBe(
+        'queued'
+      )
     })
   })
 })
@@ -816,8 +1016,12 @@ describe('argument contract over MCP (F1 #1040)', () => {
 describe('CORS on /api/* (#1704)', () => {
   let srv: TestServer
 
-  beforeEach(() => { srv = startTestServer() })
-  afterEach(() => { srv.stop() })
+  beforeEach(() => {
+    srv = startTestServer()
+  })
+  afterEach(() => {
+    srv.stop()
+  })
 
   test('GET /api/tasks carries Access-Control-Allow-Origin', async () => {
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=${TEST_PROJECT_SLUG}`)
@@ -858,8 +1062,12 @@ describe('CORS on /api/* (#1704)', () => {
 describe('request body size limit (#1704)', () => {
   let srv: TestServer
 
-  beforeEach(() => { srv = startTestServer() })
-  afterEach(() => { srv.stop() })
+  beforeEach(() => {
+    srv = startTestServer()
+  })
+  afterEach(() => {
+    srv.stop()
+  })
 
   test('oversized POST /mcp body → 413', async () => {
     const big = 'x'.repeat(DEFAULT_HTTP_MAX_BODY_BYTES + 1)
@@ -881,10 +1089,15 @@ describe('request body size limit (#1704)', () => {
       method: 'tools/list',
       params: { _pad: 'x'.repeat(DEFAULT_HTTP_MAX_BODY_BYTES - 512) }
     })
-    expect(new TextEncoder().encode(body).byteLength).toBeLessThanOrEqual(DEFAULT_HTTP_MAX_BODY_BYTES)
+    expect(new TextEncoder().encode(body).byteLength).toBeLessThanOrEqual(
+      DEFAULT_HTTP_MAX_BODY_BYTES
+    )
     const res = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream'
+      },
       body
     })
     expect(res.status).toBe(400)
@@ -990,7 +1203,10 @@ describe('request body size limit (#1704)', () => {
     // withCors would slip through if nothing pins this.
     const sessionless = await fetch(`http://127.0.0.1:${srv.port}/mcp`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream'
+      },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
     })
     expect(sessionless.status).toBe(400)

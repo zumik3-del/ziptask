@@ -5,32 +5,49 @@ import { MAX_DEPENDS_ON } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
-  handleCreateTask, handleGetTask, handleClaimTask, handleUpdateStatus, handleListQueue
+  handleCreateTask,
+  handleGetTask,
+  handleClaimTask,
+  handleUpdateStatus,
+  handleListQueue
 } from './mcp/task-tools'
 import {
-  createTestDb, closeTestDb, getTaskRow, insertTaskRow, json, text, driveToDone, testProjectId,
+  createTestDb,
+  closeTestDb,
+  getTaskRow,
+  insertTaskRow,
+  json,
+  text,
+  driveToDone,
+  testProjectId,
   type CreateTaskRowOpts
 } from './test-context'
 
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
-afterEach(() => { closeTestDb(db) })
+beforeEach(() => {
+  db = createTestDb()
+  repo = new TaskRepo(db)
+  svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' })
+})
+afterEach(() => {
+  closeTestDb(db)
+})
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
 describe('createsCycle', () => {
   test('self-dependency rejected', () => {
     const id = createTaskRow({ title: 'Self', reporter: 'dev' })
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id]), id])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', [JSON.stringify([id]), id])
     expect(createsCycle((id) => repo.depsOf(id), id, [id])).toBe(true)
   })
 
   test('simple 2-node cycle rejected', () => {
     const id1 = createTaskRow({ title: 'A', reporter: 'dev' })
     const id2 = createTaskRow({ title: 'B', reporter: 'dev' })
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id2]), id1])
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id1]), id2])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', [JSON.stringify([id2]), id1])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', [JSON.stringify([id1]), id2])
     expect(createsCycle((id) => repo.depsOf(id), id1, [id2])).toBe(true)
   })
 
@@ -38,9 +55,9 @@ describe('createsCycle', () => {
     const id1 = createTaskRow({ title: 'A', reporter: 'dev' })
     const id2 = createTaskRow({ title: 'B', reporter: 'dev' })
     const id3 = createTaskRow({ title: 'C', reporter: 'dev' })
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id2]), id1])
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id3]), id2])
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id1]), id3])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', [JSON.stringify([id2]), id1])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', [JSON.stringify([id3]), id2])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', [JSON.stringify([id1]), id3])
     expect(createsCycle((id) => repo.depsOf(id), id1, [id3])).toBe(true)
   })
 
@@ -48,7 +65,7 @@ describe('createsCycle', () => {
     const id1 = createTaskRow({ title: 'A', reporter: 'dev' })
     const id2 = createTaskRow({ title: 'B', reporter: 'dev' })
     const id3 = createTaskRow({ title: 'C', reporter: 'dev' })
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id1, id2]), id3])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', [JSON.stringify([id1, id2]), id3])
     expect(createsCycle((id) => repo.depsOf(id), id3, [id1, id2])).toBe(false)
   })
 
@@ -56,9 +73,9 @@ describe('createsCycle', () => {
     const id1 = createTaskRow({ title: 'A', reporter: 'dev' })
     const id2 = createTaskRow({ title: 'B', reporter: 'dev' })
     const id3 = createTaskRow({ title: 'C', reporter: 'dev' })
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id2]), id1])
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id3]), id2])
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", [JSON.stringify([id1, id2]), id3])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', [JSON.stringify([id2]), id1])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', [JSON.stringify([id3]), id2])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', [JSON.stringify([id1, id2]), id3])
     expect(createsCycle((id) => repo.depsOf(id), id1, [id2, id3])).toBe(true)
   })
 })
@@ -115,7 +132,7 @@ describe('deps', () => {
     const b = json(handleCreateTask(svc, { title: 'B', reporter: 'dev', depends_on: [a] })).id
     const queue = text(handleListQueue(svc, {}))
     expect(queue).toBe(`${a}|p2|A`)
-    const ids = queue.split('\n').map(line => Number(line.split('|')[0]))
+    const ids = queue.split('\n').map((line) => Number(line.split('|')[0]))
     expect(ids).not.toContain(b)
   })
 
@@ -148,13 +165,16 @@ describe('epic-dep rejection message (#106)', () => {
 
 describe('dependency validation (#2244)', () => {
   const storeCounts = (): { tasks: number; audit: number; comments: number } => {
-    const count = (table: string) => (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+    const count = (table: string) =>
+      (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
     return { tasks: count('tasks'), audit: count('audit_log'), comments: count('comments') }
   }
   // A boundary list needs real rows: an unknown id is refused on its own, so a length test seeded
   // with fabricated ids would pass for the wrong reason.
   const seedDeps = (count: number): number[] =>
-    repo.transaction(() => Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' })))
+    repo.transaction(() =>
+      Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' }))
+    )
 
   test('create_task refuses an unknown dependency id and writes nothing', () => {
     const dep = createTaskRow({ title: 'Known', reporter: 'dev' })
@@ -173,14 +193,18 @@ describe('dependency validation (#2244)', () => {
 
   test('create_task stores a repeated id once and lists it once in blocked_by', () => {
     const dep = createTaskRow({ title: 'Dep', reporter: 'dev' })
-    const id = json(handleCreateTask(svc, { title: 'Dup', reporter: 'dev', depends_on: [dep, dep, dep] })).id
+    const id = json(
+      handleCreateTask(svc, { title: 'Dup', reporter: 'dev', depends_on: [dep, dep, dep] })
+    ).id
     expect(JSON.parse(getTaskRow(db, id).depends_on)).toEqual([dep])
     expect(json(handleGetTask(svc, { id })).blocked_by).toEqual([dep])
   })
 
   test('create_task counts duplicates once against the limit: 101 entries of 100 ids are accepted', () => {
     const deps = seedDeps(MAX_DEPENDS_ON)
-    const id = json(handleCreateTask(svc, { title: 'Boundary', reporter: 'dev', depends_on: [...deps, deps[0]] })).id
+    const id = json(
+      handleCreateTask(svc, { title: 'Boundary', reporter: 'dev', depends_on: [...deps, deps[0]] })
+    ).id
     expect(JSON.parse(getTaskRow(db, id).depends_on)).toEqual(deps)
   })
 
@@ -220,7 +244,7 @@ describe('corrupt depends_on tolerance (#107)', () => {
 
   test('getTaskView survives corrupt depends_on', () => {
     const id = createTaskRow({ title: 'Corrupt', reporter: 'dev' })
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", ['{bad json}', id])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', ['{bad json}', id])
     const res = handleGetTask(svc, { id })
     expect(json(res).id).toBe(id)
     expect(json(res).status).toBe('queued')
@@ -241,14 +265,14 @@ describe('corrupt depends_on tolerance (#107)', () => {
 
   test('claimTask auto-claim survives corrupt depends_on (treated as no deps)', () => {
     const corruptId = createTaskRow({ title: 'Corrupt', reporter: 'dev' })
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", ['{bad json}', corruptId])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', ['{bad json}', corruptId])
     const res = handleClaimTask(svc, { agent: 'agent-1' })
     expect(json(res).id).toBe(corruptId)
   })
 
   test('listQueue survives corrupt depends_on', () => {
     const corruptId = createTaskRow({ title: 'Corrupt', reporter: 'dev' })
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", ['{bad json}', corruptId])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', ['{bad json}', corruptId])
     const out = text(handleListQueue(svc, {}))
     expect(out).toContain(`${corruptId}|`)
   })
@@ -256,7 +280,7 @@ describe('corrupt depends_on tolerance (#107)', () => {
   test('createsCycle survives corrupt depends_on in graph traversal', () => {
     const id1 = createTaskRow({ title: 'A', reporter: 'dev' })
     const id2 = createTaskRow({ title: 'B', reporter: 'dev' })
-    db.run("UPDATE tasks SET depends_on = ? WHERE id = ?", ['{bad json}', id2])
+    db.run('UPDATE tasks SET depends_on = ? WHERE id = ?', ['{bad json}', id2])
     expect(() => createsCycle((id) => repo.depsOf(id), id1, [id2])).not.toThrow()
   })
 
@@ -270,11 +294,35 @@ describe('queuedCandidates id tie-break (#431)', () => {
   test('same priority + same created_at orders by ascending id', () => {
     // Insert tasks with explicit same created_at to test tie-break
     const baseTime = '2020-01-01T00:00:00.000Z'
-    const idA = repo.insertTask({ title: 'A', description: null, priority: 'p2', reporter: 'dev', depends_on: '[]', now: baseTime, projectId: testProjectId(repo) }).id
-    const idB = repo.insertTask({ title: 'B', description: null, priority: 'p2', reporter: 'dev', depends_on: '[]', now: baseTime, projectId: testProjectId(repo) }).id
-    const idC = repo.insertTask({ title: 'C', description: null, priority: 'p2', reporter: 'dev', depends_on: '[]', now: baseTime, projectId: testProjectId(repo) }).id
+    const idA = repo.insertTask({
+      title: 'A',
+      description: null,
+      priority: 'p2',
+      reporter: 'dev',
+      depends_on: '[]',
+      now: baseTime,
+      projectId: testProjectId(repo)
+    }).id
+    const idB = repo.insertTask({
+      title: 'B',
+      description: null,
+      priority: 'p2',
+      reporter: 'dev',
+      depends_on: '[]',
+      now: baseTime,
+      projectId: testProjectId(repo)
+    }).id
+    const idC = repo.insertTask({
+      title: 'C',
+      description: null,
+      priority: 'p2',
+      reporter: 'dev',
+      depends_on: '[]',
+      now: baseTime,
+      projectId: testProjectId(repo)
+    }).id
     // Set same created_at
-    db.run("UPDATE tasks SET created_at = ? WHERE id IN (?, ?, ?)", [baseTime, idA, idB, idC])
+    db.run('UPDATE tasks SET created_at = ? WHERE id IN (?, ?, ?)', [baseTime, idA, idB, idC])
 
     const candidates = repo.queuedCandidates(10, testProjectId(repo))
     // Should order by id ASC when priority and created_at are equal
@@ -282,9 +330,28 @@ describe('queuedCandidates id tie-break (#431)', () => {
   })
 
   test('priority still takes precedence over id tie-break', () => {
-    const p0id = repo.insertTask({ title: 'P0', description: null, priority: 'p0', reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z', projectId: testProjectId(repo) }).id
-    const p2id = repo.insertTask({ title: 'P2', description: null, priority: 'p2', reporter: 'dev', depends_on: '[]', now: '2020-01-01T00:00:00.000Z', projectId: testProjectId(repo) }).id
-    db.run("UPDATE tasks SET created_at = '2020-01-01T00:00:00.000Z' WHERE id IN (?, ?)", [p0id, p2id])
+    const p0id = repo.insertTask({
+      title: 'P0',
+      description: null,
+      priority: 'p0',
+      reporter: 'dev',
+      depends_on: '[]',
+      now: '2020-01-01T00:00:00.000Z',
+      projectId: testProjectId(repo)
+    }).id
+    const p2id = repo.insertTask({
+      title: 'P2',
+      description: null,
+      priority: 'p2',
+      reporter: 'dev',
+      depends_on: '[]',
+      now: '2020-01-01T00:00:00.000Z',
+      projectId: testProjectId(repo)
+    }).id
+    db.run("UPDATE tasks SET created_at = '2020-01-01T00:00:00.000Z' WHERE id IN (?, ?)", [
+      p0id,
+      p2id
+    ])
 
     const candidates = repo.queuedCandidates(10, testProjectId(repo))
     expect(candidates[0].id).toBe(p0id)
@@ -295,26 +362,36 @@ describe('queuedCandidates id tie-break (#431)', () => {
 describe('listQueue dep-aware priority ordering (#767)', () => {
   test('lower-priority ready task listed before higher-priority dep-blocked task', () => {
     // Create a high-priority task that is dep-blocked
-    const blockedP0 = createTaskRow({ title: 'BlockedP0', reporter: 'dev', priority: 'p0', depends_on: [999] })
+    const blockedP0 = createTaskRow({
+      title: 'BlockedP0',
+      reporter: 'dev',
+      priority: 'p0',
+      depends_on: [999]
+    })
     // Create a low-priority task that is ready
     const readyP2 = createTaskRow({ title: 'ReadyP2', reporter: 'dev', priority: 'p2' })
     // Queue should show readyP2 first since blockedP0 is dep-blocked
     const out = text(handleListQueue(svc, {}))
-    const lines = out.split('\n').filter(l => l.trim())
+    const lines = out.split('\n').filter((l) => l.trim())
     expect(lines.length).toBe(1)
     expect(lines[0]).toContain(`${readyP2}|`)
     expect(lines[0]).not.toContain(`${blockedP0}|`)
   })
 
   test('listQueue matches auto-claim readiness: both skip dep-blocked tasks', () => {
-    const blockedP0 = createTaskRow({ title: 'BlockedP0', reporter: 'dev', priority: 'p0', depends_on: [999] })
+    const blockedP0 = createTaskRow({
+      title: 'BlockedP0',
+      reporter: 'dev',
+      priority: 'p0',
+      depends_on: [999]
+    })
     const readyP2 = createTaskRow({ title: 'ReadyP2', reporter: 'dev', priority: 'p2' })
     const readyP1 = createTaskRow({ title: 'ReadyP1', reporter: 'dev', priority: 'p1' })
 
     // listQueue should only show ready tasks
     const queue = text(handleListQueue(svc, {}))
-    const queueLines = queue.split('\n').filter(l => l.trim())
-    const queueIds = queueLines.map(line => Number(line.split('|')[0]))
+    const queueLines = queue.split('\n').filter((l) => l.trim())
+    const queueIds = queueLines.map((line) => Number(line.split('|')[0]))
     expect(queueIds).toContain(readyP1)
     expect(queueIds).toContain(readyP2)
     expect(queueIds).not.toContain(blockedP0)
@@ -335,7 +412,7 @@ describe('listQueue dep-aware priority ordering (#767)', () => {
     const p2b = createTaskRow({ title: 'ReadyP2b', reporter: 'dev', priority: 'p2' })
 
     const queue = text(handleListQueue(svc, {}))
-    const ids = queue.split('\n').map(line => Number(line.split('|')[0]))
+    const ids = queue.split('\n').map((line) => Number(line.split('|')[0]))
     expect(ids).toEqual([p2a, p2b])
   })
 })

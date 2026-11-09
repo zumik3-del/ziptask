@@ -6,7 +6,10 @@ const DB_PATH = process.env.ZIPTASK_DB ?? './data/ziptask.db'
 const BACKUP_DIR = process.env.ZIPTASK_BACKUP_DIR ?? './backups'
 const BACKUP_PREFIX = process.env.ZIPTASK_BACKUP_PREFIX ?? 'ziptask'
 const DEFAULT_BACKUP_RETAIN = 7
-const RETAIN_COUNT = parseInt(process.env.ZIPTASK_BACKUP_RETAIN ?? String(DEFAULT_BACKUP_RETAIN), 10)
+const RETAIN_COUNT = parseInt(
+  process.env.ZIPTASK_BACKUP_RETAIN ?? String(DEFAULT_BACKUP_RETAIN),
+  10
+)
 
 // sqlite3 dot-command destination; never derived from user-controlled paths.
 const TEMP_BACKUP_NAME = '.ziptask-backup.tmp.db'
@@ -52,7 +55,9 @@ function doBackup(): void {
     validatePath(BACKUP_DIR, 'BACKUP_DIR')
     validateBackupLocation(backupPath, BACKUP_DIR)
     if (!Number.isFinite(RETAIN_COUNT) || RETAIN_COUNT < 0) {
-      throw new Error(`RETAIN_COUNT must be a non-negative number, got: ${process.env.ZIPTASK_BACKUP_RETAIN ?? DEFAULT_BACKUP_RETAIN}`)
+      throw new Error(
+        `RETAIN_COUNT must be a non-negative number, got: ${process.env.ZIPTASK_BACKUP_RETAIN ?? DEFAULT_BACKUP_RETAIN}`
+      )
     }
   } catch (e) {
     log(`invalid configuration: ${e instanceof Error ? e.message : String(e)}`)
@@ -81,9 +86,14 @@ function doBackup(): void {
   }
 
   try {
-    const r = spawnSync('sqlite3', [DB_PATH, `.backup '${TEMP_BACKUP_NAME}'`], { cwd: BACKUP_DIR, stdio: 'pipe' })
+    const r = spawnSync('sqlite3', [DB_PATH, `.backup '${TEMP_BACKUP_NAME}'`], {
+      cwd: BACKUP_DIR,
+      stdio: 'pipe'
+    })
     if (r.error || r.status !== 0) {
-      const err = r.error?.message ?? (r.stderr?.toString().trim() || r.stdout?.toString().trim() || `code ${r.status}`)
+      const err =
+        r.error?.message ??
+        (r.stderr?.toString().trim() || r.stdout?.toString().trim() || `code ${r.status}`)
       log(`sqlite3 .backup failed: ${err}`)
       process.exit(1)
     }
@@ -118,9 +128,9 @@ function doBackup(): void {
   // Clean old backups (keep RETAIN_COUNT)
   try {
     const files = readdirSync(BACKUP_DIR)
-      .filter(f => f.startsWith(`${BACKUP_PREFIX}-`) && f.endsWith('.db.tar.gz'))
+      .filter((f) => f.startsWith(`${BACKUP_PREFIX}-`) && f.endsWith('.db.tar.gz'))
       .sort()
-      .map(f => join(BACKUP_DIR, f))
+      .map((f) => join(BACKUP_DIR, f))
     while (files.length > RETAIN_COUNT) {
       rmSync(files.shift()!)
     }

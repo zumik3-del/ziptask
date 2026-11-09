@@ -21,12 +21,16 @@ export function closeDatabase(db: Database): void {
 
 function applyMigrations(db: Database) {
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)')
-  const row = db.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | null
+  const row = db.query('SELECT version FROM schema_version LIMIT 1').get() as {
+    version: number
+  } | null
   const current = row?.version ?? 0
   const migrationCount = MIGRATIONS.length
   if (current === migrationCount) return
   if (current > migrationCount) {
-    throw new Error(`SCHEMA: database schema version ${current} is newer than this binary supports (${migrationCount}); upgrade ziptask or restore the database from backup`)
+    throw new Error(
+      `SCHEMA: database schema version ${current} is newer than this binary supports (${migrationCount}); upgrade ziptask or restore the database from backup`
+    )
   }
   let step = current
   const migrate = db.transaction(() => {
@@ -40,6 +44,8 @@ function applyMigrations(db: Database) {
     migrate()
   } catch (err) {
     const detail = err instanceof Error ? `${err.message}` : String(err)
-    throw new Error(`SCHEMA: migration to version ${migrationCount} failed at step ${step + 1} (from ${current}); original: ${detail}`)
+    throw new Error(
+      `SCHEMA: migration to version ${migrationCount} failed at step ${step + 1} (from ${current}); original: ${detail}`
+    )
   }
 }

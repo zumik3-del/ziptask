@@ -44,7 +44,10 @@ export function pickFields(src: Task, fields: string[]): Record<string, unknown>
 // rejectUnknownArgs (Object.keys), so schema and guard can never drift apart.
 // `project` is optional in the four enumerating shapes (the SDK must not pre-empt the refusal
 // text) and enforced in the service; by-id shapes do not declare it at all.
-export const PROJECT_ARG = z.string().optional().describe('project slug; required on every enumerating call (no default, no all-projects mode)')
+export const PROJECT_ARG = z
+  .string()
+  .optional()
+  .describe('project slug; required on every enumerating call (no default, no all-projects mode)')
 
 // Shared by every task-id-ish argument, so a fractional or non-positive id is refused by the
 // schema instead of reaching the service and surfacing as NOT_FOUND.
@@ -59,5 +62,3 @@ export function rejectUnknownArgs(tool: string, shape: object, args: object): To
     `INVALID: unknown argument${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')} on ${tool} (accepted: ${accepted.join(', ')})`
   )
 }
-
-

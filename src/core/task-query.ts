@@ -10,8 +10,13 @@ import { LeaseReaper } from './reaper'
 import { agentError, contentError } from './validation'
 
 export type ListTasksArgs = {
-  assignee?: string; status?: TaskStatus; updated_since?: number; epic_id?: number; is_epic?: boolean
-  limit?: number; project?: string
+  assignee?: string
+  status?: TaskStatus
+  updated_since?: number
+  epic_id?: number
+  is_epic?: boolean
+  limit?: number
+  project?: string
 }
 
 export type ListQueueArgs = { limit?: number; project?: string }
@@ -21,13 +26,23 @@ export class TaskQueryService {
   private readonly reaper: LeaseReaper
   readonly projects: ProjectService
 
-  constructor(private store: QueryStore, opts: ResolvedOptions, projects: ProjectService, reaper?: LeaseReaper) {
+  constructor(
+    private store: QueryStore,
+    opts: ResolvedOptions,
+    projects: ProjectService,
+    reaper?: LeaseReaper
+  ) {
     this.opts = opts
-    this.reaper = reaper ?? new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, opts.clock)
+    this.reaper =
+      reaper ?? new LeaseReaper(store, this.opts.reapCooldownSec, this.opts.auditLog, opts.clock)
     this.projects = projects
   }
 
-  getTaskView(id: number): SvcResult<{ task: Readonly<Task>; blockedBy: number[]; subtasks?: { total: number; open: number; done: number; failed: number; canceled: number } }> {
+  getTaskView(id: number): SvcResult<{
+    task: Readonly<Task>
+    blockedBy: number[]
+    subtasks?: { total: number; open: number; done: number; failed: number; canceled: number }
+  }> {
     this.reaper.reapIfStale()
     const task = this.store.getTaskRow(id)
     if (!task) return fail('NOT_FOUND')
@@ -43,7 +58,9 @@ export class TaskQueryService {
     return ok({ task, blockedBy })
   }
 
-  listTasks(args: ListTasksArgs): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number }> {
+  listTasks(
+    args: ListTasksArgs
+  ): SvcResult<{ tasks: ReadonlyArray<Readonly<Task>>; total: number }> {
     const project = this.projects.resolve(args.project)
     if (!project.ok) return fail(project.error)
     if (args.updated_since !== undefined) {
@@ -52,7 +69,8 @@ export class TaskQueryService {
       if (Number.isNaN(updatedSinceDate.getTime())) return fail('INVALID', 'invalid updated_since')
     }
     this.reaper.reapIfStale()
-    const updatedSinceIso = args.updated_since !== undefined ? new Date(args.updated_since).toISOString() : undefined
+    const updatedSinceIso =
+      args.updated_since !== undefined ? new Date(args.updated_since).toISOString() : undefined
     const { rows, total } = this.store.listTasks({
       assignee: args.assignee,
       status: args.status,
@@ -65,11 +83,13 @@ export class TaskQueryService {
     return ok({ tasks: rows, total })
   }
 
-  getTasksByIds(ids: number[]): SvcResult<{ items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
+  getTasksByIds(
+    ids: number[]
+  ): SvcResult<{ items: Array<{ id: number; task: Readonly<Task> | null }>; total: number }> {
     this.reaper.reapIfStale()
     const batch = this.store.batchTasks(ids)
     return ok({
-      items: ids.map(id => ({ id, task: batch.get(id) ?? null })),
+      items: ids.map((id) => ({ id, task: batch.get(id) ?? null })),
       total: ids.length
     })
   }
@@ -82,13 +102,15 @@ export class TaskQueryService {
     return ok(readyCandidates(this.store, limit, this.opts.autoClaimCeiling, project.data.id))
   }
 
-  addComment(args: { id: number; agent: string; content: string }): SvcResult<{ comment_id: number }> {
+  addComment(args: {
+    id: number
+    agent: string
+    content: string
+  }): SvcResult<{ comment_id: number }> {
     this.reaper.reapIfStale()
     const task = this.store.getTaskRow(args.id)
     if (!task) return fail('NOT_FOUND')
-    const validationErr =
-      agentError(args.agent) ??
-      contentError(args.content)
+    const validationErr = agentError(args.agent) ?? contentError(args.content)
     if (validationErr) return fail(validationErr)
     const comment_id = this.store.insertComment(args.id, args.agent, args.content)
     return ok({ comment_id })

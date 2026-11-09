@@ -6,10 +6,21 @@ import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { formatError } from './core/result'
 import {
-  handleCreateTask, handleGetTask, handleUpdateStatus, handleListTasks
+  handleCreateTask,
+  handleGetTask,
+  handleUpdateStatus,
+  handleListTasks
 } from './mcp/task-tools'
 import { handleGetTimeline } from './mcp/comment-tools'
-import { createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, driveToDone } from './test-context'
+import {
+  createTestDb,
+  closeTestDb,
+  insertTaskRow,
+  getTaskRow,
+  json,
+  text,
+  driveToDone
+} from './test-context'
 
 // F2 (#1065) lease heartbeat + F3 (#1066) attempts recovery, against the production symbols
 // (isValidTransition, TaskService, TaskRepo — never a local double) and through the real reap seam
@@ -18,15 +29,22 @@ import { createTestDb, closeTestDb, insertTaskRow, getTaskRow, json, text, drive
 let db: Database
 let repo: TaskRepo
 let svc: TaskService
-beforeEach(() => { db = createTestDb(); repo = new TaskRepo(db); svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' }) })
-afterEach(() => { closeTestDb(db) })
+beforeEach(() => {
+  db = createTestDb()
+  repo = new TaskRepo(db)
+  svc = new TaskService(repo, { leaseTtlMin: 15, scope: 'test' })
+})
+afterEach(() => {
+  closeTestDb(db)
+})
 const createTaskRow = (title: string) => insertTaskRow(repo, { title, reporter: 'dev' })
 
 const HOLDER = 'developer'
 const HOUR_MS = 3600_000
 
 const row = (id: number) => getTaskRow(db, id)
-const versionOf = (id: number): number => json(handleGetTask(svc, { id, fields: ['version'] })).version
+const versionOf = (id: number): number =>
+  json(handleGetTask(svc, { id, fields: ['version'] })).version
 const leaseMs = (id: number): number => new Date(row(id).lease_expires_at).getTime()
 // A full window from now: 14 min of slack under the 15 min lease_ttl_min. Comparing against the
 // clock instead of the previous deadline keeps the assertion free of millisecond races, and it is
@@ -35,22 +53,56 @@ const leaseMs = (id: number): number => new Date(row(id).lease_expires_at).getTi
 const fullWindowFromNow = () => monotonicNowMs() + 14 * 60_000
 // Simulates an elapsed TTL without a clock seam: only lease_expires_at moves, so version and
 // attempts stay exactly where the production write left them.
-const expireLease = (id: number) => { db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [new Date(monotonicNowMs() - HOUR_MS).toISOString(), id]) }
-const pinLease = (id: number, msFromNow: number): string => { const iso = new Date(monotonicNowMs() + msFromNow).toISOString(); db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [iso, id]); return iso }
+const expireLease = (id: number) => {
+  db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [
+    new Date(monotonicNowMs() - HOUR_MS).toISOString(),
+    id
+  ])
+}
+const pinLease = (id: number, msFromNow: number): string => {
+  const iso = new Date(monotonicNowMs() + msFromNow).toISOString()
+  db.run('UPDATE tasks SET lease_expires_at = ? WHERE id = ?', [iso, id])
+  return iso
+}
 const auditActions = (id: number): string[] =>
-  (db.query('SELECT action FROM audit_log WHERE task_id = ? ORDER BY id').all(id) as Array<{ action: string }>).map(r => r.action)
+  (
+    db.query('SELECT action FROM audit_log WHERE task_id = ? ORDER BY id').all(id) as Array<{
+      action: string
+    }>
+  ).map((r) => r.action)
 const countAudit = (id: number, action: string): number =>
-  (db.query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = ?').get(id, action) as { n: number }).n
+  (
+    db
+      .query('SELECT COUNT(*) AS n FROM audit_log WHERE task_id = ? AND action = ?')
+      .get(id, action) as { n: number }
+  ).n
 // get_timeline renders seq|type|agent|at|text, so the audit action lives in the text column.
-const timelineField = (id: number, action: string, field: 'type' | 'agent' | 'text' = 'text'): string | undefined => {
-  const cols = text(handleGetTimeline(svc, { id })).split('\n')
-    .map(l => l.split('|'))
-    .find(c => (c[4] ?? '').startsWith(`${action}:`))
+const timelineField = (
+  id: number,
+  action: string,
+  field: 'type' | 'agent' | 'text' = 'text'
+): string | undefined => {
+  const cols = text(handleGetTimeline(svc, { id }))
+    .split('\n')
+    .map((l) => l.split('|'))
+    .find((c) => (c[4] ?? '').startsWith(`${action}:`))
   if (!cols) return undefined
   return cols[field === 'type' ? 1 : field === 'agent' ? 2 : 4]
 }
-const leaseField = (id: number, agent: string, version: number, extra: Record<string, unknown> = {}) =>
-  handleUpdateStatus(svc, { id, agent, status: 'in_progress', renew: true, version, ...extra } as any)
+const leaseField = (
+  id: number,
+  agent: string,
+  version: number,
+  extra: Record<string, unknown> = {}
+) =>
+  handleUpdateStatus(svc, {
+    id,
+    agent,
+    status: 'in_progress',
+    renew: true,
+    version,
+    ...extra
+  } as any)
 const claimOrThrow = (id: number, agent: string) => {
   const res = svc.claimTask({ agent, taskId: id })
   if (!res.ok) throw new Error(`claimTask(${id}) failed: ${formatError(res.error)}`)
@@ -71,17 +123,26 @@ const burnAttempt = (id: number, agent = 'developer') => {
 // the production statement shape (transitionStatus sets status/assignee/lease_expires_at in one UPDATE),
 // so the sweep and the renewal guard meet a row the database could really hold.
 const seedLease = (id: number, holder: string, msFromNow: number) => {
-  db.run("UPDATE tasks SET status = 'in_progress', assignee = ?, lease_expires_at = ?, version = version + 1 WHERE id = ?",
-    [holder, new Date(monotonicNowMs() + msFromNow).toISOString(), id])
+  db.run(
+    "UPDATE tasks SET status = 'in_progress', assignee = ?, lease_expires_at = ?, version = version + 1 WHERE id = ?",
+    [holder, new Date(monotonicNowMs() + msFromNow).toISOString(), id]
+  )
   return id
 }
 const seedLeasedEpic = (title: string, holder: string, msFromNow = 15 * 60_000) =>
-  seedLease(json(handleCreateTask(svc, { title, reporter: 'dev', epic: true })).id as number, holder, msFromNow)
+  seedLease(
+    json(handleCreateTask(svc, { title, reporter: 'dev', epic: true })).id as number,
+    holder,
+    msFromNow
+  )
 // A parked epic, which ADR 0002 makes unreachable: `open` refuses blocked. Seeded for the same
 // reason as seedLeasedEpic — a legacy or hand-edited row the acquisition guard must still refuse.
 const seedBlockedEpic = (title: string) => {
   const id = json(handleCreateTask(svc, { title, reporter: 'dev', epic: true })).id as number
-  db.run("UPDATE tasks SET status = 'blocked', assignee = NULL, lease_expires_at = NULL, version = version + 1 WHERE id = ?", [id])
+  db.run(
+    "UPDATE tasks SET status = 'blocked', assignee = NULL, lease_expires_at = NULL, version = version + 1 WHERE id = ?",
+    [id]
+  )
   return id
 }
 const seedReview = (id: number) => {
@@ -102,7 +163,13 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     // share the now + lease_ttl_min formula and would agree to the millisecond.
     const pinned = pinLease(id, 1000)
 
-    const res = handleUpdateStatus(svc, { id, agent: HOLDER, status: 'in_progress', renew: true, version: before.version })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: HOLDER,
+      status: 'in_progress',
+      renew: true,
+      version: before.version
+    })
     expect(res.isError).toBeUndefined()
     expect(json(res)).toEqual({ id, status: 'in_progress', version: before.version + 1 })
 
@@ -165,7 +232,12 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     claimOrThrow(id, HOLDER)
     const before = row(id)
 
-    const res = handleUpdateStatus(svc, { id, agent: HOLDER, status: 'in_progress', version: before.version })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: HOLDER,
+      status: 'in_progress',
+      version: before.version
+    })
     expect(res.isError).toBe(true)
     expect(text(res)).toBe('INVALID: in_progress → in_progress requires renew: true')
 
@@ -190,7 +262,9 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     const queued = createTaskRow('Queued')
     const queuedBefore = row(queued)
     const queuedRenew = leaseField(queued, HOLDER, queuedBefore.version)
-    expect(text(queuedRenew)).toBe('INVALID: renew requires status=in_progress on an in_progress task')
+    expect(text(queuedRenew)).toBe(
+      'INVALID: renew requires status=in_progress on an in_progress task'
+    )
     expect(row(queued).status).toBe('queued')
     expect(row(queued).lease_expires_at).toBeNull()
     expect(row(queued).assignee).toBeNull()
@@ -219,7 +293,12 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
   test('the holder guard is scoped to renewal: any agent can still drive a non-renewal transition', () => {
     const id = createTaskRow('Unguarded')
     claimOrThrow(id, HOLDER)
-    const res = handleUpdateStatus(svc, { id, agent: 'tester', status: 'review', version: versionOf(id) })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'tester',
+      status: 'review',
+      version: versionOf(id)
+    })
     expect(json(res).status).toBe('review')
   })
 
@@ -282,7 +361,12 @@ describe('lease heartbeat: update_status renew (F2 #1065)', () => {
     claimOrThrow(id, HOLDER)
     handleUpdateStatus(svc, { id, agent: HOLDER, status: 'blocked', version: versionOf(id) })
 
-    const taken = handleUpdateStatus(svc, { id, agent: 'orchestrator', status: 'in_progress', version: versionOf(id) })
+    const taken = handleUpdateStatus(svc, {
+      id,
+      agent: 'orchestrator',
+      status: 'in_progress',
+      version: versionOf(id)
+    })
     expect(json(taken).status).toBe('in_progress')
     expect(row(id).assignee).toBe('orchestrator')
     expect(row(id).lease_expires_at).not.toBeNull()
@@ -329,12 +413,21 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     expect(row(id).max_attempts).toBe(3)
     expect(row(id).status).toBe('queued')
 
-    const parked = handleUpdateStatus(svc, { id, agent: 'operator', status: 'blocked', version: versionOf(id) })
+    const parked = handleUpdateStatus(svc, {
+      id,
+      agent: 'operator',
+      status: 'blocked',
+      version: versionOf(id)
+    })
     expect(json(parked).status).toBe('blocked')
 
     const before = row(id).attempts
     const res = handleUpdateStatus(svc, {
-      id, agent: 'operator', status: 'queued', version: versionOf(id), reset_attempts: true,
+      id,
+      agent: 'operator',
+      status: 'queued',
+      version: versionOf(id),
+      reset_attempts: true,
       comment: 'attempts spent on accidental claims, not on work'
     })
     expect(res.isError).toBeUndefined()
@@ -355,10 +448,23 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     handleUpdateStatus(svc, { id, agent: 'operator', status: 'blocked', version: versionOf(id) })
     const before = row(id)
 
-    const missing = handleUpdateStatus(svc, { id, agent: 'operator', status: 'queued', version: before.version, reset_attempts: true })
+    const missing = handleUpdateStatus(svc, {
+      id,
+      agent: 'operator',
+      status: 'queued',
+      version: before.version,
+      reset_attempts: true
+    })
     expect(text(missing)).toBe('INVALID: reset_attempts requires a comment')
 
-    const blank = handleUpdateStatus(svc, { id, agent: 'operator', status: 'queued', version: before.version, reset_attempts: true, comment: '   ' })
+    const blank = handleUpdateStatus(svc, {
+      id,
+      agent: 'operator',
+      status: 'queued',
+      version: before.version,
+      reset_attempts: true,
+      comment: '   '
+    })
     expect(text(blank)).toBe('INVALID: comment required')
 
     const after = row(id)
@@ -375,9 +481,29 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     // out of a closed task, `failed -> canceled`, must not smuggle a refund in with it — that side
     // is pinned in src/closed-for-work.test.ts.
     const cases: Array<{ title: string; drive: (id: number) => void }> = [
-      { title: 'Done', drive: (id) => { claimOrThrow(id, HOLDER); handleUpdateStatus(svc, { id, agent: HOLDER, status: 'review', version: versionOf(id) }); handleUpdateStatus(svc, { id, agent: HOLDER, status: 'done', version: versionOf(id) }) } },
-      { title: 'Canceled', drive: (id) => { handleUpdateStatus(svc, { id, agent: HOLDER, status: 'canceled', version: versionOf(id) }) } },
-      { title: 'Failed', drive: (id) => { burnAttempt(id); burnAttempt(id); burnAttempt(id); burnAttempt(id) } }
+      {
+        title: 'Done',
+        drive: (id) => {
+          claimOrThrow(id, HOLDER)
+          handleUpdateStatus(svc, { id, agent: HOLDER, status: 'review', version: versionOf(id) })
+          handleUpdateStatus(svc, { id, agent: HOLDER, status: 'done', version: versionOf(id) })
+        }
+      },
+      {
+        title: 'Canceled',
+        drive: (id) => {
+          handleUpdateStatus(svc, { id, agent: HOLDER, status: 'canceled', version: versionOf(id) })
+        }
+      },
+      {
+        title: 'Failed',
+        drive: (id) => {
+          burnAttempt(id)
+          burnAttempt(id)
+          burnAttempt(id)
+          burnAttempt(id)
+        }
+      }
     ]
 
     for (const c of cases) {
@@ -385,7 +511,14 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
       c.drive(id)
       expect(row(id).status).toBe(c.title.toLowerCase())
 
-      const res = handleUpdateStatus(svc, { id, agent: 'operator', status: 'queued', version: versionOf(id), reset_attempts: true, comment: 'please' })
+      const res = handleUpdateStatus(svc, {
+        id,
+        agent: 'operator',
+        status: 'queued',
+        version: versionOf(id),
+        reset_attempts: true,
+        comment: 'please'
+      })
       expect(`${c.title}: ${text(res)}`).toBe(`${c.title}: INVALID: ${row(id).status} → queued`)
       expect(`${c.title}: ${row(id).attempts}`).toBe(`${c.title}: ${c.title === 'Failed' ? 4 : 0}`)
       expect(countAudit(id, 'attempts_reset')).toBe(0)
@@ -401,7 +534,14 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     const before = row(id)
     const stale = before.version - 1
 
-    const res = handleUpdateStatus(svc, { id, agent: 'operator', status: 'queued', version: stale, reset_attempts: true, comment: 'accidental claims' })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'operator',
+      status: 'queued',
+      version: stale,
+      reset_attempts: true,
+      comment: 'accidental claims'
+    })
     expect(text(res)).toBe(`CONFLICT: expected version ${before.version}, got ${stale}`)
     expect(row(id).attempts).toBe(before.attempts)
     expect(row(id).status).toBe('blocked')
@@ -409,7 +549,8 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
   })
 
   test('reset_attempts on an epic is refused (its attempts are always 0)', () => {
-    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true }))
+      .id as number
     // ADR 0002: an epic is born `open` and refuses blocked/review/queued, so the refund is probed
     // on canceled — the only remaining target the transition table accepts for an epic, and one that
     // needs no on-ramp through a park status to reach.
@@ -417,7 +558,14 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     expect(before.status).toBe('open')
     expect(before.attempts).toBe(0)
 
-    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'canceled', version: before.version, reset_attempts: true, comment: 'why' })
+    const res = handleUpdateStatus(svc, {
+      id: epic,
+      agent: 'orchestrator',
+      status: 'canceled',
+      version: before.version,
+      reset_attempts: true,
+      comment: 'why'
+    })
     expect(text(res)).toBe(`INVALID: cannot reset attempts on epic #${epic}`)
     expect(row(epic).status).toBe('open')
     expect(row(epic).attempts).toBe(0)
@@ -434,7 +582,10 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     expect(row(id).attempts).toBe(3)
     pinLease(id, 1000)
 
-    const res = leaseField(id, HOLDER, versionOf(id), { reset_attempts: true, comment: 'still working, the budget went on accidents' })
+    const res = leaseField(id, HOLDER, versionOf(id), {
+      reset_attempts: true,
+      comment: 'still working, the budget went on accidents'
+    })
     expect(res.isError).toBeUndefined()
     expect(json(res)).toEqual({ id, status: 'in_progress', version: versionOf(id), attempts: 0 })
 
@@ -457,7 +608,12 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     expect(row(id).max_attempts).toBe(3)
     expect(row(id).status).toBe('queued')
     expect(auditActions(id)).toEqual([
-      'claim', 'lease_expired', 'claim', 'lease_expired', 'claim', 'lease_expired'
+      'claim',
+      'lease_expired',
+      'claim',
+      'lease_expired',
+      'claim',
+      'lease_expired'
     ])
 
     // attempts never locks a task out: the budget is charged by the reap, so the task is one
@@ -468,7 +624,14 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     expect(row(id).status).toBe('failed')
     expect(row(id).attempts).toBe(4)
 
-    const doomed = handleUpdateStatus(svc, { id, agent: 'operator', status: 'queued', version: versionOf(id), reset_attempts: true, comment: 'one more chance' })
+    const doomed = handleUpdateStatus(svc, {
+      id,
+      agent: 'operator',
+      status: 'queued',
+      version: versionOf(id),
+      reset_attempts: true,
+      comment: 'one more chance'
+    })
     expect(text(doomed)).toBe('INVALID: failed → queued')
   })
 
@@ -476,7 +639,14 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     const id = createTaskRow('Refunded')
     for (let round = 0; round < 3; round++) burnAttempt(id)
     handleUpdateStatus(svc, { id, agent: 'operator', status: 'blocked', version: versionOf(id) })
-    handleUpdateStatus(svc, { id, agent: 'operator', status: 'queued', version: versionOf(id), reset_attempts: true, comment: 'accidental claims' })
+    handleUpdateStatus(svc, {
+      id,
+      agent: 'operator',
+      status: 'queued',
+      version: versionOf(id),
+      reset_attempts: true,
+      comment: 'accidental claims'
+    })
     expect(row(id).attempts).toBe(0)
 
     claimOrThrow(id, HOLDER)
@@ -490,11 +660,25 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
   test('a queued task needs a park through blocked (queued → queued is not an edge)', () => {
     const id = createTaskRow('Park')
     burnAttempt(id)
-    const refused = handleUpdateStatus(svc, { id, agent: 'operator', status: 'queued', version: versionOf(id), reset_attempts: true, comment: 'refund' })
+    const refused = handleUpdateStatus(svc, {
+      id,
+      agent: 'operator',
+      status: 'queued',
+      version: versionOf(id),
+      reset_attempts: true,
+      comment: 'refund'
+    })
     expect(text(refused)).toBe('INVALID: queued → queued')
 
     handleUpdateStatus(svc, { id, agent: 'operator', status: 'blocked', version: versionOf(id) })
-    const refunded = handleUpdateStatus(svc, { id, agent: 'operator', status: 'queued', version: versionOf(id), reset_attempts: true, comment: 'refund' })
+    const refunded = handleUpdateStatus(svc, {
+      id,
+      agent: 'operator',
+      status: 'queued',
+      version: versionOf(id),
+      reset_attempts: true,
+      comment: 'refund'
+    })
     expect(json(refunded)).toEqual({ id, status: 'queued', version: versionOf(id), attempts: 0 })
   })
 
@@ -503,11 +687,22 @@ describe('attempts recovery: update_status reset_attempts (F3 #1066)', () => {
     burnAttempt(id)
     burnAttempt(id)
 
-    const plain = handleUpdateStatus(svc, { id, agent: 'operator', status: 'blocked', version: versionOf(id), comment: 'parking it' })
+    const plain = handleUpdateStatus(svc, {
+      id,
+      agent: 'operator',
+      status: 'blocked',
+      version: versionOf(id),
+      comment: 'parking it'
+    })
     expect('attempts' in json(plain)).toBe(false)
     expect(row(id).attempts).toBe(2)
 
-    const flagged = handleUpdateStatus(svc, { id, agent: 'operator', status: 'in_progress', version: versionOf(id) })
+    const flagged = handleUpdateStatus(svc, {
+      id,
+      agent: 'operator',
+      status: 'in_progress',
+      version: versionOf(id)
+    })
     expect('attempts' in json(flagged)).toBe(false)
     expect(row(id).attempts).toBe(2)
   })
@@ -531,7 +726,7 @@ describe('reaper policy: a heartbeat is liveness, not progress (D-F3-5)', () => 
     expect(countAudit(id, 'lease_expired')).toBe(1)
   })
 
-  test('renew alone never zeroes attempts (the charge is not the holder\'s to forgive)', () => {
+  test("renew alone never zeroes attempts (the charge is not the holder's to forgive)", () => {
     const id = createTaskRow('SilentBudget')
     burnAttempt(id)
     burnAttempt(id)
@@ -576,8 +771,13 @@ describe('a heartbeat must not cut the in_progress segment (D-F2-3)', () => {
     handleUpdateStatus(svc, { id, agent: HOLDER, status: 'done', version: versionOf(id) })
   }
   const updateStatusValues = (id: number): string[] =>
-    (db.query("SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'update_status' ORDER BY id").all(id) as Array<{ new_value: string | null }>)
-      .map(r => r.new_value ?? '')
+    (
+      db
+        .query(
+          "SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'update_status' ORDER BY id"
+        )
+        .all(id) as Array<{ new_value: string | null }>
+    ).map((r) => r.new_value ?? '')
 
   test('baseline: a task that never heartbeats writes claim + two update_status rows', () => {
     const quiet = createTaskRow('Quiet')
@@ -594,7 +794,14 @@ describe('a heartbeat must not cut the in_progress segment (D-F2-3)', () => {
 
     expect(countAudit(beating, 'lease_renewed')).toBe(3)
     expect(countAudit(beating, 'update_status')).toBe(2)
-    expect(auditActions(beating)).toEqual(['claim', 'lease_renewed', 'lease_renewed', 'lease_renewed', 'update_status', 'update_status'])
+    expect(auditActions(beating)).toEqual([
+      'claim',
+      'lease_renewed',
+      'lease_renewed',
+      'lease_renewed',
+      'update_status',
+      'update_status'
+    ])
     expect(updateStatusValues(beating)).toEqual(['review', 'done'])
   })
 
@@ -603,7 +810,9 @@ describe('a heartbeat must not cut the in_progress segment (D-F2-3)', () => {
     claimOrThrow(id, HOLDER)
     leaseField(id, HOLDER, versionOf(id))
 
-    const rows = db.query("SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'lease_renewed'").all(id) as Array<{ new_value: string | null }>
+    const rows = db
+      .query("SELECT new_value FROM audit_log WHERE task_id = ? AND action = 'lease_renewed'")
+      .all(id) as Array<{ new_value: string | null }>
     expect(countAudit(id, 'lease_renewed')).toBe(1)
     expect(rows).toHaveLength(1)
     expect(rows[0].new_value).toMatch(/^\d{4}-\d{2}-\d{2}T/)
@@ -617,7 +826,12 @@ describe('a heartbeat must not cut the in_progress segment (D-F2-3)', () => {
     const dep = createTaskRow('Dep')
     const subject = createDepTask('Subject', [dep])
 
-    const refused = handleUpdateStatus(svc, { id: subject, agent: HOLDER, status: 'in_progress', version: versionOf(subject) })
+    const refused = handleUpdateStatus(svc, {
+      id: subject,
+      agent: HOLDER,
+      status: 'in_progress',
+      version: versionOf(subject)
+    })
     expect(text(refused)).toBe('BLOCKED: dependencies not satisfied')
     expect(countAudit(subject, 'update_status')).toBe(0)
   })
@@ -636,8 +850,10 @@ describe('reap invariants untouched by F2/F3 (D-F3-5: zero diff in _doReap)', ()
     svc.lifecycle.reapExpiredLeases()
     expect(row(id).attempts).toBe(2)
 
-    const expired = db.query('SELECT old_value, new_value FROM audit_log WHERE task_id = ? AND action = ?').all(id, 'lease_expired') as any[]
-    expect(expired.map(r => r.new_value)).toEqual(['queued', 'queued'])
+    const expired = db
+      .query('SELECT old_value, new_value FROM audit_log WHERE task_id = ? AND action = ?')
+      .all(id, 'lease_expired') as any[]
+    expect(expired.map((r) => r.new_value)).toEqual(['queued', 'queued'])
   })
 
   test('a renewal never advances attempts, max_attempts or completed_at', () => {
@@ -690,15 +906,23 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
   const depBlockedPair = () => {
     const dep = createTaskRow('Dep')
     const blocked = createDepTask('Dependent', [dep])
-    expect(json(handleGetTask(svc, { id: blocked, fields: ['blocked_by'] })).blocked_by).toEqual([dep])
+    expect(json(handleGetTask(svc, { id: blocked, fields: ['blocked_by'] })).blocked_by).toEqual([
+      dep
+    ])
     return { dep, blocked }
   }
 
   test('an epic is refused on open → in_progress, and the row does not move', () => {
-    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true }))
+      .id as number
     const before = row(epic)
 
-    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'in_progress', version: before.version })
+    const res = handleUpdateStatus(svc, {
+      id: epic,
+      agent: 'orchestrator',
+      status: 'in_progress',
+      version: before.version
+    })
     expect(text(res)).toBe(`INVALID: #${epic} is an epic, not claimable`)
 
     const after = row(epic)
@@ -726,7 +950,12 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     const auditBefore = auditActions(epic)
     expect(auditBefore).toEqual(['create'])
 
-    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'in_progress', version: before.version })
+    const res = handleUpdateStatus(svc, {
+      id: epic,
+      agent: 'orchestrator',
+      status: 'in_progress',
+      version: before.version
+    })
     expect(text(res)).toBe(`INVALID: #${epic} is an epic, not claimable`)
     expect(row(epic).status).toBe('blocked')
     expect(row(epic).version).toBe(before.version)
@@ -739,7 +968,12 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     const { blocked } = depBlockedPair()
     const before = row(blocked)
 
-    const res = handleUpdateStatus(svc, { id: blocked, agent: HOLDER, status: 'in_progress', version: before.version })
+    const res = handleUpdateStatus(svc, {
+      id: blocked,
+      agent: HOLDER,
+      status: 'in_progress',
+      version: before.version
+    })
     expect(text(res)).toBe('BLOCKED: dependencies not satisfied')
 
     const after = row(blocked)
@@ -755,12 +989,22 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
 
   test('unsatisfied deps are refused on blocked → in_progress as well', () => {
     const { blocked } = depBlockedPair()
-    const parked = handleUpdateStatus(svc, { id: blocked, agent: HOLDER, status: 'blocked', version: versionOf(blocked) })
+    const parked = handleUpdateStatus(svc, {
+      id: blocked,
+      agent: HOLDER,
+      status: 'blocked',
+      version: versionOf(blocked)
+    })
     expect(json(parked).status).toBe('blocked')
     const before = row(blocked)
     const auditBefore = auditActions(blocked)
 
-    const res = handleUpdateStatus(svc, { id: blocked, agent: HOLDER, status: 'in_progress', version: before.version })
+    const res = handleUpdateStatus(svc, {
+      id: blocked,
+      agent: HOLDER,
+      status: 'in_progress',
+      version: before.version
+    })
     expect(text(res)).toBe('BLOCKED: dependencies not satisfied')
     expect(row(blocked).status).toBe('blocked')
     expect(row(blocked).version).toBe(before.version)
@@ -771,7 +1015,12 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
 
   test('a dep-blocked task refused at acquisition stays in list_queue terms: still un-claimable, still no attempt', () => {
     const { dep, blocked } = depBlockedPair()
-    handleUpdateStatus(svc, { id: blocked, agent: HOLDER, status: 'in_progress', version: versionOf(blocked) })
+    handleUpdateStatus(svc, {
+      id: blocked,
+      agent: HOLDER,
+      status: 'in_progress',
+      version: versionOf(blocked)
+    })
 
     expect(claimError(blocked, HOLDER)).toBe('BLOCKED: dependencies not satisfied')
     svc.lifecycle.reapExpiredLeases()
@@ -788,7 +1037,12 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     driveToDone(svc, dep, HOLDER)
     const ready = createDepTask('Ready', [dep])
 
-    const res = handleUpdateStatus(svc, { id: ready, agent: HOLDER, status: 'in_progress', version: versionOf(ready) })
+    const res = handleUpdateStatus(svc, {
+      id: ready,
+      agent: HOLDER,
+      status: 'in_progress',
+      version: versionOf(ready)
+    })
     expect(res.isError).toBeUndefined()
     expect(json(res).status).toBe('in_progress')
     expect(row(ready).lease_expires_at).not.toBeNull()
@@ -799,7 +1053,12 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
 
   test('a dep-free task still acquires the lease (the common case: no deps to ask about)', () => {
     const id = createTaskRow('Plain')
-    const res = handleUpdateStatus(svc, { id, agent: HOLDER, status: 'in_progress', version: versionOf(id) })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: HOLDER,
+      status: 'in_progress',
+      version: versionOf(id)
+    })
     expect(res.isError).toBeUndefined()
     expect(json(res).status).toBe('in_progress')
     expect(row(id).lease_expires_at).not.toBeNull()
@@ -842,8 +1101,15 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     // The honest cost of the belt: stranded-and-visible, not terminal. It is listed, and since
     // ADR 0002 an epic refuses every non-terminal hop (blocked/review/queued), so the only way out
     // is a terminal outcome — the same exit a live epic has.
-    expect(json(handleListTasks(svc, { status: 'in_progress' })).tasks.map((t: any) => t.id)).toContain(epic)
-    const freed = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'canceled', version: versionOf(epic) })
+    expect(
+      json(handleListTasks(svc, { status: 'in_progress' })).tasks.map((t: any) => t.id)
+    ).toContain(epic)
+    const freed = handleUpdateStatus(svc, {
+      id: epic,
+      agent: 'orchestrator',
+      status: 'canceled',
+      version: versionOf(epic)
+    })
     expect(json(freed).status).toBe('canceled')
   })
 
@@ -854,7 +1120,12 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     const epic = seedLeasedEpic('LegacyEpic', 'orchestrator', -HOUR)
     const before = row(epic)
 
-    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'review', version: before.version })
+    const res = handleUpdateStatus(svc, {
+      id: epic,
+      agent: 'orchestrator',
+      status: 'review',
+      version: before.version
+    })
     expect(text(res)).toBe('INVALID: in_progress → review')
     expect(row(epic).status).toBe('in_progress')
     expect(row(epic).version).toBe(before.version)
@@ -863,14 +1134,25 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
   })
 
   test('a refused acquisition writes no audit row at all — no update_status, no lease_renewed, no attempts_reset', () => {
-    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true }))
+      .id as number
     const { blocked } = depBlockedPair()
     const auditSnapshot = (id: number) => auditActions(id)
 
     const epicBefore = auditSnapshot(epic)
     const blockedBefore = auditSnapshot(blocked)
-    handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'in_progress', version: versionOf(epic) })
-    handleUpdateStatus(svc, { id: blocked, agent: HOLDER, status: 'in_progress', version: versionOf(blocked) })
+    handleUpdateStatus(svc, {
+      id: epic,
+      agent: 'orchestrator',
+      status: 'in_progress',
+      version: versionOf(epic)
+    })
+    handleUpdateStatus(svc, {
+      id: blocked,
+      agent: HOLDER,
+      status: 'in_progress',
+      version: versionOf(blocked)
+    })
 
     for (const id of [epic, blocked]) {
       expect(auditActions(id)).toEqual(id === epic ? epicBefore : blockedBefore)
@@ -880,17 +1162,27 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     }
     // the timeline is the free detection surface for "acquired without claim": no claim row, no
     // update_status row, and the row is not in_progress
-    expect(text(handleGetTimeline(svc, { id: epic }))).not.toContain('update_status: open->in_progress')
+    expect(text(handleGetTimeline(svc, { id: epic }))).not.toContain(
+      'update_status: open->in_progress'
+    )
     expect(row(epic).status).toBe('open')
   })
 
   test('refund on an epic stays refused with no state change, and there is no in-progress on-ramp left', () => {
-    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true }))
+      .id as number
     const before = row(epic)
 
     // canceled: the only refund target an `open` epic can reach at all (blocked/review/queued are
     // refused by the status-shape guard before the refund branch)
-    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'canceled', version: before.version, reset_attempts: true, comment: 'why' })
+    const res = handleUpdateStatus(svc, {
+      id: epic,
+      agent: 'orchestrator',
+      status: 'canceled',
+      version: before.version,
+      reset_attempts: true,
+      comment: 'why'
+    })
     expect(text(res)).toBe(`INVALID: cannot reset attempts on epic #${epic}`)
     expect(row(epic).status).toBe('open')
     expect(row(epic).attempts).toBe(0)
@@ -902,17 +1194,35 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
   test('the acquisition guard sits above the refund branch, so the combined shape reports the acquisition', () => {
     // update_status(epic, in_progress, reset_attempts) is two requests in one call and the
     // acquisition is the stronger claim: it is refused for not being claimable, not for the refund.
-    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true })).id as number
+    const epic = json(handleCreateTask(svc, { title: 'Epic', reporter: 'dev', epic: true }))
+      .id as number
     const before = row(epic)
 
-    const res = handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'in_progress', version: before.version, reset_attempts: true, comment: 'why' })
+    const res = handleUpdateStatus(svc, {
+      id: epic,
+      agent: 'orchestrator',
+      status: 'in_progress',
+      version: before.version,
+      reset_attempts: true,
+      comment: 'why'
+    })
     expect(text(res)).toBe(`INVALID: #${epic} is an epic, not claimable`)
     expect(row(epic).status).toBe('open')
     expect(row(epic).version).toBe(before.version)
     expect(countAudit(epic, 'attempts_reset')).toBe(0)
     // the refund refusal is still reachable on its own, from a status that is not an acquisition
-    expect(text(handleUpdateStatus(svc, { id: epic, agent: 'orchestrator', status: 'canceled', version: before.version, reset_attempts: true, comment: 'why' })))
-      .toBe(`INVALID: cannot reset attempts on epic #${epic}`)
+    expect(
+      text(
+        handleUpdateStatus(svc, {
+          id: epic,
+          agent: 'orchestrator',
+          status: 'canceled',
+          version: before.version,
+          reset_attempts: true,
+          comment: 'why'
+        })
+      )
+    ).toBe(`INVALID: cannot reset attempts on epic #${epic}`)
   })
 
   test('the acquisition guard is scoped to !selfEdge: a lease holder with deps still renews', () => {
@@ -941,7 +1251,10 @@ describe('acquiring a lease: update_status → in_progress needs claim-grade eli
     expect(row(id).attempts).toBe(2)
     pinLease(id, 1000)
 
-    const res = leaseField(id, HOLDER, versionOf(id), { reset_attempts: true, comment: 'the budget went on accidents' })
+    const res = leaseField(id, HOLDER, versionOf(id), {
+      reset_attempts: true,
+      comment: 'the budget went on accidents'
+    })
     expect(res.isError).toBeUndefined()
     expect(json(res)).toEqual({ id, status: 'in_progress', version: versionOf(id), attempts: 0 })
     expect(row(id).assignee).toBe(HOLDER)
@@ -962,7 +1275,12 @@ describe('review → in_progress: work sent back takes the lease', () => {
   test('a reviewer sending work back acquires the lease; the mover becomes the holder', () => {
     const id = sentBack()
 
-    const res = handleUpdateStatus(svc, { id, agent: 'reviewer', status: 'in_progress', version: versionOf(id) })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'reviewer',
+      status: 'in_progress',
+      version: versionOf(id)
+    })
     expect(res.isError).toBeUndefined()
     expect(json(res).status).toBe('in_progress')
     expect(row(id).assignee).toBe('reviewer')
@@ -973,7 +1291,12 @@ describe('review → in_progress: work sent back takes the lease', () => {
 
   test('renew: true rides on the new lease for the holder, and only for the holder', () => {
     const id = sentBack()
-    handleUpdateStatus(svc, { id, agent: 'reviewer', status: 'in_progress', version: versionOf(id) })
+    handleUpdateStatus(svc, {
+      id,
+      agent: 'reviewer',
+      status: 'in_progress',
+      version: versionOf(id)
+    })
 
     const foreign = leaseField(id, 'developer', versionOf(id))
     expect(text(foreign)).toBe('CONFLICT: lease held by reviewer')
@@ -992,7 +1315,13 @@ describe('review → in_progress: work sent back takes the lease', () => {
     const before = row(id)
     expect(before.status).toBe('review')
 
-    const res = handleUpdateStatus(svc, { id, agent: 'reviewer', status: 'in_progress', renew: true, version: before.version })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'reviewer',
+      status: 'in_progress',
+      renew: true,
+      version: before.version
+    })
     expect(text(res)).toBe('INVALID: renew requires status=in_progress on an in_progress task')
     expect(row(id).status).toBe('review')
     expect(row(id).lease_expires_at).toBeNull()
@@ -1009,15 +1338,28 @@ describe('review → in_progress: work sent back takes the lease', () => {
     const id = createDepTask('InReview', [dep])
     seedReview(id)
 
-    const res = handleUpdateStatus(svc, { id, agent: 'reviewer', status: 'in_progress', version: versionOf(id) })
+    const res = handleUpdateStatus(svc, {
+      id,
+      agent: 'reviewer',
+      status: 'in_progress',
+      version: versionOf(id)
+    })
     expect(res.isError).toBeUndefined()
     expect(json(res).status).toBe('in_progress')
     expect(row(id).assignee).toBe('reviewer')
     expect(row(id).lease_expires_at).not.toBeNull()
     // same agent and same call, from queued: refused by the same guard
     const queued = createDepTask('StillQueued', [dep])
-    expect(text(handleUpdateStatus(svc, { id: queued, agent: 'reviewer', status: 'in_progress', version: versionOf(queued) })))
-      .toBe('BLOCKED: dependencies not satisfied')
+    expect(
+      text(
+        handleUpdateStatus(svc, {
+          id: queued,
+          agent: 'reviewer',
+          status: 'in_progress',
+          version: versionOf(queued)
+        })
+      )
+    ).toBe('BLOCKED: dependencies not satisfied')
   })
 })
 
@@ -1048,7 +1390,9 @@ describe('lease TTL cap (#2243)', () => {
   test('a huge TTL is refused instead of throwing RangeError', () => {
     const id = createTaskRow('Huge')
     // Before the cap, now + ttl was an invalid Date, so claimTask threw RangeError instead of failing.
-    expect(() => svc.claimTask({ agent: HOLDER, taskId: id, leaseTtlMin: Number.MAX_SAFE_INTEGER })).not.toThrow()
+    expect(() =>
+      svc.claimTask({ agent: HOLDER, taskId: id, leaseTtlMin: Number.MAX_SAFE_INTEGER })
+    ).not.toThrow()
     const res = svc.claimTask({ agent: HOLDER, taskId: id, leaseTtlMin: Number.MAX_SAFE_INTEGER })
     expect(res.ok).toBe(false)
     if (!res.ok) expect(formatError(res.error)).toBe('INVALID: lease_ttl_min too large')
@@ -1059,8 +1403,9 @@ describe('lease TTL cap (#2243)', () => {
 
 describe('construction-time lease cap (#2257)', () => {
   test('a configured TTL above the cap throws at construction and names the cap', () => {
-    expect(() => new TaskService(repo, { leaseTtlMin: MAX_LEASE_TTL_MIN + 1, scope: 'test' }))
-      .toThrow(`MAX_LEASE_TTL_MIN (${MAX_LEASE_TTL_MIN})`)
+    expect(
+      () => new TaskService(repo, { leaseTtlMin: MAX_LEASE_TTL_MIN + 1, scope: 'test' })
+    ).toThrow(`MAX_LEASE_TTL_MIN (${MAX_LEASE_TTL_MIN})`)
   })
 
   test('the cap itself constructs and its claims use the configured TTL', () => {
@@ -1088,11 +1433,22 @@ describe('renewal lease under an injected clock (#2257)', () => {
   // tolerance: a service reading the wall clock here would land years off the injected deadline.
   const renewable = (leaseTtlMin: number) => {
     let now = INJECTED_MS
-    const clocked = new TaskService(repo, { leaseTtlMin, scope: 'test', clock: { nowMs: () => now } })
+    const clocked = new TaskService(repo, {
+      leaseTtlMin,
+      scope: 'test',
+      clock: { nowMs: () => now }
+    })
     const id = createTaskRow(`Renewable${leaseTtlMin}`)
     const claimed = clocked.claimTask({ agent: HOLDER, taskId: id })
     if (!claimed.ok) throw new Error(formatError(claimed.error))
-    return { svc: clocked, id, advance: (ms: number) => { now += ms }, nowMs: () => now }
+    return {
+      svc: clocked,
+      id,
+      advance: (ms: number) => {
+        now += ms
+      },
+      nowMs: () => now
+    }
   }
 
   test('a renewal recomputes lease_expires_at from the injected now + the configured TTL', () => {
@@ -1101,7 +1457,13 @@ describe('renewal lease under an injected clock (#2257)', () => {
     const before = row(r.id)
     expect(before.status).toBe('in_progress')
 
-    const res = handleUpdateStatus(r.svc, { id: r.id, agent: HOLDER, status: 'in_progress', renew: true, version: before.version })
+    const res = handleUpdateStatus(r.svc, {
+      id: r.id,
+      agent: HOLDER,
+      status: 'in_progress',
+      renew: true,
+      version: before.version
+    })
     expect(res.isError).toBeUndefined()
     expect(row(r.id).lease_expires_at).toBe(new Date(r.nowMs() + 30 * MINUTE).toISOString())
   })
@@ -1111,7 +1473,13 @@ describe('renewal lease under an injected clock (#2257)', () => {
     r.advance(5 * MINUTE)
     const before = row(r.id)
 
-    const res = handleUpdateStatus(r.svc, { id: r.id, agent: HOLDER, status: 'in_progress', renew: true, version: before.version })
+    const res = handleUpdateStatus(r.svc, {
+      id: r.id,
+      agent: HOLDER,
+      status: 'in_progress',
+      renew: true,
+      version: before.version
+    })
     expect(res.isError).toBeUndefined()
     const lease = leaseMs(r.id)
     expect(lease).toBe(r.nowMs() + MAX_LEASE_TTL_MIN * MINUTE)

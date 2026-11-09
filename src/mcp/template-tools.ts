@@ -9,7 +9,7 @@ import commentSuccessTemplate from '../../templates/comment-success.md' with { t
 import commentFailureTemplate from '../../templates/comment-failure.md' with { type: 'text' }
 
 const TEMPLATE_NAMES = ['task', 'epic', 'comment-success', 'comment-failure'] as const
-type TemplateName = typeof TEMPLATE_NAMES[number]
+type TemplateName = (typeof TEMPLATE_NAMES)[number]
 
 // Keep API names stable; imports embed the markdown so the compiled binary works.
 const TEMPLATES: Record<TemplateName, string> = {
@@ -30,8 +30,12 @@ export function handleGetTemplate(args: { name: TemplateName }): ToolResult {
 }
 
 export function registerTemplateTools(server: McpServer, _svc: TaskService) {
-  server.registerTool('get_template', {
-    description: 'Return a markdown template by name',
-    inputSchema: z.object(GET_TEMPLATE_SHAPE).catchall(z.unknown())
-  }, async (args) => handleGetTemplate(args))
+  server.registerTool(
+    'get_template',
+    {
+      description: 'Return a markdown template by name',
+      inputSchema: z.object(GET_TEMPLATE_SHAPE).catchall(z.unknown())
+    },
+    async (args) => handleGetTemplate(args)
+  )
 }

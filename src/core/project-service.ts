@@ -2,7 +2,10 @@ import type { ProjectRow, ProjectListItem, ProjectStore, SvcResult } from './typ
 import { resolveProject, createProject, updateProject, deleteProject } from './projects'
 
 export class ProjectService {
-  constructor(private readonly store: ProjectStore, private readonly scope?: string) {}
+  constructor(
+    private readonly store: ProjectStore,
+    private readonly scope?: string
+  ) {}
 
   resolve(project?: string): SvcResult<ProjectRow> {
     return resolveProject(this.store, project ?? this.scope)
@@ -16,7 +19,11 @@ export class ProjectService {
     return this.store.listProjects()
   }
 
-  update(args: { project: string; folder_path?: string; archived?: boolean }): SvcResult<{ slug: string }> {
+  update(args: {
+    project: string
+    folder_path?: string
+    archived?: boolean
+  }): SvcResult<{ slug: string }> {
     return updateProject(this.store, args)
   }
 
