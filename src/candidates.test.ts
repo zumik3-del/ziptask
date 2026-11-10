@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
+import { ok } from './core/result'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { handleClaimTask, handleListQueue } from './mcp/task-tools'
@@ -50,6 +51,7 @@ describe('candidate pagination past the clamped offset (#1847)', () => {
     const blocker = seedQueued('blocker', { createdAt: CREATED_AT_LATER })
     repo.transaction(() => {
       for (let i = 0; i < 1100; i++) seedQueued(`dependent ${i}`, { dependsOn: [blocker] })
+      return ok(undefined)
     })
 
     expect(queueIds()).toEqual([blocker])
@@ -59,6 +61,7 @@ describe('candidate pagination past the clamped offset (#1847)', () => {
     const blocker = seedQueued('blocker', { createdAt: CREATED_AT_LATER })
     repo.transaction(() => {
       for (let i = 0; i < 1100; i++) seedQueued(`dependent ${i}`, { dependsOn: [blocker] })
+      return ok(undefined)
     })
 
     const claim = handleClaimTask(svc, { agent: 'agent-1' })
@@ -71,6 +74,7 @@ describe('candidate pagination past the clamped offset (#1847)', () => {
     const blocker = seedQueued('blocker', { dependsOn: [ready] })
     repo.transaction(() => {
       for (let i = 0; i < 1000; i++) seedQueued(`dependent ${i}`, { dependsOn: [blocker] })
+      return ok(undefined)
     })
 
     const ids = queueIds()
@@ -82,6 +86,7 @@ describe('candidate pagination past the clamped offset (#1847)', () => {
     const ids: number[] = []
     repo.transaction(() => {
       for (let i = 0; i < 1101; i++) ids.push(seedQueued(`task ${i}`))
+      return ok(undefined)
     })
 
     const tail = repo.queuedCandidates(100, projectId, 1100)

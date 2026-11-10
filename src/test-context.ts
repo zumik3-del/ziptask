@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { nowIso } from './core/tasks'
 import type { TaskPriority } from './core/tasks'
 import { openDatabase } from './db/db'
-import type { ProjectRow, ProjectStore, Store } from './core/types'
+import type { ProjectRow, ProjectStore, Store, SvcResult } from './core/types'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { createLogger } from './logger'
@@ -73,7 +73,7 @@ export function taskStoreStubs(overrides: Partial<Store> = {}): Store {
     markClaimed: () => 0,
     transitionStatus: () => 0,
     updateTaskFields: () => 0,
-    transaction: <T>(fn: () => T) => fn(),
+    transaction: <T>(fn: () => SvcResult<T>) => fn(),
     expiredLeases: () => [],
     reapTransition: () => 0,
     insertComment: () => 1,
@@ -82,7 +82,7 @@ export function taskStoreStubs(overrides: Partial<Store> = {}): Store {
     commentsOf: () => [],
     nonTerminalChildCount: () => 0,
     childStatusCounts: () => ({ total: 0, open: 0, done: 0, failed: 0, canceled: 0 }),
-    promoteEpicWithMirror: () => 0,
+    promoteEpic: () => 0,
     ...projectStoreStubs(),
     ...overrides
   }

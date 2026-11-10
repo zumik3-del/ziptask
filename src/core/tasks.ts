@@ -72,7 +72,20 @@ export const STATUS_CODES = Object.freeze(
 
 export const TASK_STATUSES = TASK_STATUS_VALUES
 
-export const EDITABLE_STATUSES: readonly TaskStatus[] = Object.freeze(['queued', 'open'])
+// Named statuses for the write paths: a store spells `STATUS.queued` instead of the literal, so the
+// vocabulary stays in this module and a typo is a compile error.
+export const STATUS = Object.freeze({
+  queued: 'queued',
+  in_progress: 'in_progress',
+  review: 'review',
+  done: 'done',
+  failed: 'failed',
+  blocked: 'blocked',
+  canceled: 'canceled',
+  open: 'open'
+} as const satisfies Record<TaskStatus, TaskStatus>)
+
+export const EDITABLE_STATUSES: readonly TaskStatus[] = Object.freeze([STATUS.queued, STATUS.open])
 
 export function statusToCode(status: TaskStatus | 'not_found'): number {
   return STATUS_CODES[status]
@@ -96,7 +109,7 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = Object.freeze({
   // The administrative withdrawal: a failed task is closed for work, but it can be closed out.
   // It is never reopened — `failed -> queued`/`in_progress`/`review` stay illegal.
   failed: ['canceled'],
-  blocked: ['queued', 'in_progress', 'review', 'canceled'],
+  blocked: ['queued', 'in_progress', 'canceled'],
   canceled: [],
   open: ['done', 'failed', 'canceled']
 })
@@ -110,6 +123,13 @@ export const TERMINAL_STATUSES: readonly TaskStatus[] = Object.freeze([
   'done',
   'failed',
   'canceled'
+])
+
+// The statuses a lease can be taken from: `claim_task` and a non-renewal `update_status` both accept
+// a `queued` task and a manually parked `blocked` one, and both re-check `depends_on` on entry.
+export const CLAIMABLE_STATUSES: readonly TaskStatus[] = Object.freeze([
+  STATUS.queued,
+  STATUS.blocked
 ])
 
 export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {

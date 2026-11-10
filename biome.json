@@ -115,8 +115,10 @@
                       "clampCursor",
                       "Clock",
                       "nowIso",
+                      "STATUS",
                       "TERMINAL_STATUSES",
-                      "EDITABLE_STATUSES"
+                      "EDITABLE_STATUSES",
+                      "CLAIMABLE_STATUSES"
                     ]
                   },
                   "../core/types": {
@@ -132,6 +134,7 @@
                       "ProjectRow",
                       "ProjectStore",
                       "Store",
+                      "SvcResult",
                       "TaskStore",
                       "UpdateTaskPatch"
                     ]

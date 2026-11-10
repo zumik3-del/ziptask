@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, Clock } from './tasks'
 import {
   TERMINAL_STATUSES,
+  CLAIMABLE_STATUSES,
   clockNowIso,
   clockNowMs,
   sanitizePipe,
@@ -159,7 +160,6 @@ export class TaskLifecycleService {
       })
       const id = created.id
       if (createsCycle((depId) => this.store.depsOf(depId), id, deps)) {
-        this.store.deleteTask(id)
         return fail('CYCLE', 'dependency graph contains a cycle')
       }
       this._audit(id, reporter, 'create', undefined, created.status)
@@ -167,25 +167,17 @@ export class TaskLifecycleService {
       if (epicId !== null) {
         const target = this.store.getTaskRow(epicId)
         const changed = epicTargetChangedError(target, epicId, project.data.slug)
-        if (changed) {
-          this.store.deleteTask(id)
-          return fail(changed)
-        }
-        const promoted = this.store.promoteEpicWithMirror(
+        if (changed) return fail(changed)
+        const promoted = this.store.promoteEpic(epicId, now)
+        const stillEpic = promoted === 1 || this.store.getTaskRow(epicId)?.is_epic === true
+        if (!stillEpic) return fail(epicPromotionRaceError(epicId))
+        this._audit(
           epicId,
           reporter,
           'subtask_add',
-          `#${id} ${sanitizePipe(args.title)}`,
-          now,
-          this.opts.auditLog
+          undefined,
+          `#${id} ${sanitizePipe(args.title)}`
         )
-        if (promoted === 0) {
-          const after = this.store.getTaskRow(epicId)
-          if (!after?.is_epic) {
-            this.store.deleteTask(id)
-            return fail(epicPromotionRaceError(epicId))
-          }
-        }
       }
 
       return ok({ id, status: created.status })
@@ -213,7 +205,7 @@ export class TaskLifecycleService {
       if (!task) return fail('NOT_FOUND')
       const epicErr = epicNotClaimableError(task)
       if (epicErr) return fail(epicErr)
-      if (task.status !== 'queued' && task.status !== 'blocked')
+      if (!CLAIMABLE_STATUSES.includes(task.status))
         return fail('CONFLICT', `status=${task.status}`)
       const claimErr = claimEligibilityError(task, this.store)
       if (claimErr) return fail(claimErr)

@@ -12,7 +12,8 @@ import {
   MAX_DEPENDS_ON,
   MAX_TITLE_LENGTH
 } from './core/tasks'
-import type { Store } from './core/types'
+import { ok } from './core/result'
+import type { Store, SvcResult } from './core/types'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import {
@@ -50,9 +51,14 @@ afterEach(() => {
 const createTaskRow = (opts: CreateTaskRowOpts) => insertTaskRow(repo, opts)
 
 function existingDeps(count: number): number[] {
-  return repo.transaction(() =>
-    Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' }))
-  )
+  const deps: number[] = []
+  repo.transaction(() => {
+    for (let i = 0; i < count; i++) {
+      deps.push(createTaskRow({ title: `Dep ${i}`, reporter: 'dev' }))
+    }
+    return ok(deps)
+  })
+  return deps
 }
 
 function storeCounts(): { tasks: number; audit: number; comments: number } {
@@ -144,7 +150,7 @@ describe('claimTask atomic transaction (#1705)', () => {
   test('claimTask executes markClaimed and auditAppend inside store.transaction', () => {
     let txCalled = false
     const origTx = repo.transaction.bind(repo)
-    repo.transaction = <T>(fn: () => T): T => {
+    repo.transaction = <T>(fn: () => SvcResult<T>): SvcResult<T> => {
       txCalled = true
       return origTx(fn)
     }
@@ -271,6 +277,7 @@ describe('auto-claim ceiling (#105)', () => {
           projectId: testProjectId(repo2)
         })
       }
+      return ok(undefined)
     })
     const _freeId = repo2.insertTask({
       title: 'Free',
@@ -305,6 +312,7 @@ describe('auto-claim ceiling (#105)', () => {
           projectId: testProjectId(repo2)
         })
       }
+      return ok(undefined)
     })
     const _freeId = repo2.insertTask({
       title: 'Free',
@@ -327,6 +335,7 @@ describe('auto-claim ceiling (#105)', () => {
       for (let i = 0; i < 10; i++) {
         createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
       }
+      return ok(undefined)
     })
     const freeId = createTaskRow({ title: 'Free', reporter: 'dev' })
     const res = handleClaimTask(svc, { agent: 'agent-1' })

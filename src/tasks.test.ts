@@ -5,9 +5,12 @@ import {
   STATUS_CODES,
   TASK_STATUSES,
   TERMINAL_STATUSES,
+  CLAIMABLE_STATUSES,
   nowIso,
-  codePointLength
+  codePointLength,
+  type TaskStatus
 } from './core/tasks'
+import { ok } from './core/result'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { TERMINAL_STATUSES_SQL } from './db/sql'
@@ -187,7 +190,7 @@ describe('claim_task', () => {
     expect(after.assignee).toBeNull()
   })
 
-  test('blocked→review without claim is valid transition (no assignee guard)', () => {
+  test('blocked→review without claim is refused: review is reachable only from in_progress', () => {
     const id = createTaskRow({ title: 'BlockNoClaim', reporter: 'dev' })
     handleUpdateStatus(svc, { id, agent: 'dev', status: 'blocked', version: 1 })
     const task = getTaskRow(db, id)
@@ -197,7 +200,11 @@ describe('claim_task', () => {
       status: 'review',
       version: task.version
     })
-    expect(json(res).status).toBe('review')
+    expect(res.isError).toBe(true)
+    expect(text(res)).toContain('INVALID: blocked → review')
+    const after = getTaskRow(db, id)
+    expect(after.status).toBe('blocked')
+    expect(after.version).toBe(task.version)
   })
 })
 
@@ -406,6 +413,85 @@ describe('version race regression', () => {
     expect(final.version).toBe(2)
   })
 
+  // t2366 backstop: `markClaimed` carries a status predicate on top of its version CAS, so a lease
+  // can only be taken from a claimable row. The service never reaches it - every status write bumps
+  // `version`, so the CAS fences first - hence store-level seeding of the states the state machine
+  // cannot hand us. Every row is seeded at the same version the call passes, so a refusal can only
+  // come from the predicate, never from a stale version.
+  const PREDICATE_VERSION = 7
+  const PREDICATE_NOW = '2031-01-01T00:00:00.000Z'
+  const PREDICATE_SEED_LEASE = '2031-06-01T00:00:00.000Z'
+  const PREDICATE_LEASE = '2031-01-02T00:00:00.000Z'
+  const NON_CLAIMABLE = TASK_STATUSES.filter((status) => !CLAIMABLE_STATUSES.includes(status))
+
+  const seedStatusRow = (status: TaskStatus): number => {
+    const id = createTaskRow({ title: `Predicate ${status}`, reporter: 'dev' })
+    db.run(
+      'UPDATE tasks SET status = ?, assignee = ?, lease_expires_at = ?, version = ?, updated_at = ? WHERE id = ?',
+      [status, 'prior-holder', PREDICATE_SEED_LEASE, PREDICATE_VERSION, PREDICATE_NOW, id]
+    )
+    return id
+  }
+
+  const claimOutcome = (status: TaskStatus) => {
+    const id = seedStatusRow(status)
+    const changes = repo.markClaimed(
+      id,
+      PREDICATE_VERSION,
+      'agent-a',
+      PREDICATE_LEASE,
+      PREDICATE_NOW
+    )
+    const row = getTaskRow(db, id)
+    return {
+      status,
+      changes,
+      row: {
+        status: row.status,
+        assignee: row.assignee,
+        lease_expires_at: row.lease_expires_at,
+        version: row.version,
+        updated_at: row.updated_at
+      }
+    }
+  }
+
+  test('markClaimed takes the lease from the claimable statuses', () => {
+    const outcomes = CLAIMABLE_STATUSES.map(claimOutcome)
+    expect(outcomes).toEqual(
+      CLAIMABLE_STATUSES.map((status) => ({
+        status,
+        changes: 1,
+        row: {
+          status: 'in_progress',
+          assignee: 'agent-a',
+          lease_expires_at: PREDICATE_LEASE,
+          version: PREDICATE_VERSION + 1,
+          updated_at: PREDICATE_NOW
+        }
+      }))
+    )
+  })
+
+  test('markClaimed refuses every other status on a version match and leaves the row untouched', () => {
+    for (const status of ['in_progress', 'review', 'done', 'failed', 'canceled'] as const)
+      expect(NON_CLAIMABLE).toContain(status)
+    const outcomes = NON_CLAIMABLE.map(claimOutcome)
+    expect(outcomes).toEqual(
+      NON_CLAIMABLE.map((status) => ({
+        status,
+        changes: 0,
+        row: {
+          status,
+          assignee: 'prior-holder',
+          lease_expires_at: PREDICATE_SEED_LEASE,
+          version: PREDICATE_VERSION,
+          updated_at: PREDICATE_NOW
+        }
+      }))
+    )
+  })
+
   test('reap guard: concurrent holder write defeats reap', () => {
     const id = createTaskRow({ title: 'ReapGuard', reporter: 'dev' })
     handleClaimTask(svc, { agent: 'agent-1', task_id: id })
@@ -473,6 +559,46 @@ describe('terminal-status single source (#1445)', () => {
     )
     expect(withEdge).toEqual(['failed'])
     expect(TASK_STATUSES.filter((to) => isValidTransition('failed', to))).toEqual(['canceled'])
+  })
+})
+
+// #2366: `review` means "the work is done under a lease", so exactly one status may enter it. The
+// expectation is read back out of the transition table through its public predicate — a hand-copied
+// matrix would keep passing after the table moved. Re-adding the retired `blocked -> review` on-ramp
+// must fail this suite.
+describe('review on-ramps (#2366)', () => {
+  test('in_progress is the only status that lists review as a target', () => {
+    const onRamps = TASK_STATUSES.filter((from) => isValidTransition(from, 'review'))
+    expect(onRamps).toEqual(['in_progress'])
+  })
+
+  test('blocked with unmet dependencies refuses review, done and in_progress', () => {
+    // Behaviour level: `done` is only reachable through `review`, and both the direct close and the
+    // `in_progress` detour are refused while the dependency is open. Service calls, not table reads.
+    const dep = json(handleCreateTask(svc, { title: 'Dep', reporter: 'dev' })).id as number
+    const id = json(
+      handleCreateTask(svc, { title: 'Dependent', reporter: 'dev', depends_on: [dep] })
+    ).id as number
+
+    expect(svc.updateStatus({ id, agent: 'dev', status: 'blocked', version: 1 }).ok).toBe(true)
+
+    expect(svc.updateStatus({ id, agent: 'dev', status: 'review', version: 2 })).toEqual({
+      ok: false,
+      error: { code: 'INVALID', message: 'blocked → review' }
+    })
+    expect(svc.updateStatus({ id, agent: 'dev', status: 'done', version: 2 })).toEqual({
+      ok: false,
+      error: { code: 'INVALID', message: 'blocked → done' }
+    })
+    expect(svc.updateStatus({ id, agent: 'dev', status: 'in_progress', version: 2 })).toEqual({
+      ok: false,
+      error: { code: 'BLOCKED', message: 'dependencies not satisfied' }
+    })
+
+    const after = getTaskRow(db, id)
+    expect(after.status).toBe('blocked')
+    expect(after.version).toBe(2)
+    expect(auditRows(id).filter((r) => r.action === 'update_status').length).toBe(1)
   })
 })
 
@@ -954,12 +1080,15 @@ describe('monotonicNowMs process-wide (#1608 supersedes #795)', () => {
       }).id
       repoA.transaction(() => {
         for (let i = 0; i < 5; i++) repoA.insertComment(idA, 'a', `ca${i}`)
+        return ok(undefined)
       })
       repoB.transaction(() => {
         for (let i = 0; i < 5; i++) repoB.insertComment(idB, 'b', `cb${i}`)
+        return ok(undefined)
       })
       repoA.transaction(() => {
         for (let i = 0; i < 500; i++) repoA.insertComment(idA, 'a', `ca-adv${i}`)
+        return ok(undefined)
       })
       // Shipped contract (#1608): every stamp comes from one process-wide monotonic clock
       // (monotonicNowMs in src/core/tasks.ts), so the two repos are NOT independent — repoB
@@ -1019,7 +1148,7 @@ describe('TaskRepo port conformance (#812)', () => {
       expect(typeof repo3.commentsOf).toBe('function')
       expect(typeof repo3.nonTerminalChildCount).toBe('function')
       expect(typeof repo3.childStatusCounts).toBe('function')
-      expect(typeof repo3.promoteEpicWithMirror).toBe('function')
+      expect(typeof repo3.promoteEpic).toBe('function')
 
       const id = repo3.insertTask({
         title: 'PortTest',
@@ -1044,7 +1173,7 @@ describe('TaskRepo port conformance (#812)', () => {
       expect(counts.done ?? 0).toBe(0)
       expect(counts.failed ?? 0).toBe(0)
       expect(counts.canceled ?? 0).toBe(0)
-      expect(repo3.transaction(() => 42)).toBe(42)
+      expect(repo3.transaction(() => ok(42))).toEqual(ok(42))
       expect(repo3.expiredLeases(nowIso())).toEqual([])
       repo3.deleteTask(id)
       expect(repo3.queuedCandidates(10, testProjectId(repo3), 0)).toHaveLength(0)

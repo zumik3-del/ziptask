@@ -2,6 +2,7 @@ import type { Task, TaskStatus } from './tasks'
 import {
   isValidTransition,
   TERMINAL_STATUSES,
+  CLAIMABLE_STATUSES,
   EDITABLE_STATUSES,
   MAX_TITLE_LENGTH,
   MAX_AGENT_LENGTH,
@@ -274,10 +275,9 @@ export function updateStatusGuard(
       return { code: 'CONFLICT', message: `lease held by ${task.assignee}` }
   }
   if (args.status === 'in_progress' && !selfEdge) {
-    const eligibilityErr =
-      task.status === 'queued' || task.status === 'blocked'
-        ? claimEligibilityError(task, store)
-        : epicNotClaimableError(task)
+    const eligibilityErr = CLAIMABLE_STATUSES.includes(task.status)
+      ? claimEligibilityError(task, store)
+      : epicNotClaimableError(task)
     if (eligibilityErr) return eligibilityErr
   }
   if (refund) {
