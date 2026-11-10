@@ -698,4 +698,28 @@ describe('setNested', () => {
     setNested(obj, 'a.b', 9)
     expect(obj).toEqual({ a: { b: 9 } })
   })
+
+  test('creates missing intermediates with a null prototype', () => {
+    const obj: Record<string, unknown> = {}
+    setNested(obj, 'a.b.c', 42)
+    expect(Object.getPrototypeOf(obj.a)).toBeNull()
+    expect(Object.getPrototypeOf((obj.a as Record<string, unknown>).b)).toBeNull()
+    expect((obj.a as Record<string, unknown>).b).toEqual({ c: 42 })
+  })
+
+  test('replaces a non-plain intermediate with a null-prototype object', () => {
+    const obj: Record<string, unknown> = { a: 7 }
+    setNested(obj, 'a.b', 9)
+    expect(Object.getPrototypeOf(obj.a)).toBeNull()
+    expect(obj.a).toEqual({ b: 9 })
+  })
+
+  test('does not leak the hardening into the caller-owned root on rejected paths', () => {
+    const obj: Record<string, unknown> = {}
+    setNested(obj, '__proto__.x', 1)
+    setNested(obj, 'a..b', 1)
+    setNested(obj, '', 1)
+    expect(obj).toEqual({})
+    expect(Object.getPrototypeOf(obj)).toBe(Object.prototype)
+  })
 })
