@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, Clock } from './tasks'
 import {
   TERMINAL_STATUSES,
+  CLAIMABLE_STATUSES,
   clockNowIso,
   clockNowMs,
   sanitizePipe,
@@ -204,7 +205,7 @@ export class TaskLifecycleService {
       if (!task) return fail('NOT_FOUND')
       const epicErr = epicNotClaimableError(task)
       if (epicErr) return fail(epicErr)
-      if (task.status !== 'queued' && task.status !== 'blocked')
+      if (!CLAIMABLE_STATUSES.includes(task.status))
         return fail('CONFLICT', `status=${task.status}`)
       const claimErr = claimEligibilityError(task, this.store)
       if (claimErr) return fail(claimErr)

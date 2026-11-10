@@ -5,7 +5,7 @@ Server owns state (statuses, deps, leases, versions) over SQLite; content stays 
 ## Statuses
 `STATUS_CODES`: `0` not_found, `1` queued, `2` in_progress, `3` review, `4` done, `5` failed, `6` blocked, `7` canceled, `8` open.
 
-Flow `queued -> in_progress -> review -> done` for regular tasks, `open -> done|failed|canceled` for epics. `open` is epic-only, and an epic never holds `queued`/`in_progress`/`review`/`blocked` and takes no `assignee`. `done`/`failed`/`canceled` are closed for work: `completed_at` is set, no lease holder, and they never block a dependent, a parent epic or an open count. `failed -> canceled` is the administrative withdrawal (the failure stands, the task is closed out, never reopened). `blocked` is a manual flag.
+Flow `queued -> in_progress -> review -> done` for regular tasks, `open -> done|failed|canceled` for epics. `review` is reachable only from `in_progress`: a task parked in `blocked` must first re-enter `in_progress` (via `claim_task` or a non-renewal `update_status`, both of which re-check `depends_on`) — it cannot jump to `review`. `open` is epic-only, and an epic never holds `queued`/`in_progress`/`review`/`blocked` and takes no `assignee`. `done`/`failed`/`canceled` are closed for work: `completed_at` is set, no lease holder, and they never block a dependent, a parent epic or an open count. `failed -> canceled` is the administrative withdrawal (the failure stands, the task is closed out, never reopened). `blocked` is a manual flag.
 
 Readiness comes from `depends_on` at read time: an unsatisfied dep keeps the task `queued` and hides it from `list_queue` and auto-claim.
 
