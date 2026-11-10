@@ -36,6 +36,8 @@ jobs:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bunx biome check src/ scripts/
+      - name: "Check layer boundaries (mcp -> core -> db)"
+        run: bun run check:boundaries
       - run: bunx tsc --noEmit
       - run: bun test --coverage --coverage-reporter text --coverage-reporter lcov
         timeout-minutes: 5
