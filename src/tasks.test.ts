@@ -8,6 +8,7 @@ import {
   nowIso,
   codePointLength
 } from './core/tasks'
+import { ok } from './core/result'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
 import { TERMINAL_STATUSES_SQL } from './db/sql'
@@ -954,12 +955,15 @@ describe('monotonicNowMs process-wide (#1608 supersedes #795)', () => {
       }).id
       repoA.transaction(() => {
         for (let i = 0; i < 5; i++) repoA.insertComment(idA, 'a', `ca${i}`)
+        return ok(undefined)
       })
       repoB.transaction(() => {
         for (let i = 0; i < 5; i++) repoB.insertComment(idB, 'b', `cb${i}`)
+        return ok(undefined)
       })
       repoA.transaction(() => {
         for (let i = 0; i < 500; i++) repoA.insertComment(idA, 'a', `ca-adv${i}`)
+        return ok(undefined)
       })
       // Shipped contract (#1608): every stamp comes from one process-wide monotonic clock
       // (monotonicNowMs in src/core/tasks.ts), so the two repos are NOT independent — repoB
@@ -1019,7 +1023,7 @@ describe('TaskRepo port conformance (#812)', () => {
       expect(typeof repo3.commentsOf).toBe('function')
       expect(typeof repo3.nonTerminalChildCount).toBe('function')
       expect(typeof repo3.childStatusCounts).toBe('function')
-      expect(typeof repo3.promoteEpicWithMirror).toBe('function')
+      expect(typeof repo3.promoteEpic).toBe('function')
 
       const id = repo3.insertTask({
         title: 'PortTest',
@@ -1044,7 +1048,7 @@ describe('TaskRepo port conformance (#812)', () => {
       expect(counts.done ?? 0).toBe(0)
       expect(counts.failed ?? 0).toBe(0)
       expect(counts.canceled ?? 0).toBe(0)
-      expect(repo3.transaction(() => 42)).toBe(42)
+      expect(repo3.transaction(() => ok(42))).toEqual(ok(42))
       expect(repo3.expiredLeases(nowIso())).toEqual([])
       repo3.deleteTask(id)
       expect(repo3.queuedCandidates(10, testProjectId(repo3), 0)).toHaveLength(0)

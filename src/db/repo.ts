@@ -1,6 +1,13 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
 import type { Task, TaskStatus, CreatedTaskStatus, CommentType, Clock } from '../core/tasks'
-import { asClock, clampCursor, clampLimit, clockNowIso, TERMINAL_STATUSES } from '../core/tasks'
+import {
+  asClock,
+  clampCursor,
+  clampLimit,
+  clockNowIso,
+  STATUS,
+  TERMINAL_STATUSES
+} from '../core/tasks'
 import type {
   AuditStore,
   ChildStatusCounts,
@@ -12,6 +19,7 @@ import type {
   ProjectListItem,
   ProjectRow,
   ProjectStore,
+  SvcResult,
   TaskStore,
   UpdateTaskPatch
 } from '../core/types'
@@ -33,6 +41,13 @@ function bindParams(params: SqlParam[]): SQLQueryBindings[] {
 
 type TaskRow = Omit<Task, 'is_epic'> & { is_epic: number; project_id: number | null }
 
+// A body that returns `ok:false` must not commit, so it is thrown out of the bun:sqlite transaction
+// (which rolls back) and turned back into the SvcResult the caller asked for. Module-private: no
+// caller can throw it deliberately.
+class Rollback<T> {
+  constructor(readonly result: SvcResult<T>) {}
+}
+
 function toTask(row: TaskRow): Task {
   const { project_id: _internal, ...rest } = row
   return { ...rest, project: rest.project, is_epic: rest.is_epic !== 0 }
@@ -51,11 +66,22 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     return `IN (${Array.from({ length: count }, () => '?').join(',')})`
   }
 
-  transaction<T>(fn: () => T): T {
+  transaction<T>(fn: () => SvcResult<T>): SvcResult<T> {
     // An IMMEDIATE transaction takes the write lock up front, so a read-then-write body (the cycle
     // check in update_task is one) waits for a concurrent writer instead of failing with
     // SQLiteError: database is locked (a snapshot that went stale between the read and the write).
-    return this.db.transaction(fn).immediate()
+    try {
+      return this.db
+        .transaction((): SvcResult<T> => {
+          const outcome = fn()
+          if (!outcome.ok) throw new Rollback(outcome)
+          return outcome
+        })
+        .immediate()
+    } catch (error) {
+      if (error instanceof Rollback) return error.result as SvcResult<T>
+      throw error
+    }
   }
 
   getTaskRow(id: number): Task | null {
@@ -70,7 +96,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     const epicFlag = isEpic ? 1 : 0
     const projectId = task.projectId ?? null
     // ADR 0002: an epic is born `open` and holds no lease, so it never carries an assignee.
-    const status = isEpic ? 'open' : 'queued'
+    const status = isEpic ? STATUS.open : STATUS.queued
     const result = this.db.run(
       `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic, project_id)
        VALUES (?, ?, ?, ?, NULL, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
@@ -138,9 +164,12 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   queuedCandidates(limit: number, projectId: number, offset?: number): Task[] {
     const n = clampLimit(limit, 0)
     const o = clampCursor(offset ?? 0, 0)
+    // INDEXED BY only matches when the partial index's predicate is in the statement text: a bind
+    // parameter there fails with "no query solution", so the status is interpolated from STATUS at
+    // build time - and changing that constant means changing the migration's predicate too.
     const rows = this.db
       .query(
-        `SELECT t.*, p.slug AS project FROM tasks t INDEXED BY idx_tasks_queued_candidates LEFT JOIN projects p ON p.id = t.project_id WHERE t.status = 'queued' AND t.is_epic = 0 AND t.project_id = ?
+        `SELECT t.*, p.slug AS project FROM tasks t INDEXED BY idx_tasks_queued_candidates LEFT JOIN projects p ON p.id = t.project_id WHERE t.status = '${STATUS.queued}' AND t.is_epic = 0 AND t.project_id = ?
        ORDER BY ${PRIORITY_ORDER_SQL}, t.created_at ASC, t.id ASC
        LIMIT ? OFFSET ?`
       )
@@ -186,7 +215,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     now: string
   ): number {
     const result = this.db.run(
-      "UPDATE tasks SET status = 'in_progress', assignee = ?, lease_expires_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?",
+      `UPDATE tasks SET status = '${STATUS.in_progress}', assignee = ?, lease_expires_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?`,
       [agent, leaseUntil, now, id, expectedVersion]
     )
     return Number(result.changes)
@@ -209,7 +238,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
       'completed_at = COALESCE(?, completed_at)'
     ]
     const params: SqlParam[] = [status, now, completedAt]
-    if (status === 'in_progress') {
+    if (status === STATUS.in_progress) {
       assignments.push('lease_expires_at = ?', 'assignee = ?')
       params.push(leaseUntilIso, holder)
     } else {
@@ -265,9 +294,12 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   }
 
   expiredLeases(nowIso: string): Array<Pick<Task, 'id' | 'version' | 'attempts' | 'max_attempts'>> {
+    // INDEXED BY only matches when the partial index's predicate is in the statement text: a bind
+    // parameter there fails with "no query solution", so the status is interpolated from STATUS at
+    // build time - and changing that constant means changing the migration's predicate too.
     return this.db
       .query(
-        "SELECT id, version, attempts, max_attempts FROM tasks INDEXED BY idx_tasks_lease_expires_at WHERE status = 'in_progress' AND is_epic = 0 AND lease_expires_at IS NOT NULL AND lease_expires_at < ?"
+        `SELECT id, version, attempts, max_attempts FROM tasks INDEXED BY idx_tasks_lease_expires_at WHERE status = '${STATUS.in_progress}' AND is_epic = 0 AND lease_expires_at IS NOT NULL AND lease_expires_at < ?`
       )
       .all(nowIso) as Array<{ id: number; version: number; attempts: number; max_attempts: number }>
   }
@@ -292,7 +324,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     assignments.push('assignee = NULL')
     params.push(id, expectedVersion)
     const result = this.db.run(
-      `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND status = 'in_progress' AND version = ?`,
+      `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND status = '${STATUS.in_progress}' AND version = ?`,
       bindParams(params)
     )
     return Number(result.changes)
@@ -369,39 +401,21 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
         `SELECT
          COUNT(*) as total,
          COALESCE(SUM(CASE WHEN status NOT IN ${TERMINAL_STATUSES_SQL} THEN 1 ELSE 0 END), 0) as open,
-         COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) as done,
-         COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed,
-         COALESCE(SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END), 0) as canceled
+         COALESCE(SUM(CASE WHEN status = '${STATUS.done}' THEN 1 ELSE 0 END), 0) as done,
+         COALESCE(SUM(CASE WHEN status = '${STATUS.failed}' THEN 1 ELSE 0 END), 0) as failed,
+         COALESCE(SUM(CASE WHEN status = '${STATUS.canceled}' THEN 1 ELSE 0 END), 0) as canceled
        FROM tasks WHERE epic_id = ?`
       )
       .get(epicId) as ChildStatusCounts
     return row
   }
 
-  promoteEpicWithMirror(
-    id: number,
-    agent: string,
-    action: string,
-    newValue: string,
-    now: string,
-    auditLog: boolean
-  ): number {
+  promoteEpic(id: number, now: string): number {
     const result = this.db.run(
-      "UPDATE tasks SET is_epic = 1, status = 'open', lease_expires_at = NULL, assignee = NULL, version = version + 1, updated_at = ? WHERE id = ? AND is_epic = 0 AND status = 'queued'",
+      `UPDATE tasks SET is_epic = 1, status = '${STATUS.open}', lease_expires_at = NULL, assignee = NULL, version = version + 1, updated_at = ? WHERE id = ? AND is_epic = 0 AND status = '${STATUS.queued}'`,
       [now, id]
     )
-    const changes = Number(result.changes)
-    if (auditLog) {
-      const stillEpic =
-        changes === 1 ||
-        (
-          this.db.query('SELECT is_epic FROM tasks WHERE id = ?').get(id) as {
-            is_epic: number
-          } | null
-        )?.is_epic === 1
-      if (stillEpic) this.auditAppend(id, agent, action, undefined, newValue)
-    }
-    return changes
+    return Number(result.changes)
   }
 
   insertProject(project: { slug: string; folderPath: string; now: string }): number {

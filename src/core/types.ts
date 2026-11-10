@@ -86,17 +86,12 @@ export interface TaskStore {
     resetAttempts?: 0 | 1
   ): number
   updateTaskFields(id: number, expectedVersion: number, patch: UpdateTaskPatch, now: string): number
-  transaction<T>(fn: () => T): T
+  // Not reentrant: a nested call converts its own rollback into an `ok:false` result and the outer
+  // body keeps running, so a caller must not nest transactions today.
+  transaction<T>(fn: () => SvcResult<T>): SvcResult<T>
   nonTerminalChildCount(epicId: number): number
   childStatusCounts(epicId: number): ChildStatusCounts
-  promoteEpicWithMirror(
-    id: number,
-    agent: string,
-    action: string,
-    newValue: string,
-    now: string,
-    auditLog: boolean
-  ): number
+  promoteEpic(id: number, now: string): number
 }
 
 export interface ProjectStore {
@@ -136,7 +131,6 @@ export type LifecycleStore = Pick<
   TaskStore,
   | 'getTaskRow'
   | 'insertTask'
-  | 'deleteTask'
   | 'depsOf'
   | 'statusesOf'
   | 'batchTasks'
@@ -145,7 +139,7 @@ export type LifecycleStore = Pick<
   | 'updateTaskFields'
   | 'transaction'
   | 'nonTerminalChildCount'
-  | 'promoteEpicWithMirror'
+  | 'promoteEpic'
   | 'queuedCandidates'
 > &
   Pick<CommentStore, 'insertComment'> &
