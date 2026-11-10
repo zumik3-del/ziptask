@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { collapseDeps, createsCycle, depsSatisfied, parseDeps } from './core/deps'
+import { ok } from './core/result'
 import { MAX_DEPENDS_ON } from './core/tasks'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
@@ -117,6 +118,7 @@ describe('deps', () => {
         createTaskRow({ title: `Blocked ${i}`, reporter: 'dev', depends_on: [999] })
       }
       freeId = createTaskRow({ title: 'FreeBeyondBatch', reporter: 'dev' })
+      return ok(undefined)
     })
     const res = handleClaimTask(svc, { agent: 'agent-2' })
     expect(json(res).id).toBe(freeId)
@@ -163,10 +165,16 @@ describe('dependency validation (#2244)', () => {
       (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
     return { tasks: count('tasks'), audit: count('audit_log'), comments: count('comments') }
   }
-  const seedDeps = (count: number): number[] =>
-    repo.transaction(() =>
-      Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' }))
-    )
+  const seedDeps = (count: number): number[] => {
+    const deps: number[] = []
+    repo.transaction(() => {
+      for (let i = 0; i < count; i++) {
+        deps.push(createTaskRow({ title: `Dep ${i}`, reporter: 'dev' }))
+      }
+      return ok(deps)
+    })
+    return deps
+  }
 
   test('create_task refuses an unknown dependency id and writes nothing', () => {
     const dep = createTaskRow({ title: 'Known', reporter: 'dev' })

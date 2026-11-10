@@ -115,6 +115,7 @@
                       "clampCursor",
                       "Clock",
                       "nowIso",
+                      "STATUS",
                       "TERMINAL_STATUSES",
                       "EDITABLE_STATUSES"
                     ]
@@ -132,6 +133,7 @@
                       "ProjectRow",
                       "ProjectStore",
                       "Store",
+                      "SvcResult",
                       "TaskStore",
                       "UpdateTaskPatch"
                     ]

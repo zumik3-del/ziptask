@@ -72,7 +72,20 @@ export const STATUS_CODES = Object.freeze(
 
 export const TASK_STATUSES = TASK_STATUS_VALUES
 
-export const EDITABLE_STATUSES: readonly TaskStatus[] = Object.freeze(['queued', 'open'])
+// Named statuses for the write paths: a store spells `STATUS.queued` instead of the literal, so the
+// vocabulary stays in this module and a typo is a compile error.
+export const STATUS = Object.freeze({
+  queued: 'queued',
+  in_progress: 'in_progress',
+  review: 'review',
+  done: 'done',
+  failed: 'failed',
+  blocked: 'blocked',
+  canceled: 'canceled',
+  open: 'open'
+} as const satisfies Record<TaskStatus, TaskStatus>)
+
+export const EDITABLE_STATUSES: readonly TaskStatus[] = Object.freeze([STATUS.queued, STATUS.open])
 
 export function statusToCode(status: TaskStatus | 'not_found'): number {
   return STATUS_CODES[status]

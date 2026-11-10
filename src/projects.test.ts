@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { createHash } from 'node:crypto'
 import { Database as SqliteDb } from 'bun:sqlite'
+import { ok } from './core/result'
 import { openDatabase } from './db/db'
 import { MIGRATIONS } from './db/migrations'
 import { TaskRepo } from './db/repo'
@@ -302,6 +303,7 @@ describe('projects: CRUD contract (ADR D4)', () => {
           projectId
         })
       }
+      return ok(undefined)
     })
     const lines = text(handleListProjects(svc, {})).split('\n')
     expect(lines.map((l) => l.split('|')[0])).toEqual(['alpha', 'beta', 'gamma', 'test'])
@@ -336,6 +338,7 @@ describe('projects: CRUD contract (ADR D4)', () => {
       ] as const) {
         setStatus(id, status)
       }
+      return ok(undefined)
     })
     expect(repo.getTaskRow(a2)!.status).toBe('in_progress')
     expect(openTaskTitles('alpha')).toEqual(['a1', 'a2'])

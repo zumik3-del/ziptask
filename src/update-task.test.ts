@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { TaskRepo } from './db/repo'
 import { TaskService } from './core/service'
+import { ok } from './core/result'
 import { codePointLength, nowIso, MAX_DEPENDS_ON } from './core/tasks'
 import {
   handleCreateTask,
@@ -398,10 +399,16 @@ describe('update_task: validation', () => {
 })
 
 describe('update_task: dependency validation (#2244)', () => {
-  const seedDeps = (count: number): number[] =>
-    repo.transaction(() =>
-      Array.from({ length: count }, (_, i) => createTaskRow({ title: `Dep ${i}`, reporter: 'dev' }))
-    )
+  const seedDeps = (count: number): number[] => {
+    const deps: number[] = []
+    repo.transaction(() => {
+      for (let i = 0; i < count; i++) {
+        deps.push(createTaskRow({ title: `Dep ${i}`, reporter: 'dev' }))
+      }
+      return ok(deps)
+    })
+    return deps
+  }
 
   test('unknown dependency id refused, first missing id named, nothing written', () => {
     const dep = createTaskRow({ title: 'Dep' })
