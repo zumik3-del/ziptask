@@ -212,11 +212,11 @@ export function setNested(obj: Record<string, unknown>, path: string, value: unk
   for (let i = 0; i < keys.length - 1; i++) {
     const key = keys[i]
     if (!Object.hasOwn(current, key)) {
-      current[key] = {}
+      current[key] = Object.create(null) as Record<string, unknown>
     } else {
       const existing = current[key]
       if (!isPlainObject(existing)) {
-        current[key] = {}
+        current[key] = Object.create(null) as Record<string, unknown>
       }
     }
     const next = current[key]
