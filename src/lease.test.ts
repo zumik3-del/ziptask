@@ -859,9 +859,10 @@ describe('reap invariants untouched by F2/F3 (D-F3-5: zero diff in _doReap)', ()
 // in_progress the guard demands claim-grade eligibility (not an epic; deps satisfied from
 // queued/blocked), reusing claimTask's two error strings verbatim. review → in_progress is a
 // deliberate superset: work sent back is exactly the sanctioned case, and its deps are provably
-// still satisfied (depends_on is immutable after the claim, and a dependency closed for work stays
-// closed for work — the administrative edge out of `failed` (`failed -> canceled`) closes a task
-// out and never reopens one).
+// still satisfied (depends_on is editable only while `queued`, every entry into `in_progress` from
+// `queued`/`blocked` re-checks it, and a dependency closed for work stays closed for work — the
+// administrative edge out of `failed` (`failed -> canceled`) closes a task out and never reopens
+// one).
 describe('acquiring a lease: update_status → in_progress needs claim-grade eligibility', () => {
   const HOUR = 3600_000
 
@@ -1276,11 +1277,12 @@ describe('review → in_progress: work sent back takes the lease', () => {
   })
 
   test('the review edge asks no deps question, even on a row whose dep is open', () => {
-    // Provably unnecessary rather than unchecked: depends_on is immutable after the claim, and a
-    // dependency closed for work stays closed for work — the administrative edge out of `failed`
-    // (`failed -> canceled`) closes a task out and never reopens one — so a satisfied dep stays
-    // satisfied. The seeded row is the only way to observe it, and it shows the edge makes no
-    // query — the entry succeeds with an open dep.
+    // Provably unnecessary rather than unchecked: depends_on is editable only while `queued`, and
+    // every entry into `in_progress` from `queued`/`blocked` re-checks it, so the deps satisfied at
+    // the claim still hold; a dependency closed for work stays closed for work — the administrative
+    // edge out of `failed` (`failed -> canceled`) closes a task out and never reopens one — so a
+    // satisfied dep stays satisfied. The seeded row is the only way to observe it, and it shows the
+    // edge makes no query — the entry succeeds with an open dep.
     const dep = createTaskRow('Open')
     const id = createDepTask('InReview', [dep])
     seedReview(id)

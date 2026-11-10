@@ -28,7 +28,8 @@ import {
   PRIORITY_ORDER_SQL,
   TASK_SELECT,
   TERMINAL_STATUSES_SQL,
-  EDITABLE_STATUSES_SQL
+  EDITABLE_STATUSES_SQL,
+  CLAIMABLE_STATUSES_SQL
 } from './sql'
 
 const BATCH_CHUNK_SIZE = 500
@@ -207,6 +208,9 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     return map
   }
 
+  // Every status write bumps `version`, so the CAS below already fences a stale claim. The status
+  // predicate states the invariant it backstops: a lease is taken only from a row that is claimable
+  // (`queued`/`blocked`), never over a row that is already under way or sent to `review`.
   markClaimed(
     id: number,
     expectedVersion: number,
@@ -215,7 +219,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     now: string
   ): number {
     const result = this.db.run(
-      `UPDATE tasks SET status = '${STATUS.in_progress}', assignee = ?, lease_expires_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?`,
+      `UPDATE tasks SET status = '${STATUS.in_progress}', assignee = ?, lease_expires_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ? AND status IN ${CLAIMABLE_STATUSES_SQL}`,
       [agent, leaseUntil, now, id, expectedVersion]
     )
     return Number(result.changes)

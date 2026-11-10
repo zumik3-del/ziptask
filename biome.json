@@ -117,7 +117,8 @@
                       "nowIso",
                       "STATUS",
                       "TERMINAL_STATUSES",
-                      "EDITABLE_STATUSES"
+                      "EDITABLE_STATUSES",
+                      "CLAIMABLE_STATUSES"
                     ]
                   },
                   "../core/types": {
