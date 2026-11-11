@@ -742,7 +742,9 @@ describe('argument contract over MCP (F1 #1040)', () => {
       const id = getId(srv.svc.createTask({ title: 'Read', reporter: 'dev' }))
       const res: any = await client.callTool({ name: 'get_task', arguments: { id, field: 'x' } })
       expect(res.isError).toBe(true)
-      expect(textOf(res)).toBe('INVALID: unknown argument field on get_task (accepted: fields, id)')
+      expect(textOf(res)).toBe(
+        'INVALID: unknown argument field on get_task (accepted: fields, id, max_field_chars)'
+      )
     })
 
     test('every one of the 14 tools rejects an unknown key, and the accepted list matches tools/list', async () => {
@@ -809,6 +811,7 @@ describe('argument contract over MCP (F1 #1040)', () => {
         'agent',
         'fields',
         'lease_ttl_min',
+        'max_field_chars',
         'project',
         'task_id'
       ])

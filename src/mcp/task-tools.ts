@@ -43,6 +43,26 @@ const PRIORITY_JSON_SHAPE = {
 
 const PRIORITY_INPUT = BASE_PRIORITY_INPUT.meta(PRIORITY_JSON_SHAPE)
 
+const MAX_FIELD_CHARS = z
+  .number()
+  .int()
+  .positive()
+  .max(MAX_DESCRIPTION_LENGTH)
+  .optional()
+  .describe('truncate each string field to N code points, marker …(+N chars); omitted = full text')
+
+const BATCH_FORMAT = z
+  .enum(['pipe', 'json'])
+  .optional()
+  .describe(
+    'ids mode only: pipe id|code|<fields> (default) or json {tasks:[...]}; ignored when filters are used'
+  )
+
+function pipeCell(value: unknown): string | number {
+  if (value === undefined || value === null) return '-'
+  return typeof value === 'string' ? sanitizePipe(value) : String(value)
+}
+
 const CREATE_TASK_SHAPE = {
   title: z
     .string()
@@ -81,7 +101,8 @@ const CREATE_TASK_SHAPE = {
 
 const GET_TASK_SHAPE = {
   id: TaskId,
-  fields: z.array(z.string()).optional()
+  fields: z.array(z.string()).optional(),
+  max_field_chars: MAX_FIELD_CHARS
 }
 
 const LIST_TASKS_SHAPE = {
@@ -98,6 +119,8 @@ const LIST_TASKS_SHAPE = {
   epic_id: TaskId.optional(),
   is_epic: z.boolean().optional(),
   ids: z.array(TaskId).max(MAX_RESULT_LIMIT).optional(),
+  format: BATCH_FORMAT,
+  max_field_chars: MAX_FIELD_CHARS,
   project: PROJECT_ARG
 }
 
@@ -109,6 +132,7 @@ const CLAIM_TASK_SHAPE = {
     .describe('agent name; defaults to "unknown" when omitted; <=200 code points'),
   task_id: TaskId.optional(),
   fields: z.array(z.string()).optional().describe('extra fields to include in the response'),
+  max_field_chars: MAX_FIELD_CHARS,
   lease_ttl_min: z
     .number()
     .int()
@@ -197,7 +221,7 @@ export function handleCreateTask(
 
 export function handleGetTask(
   svc: TaskService,
-  args: { id: number; fields?: string[] }
+  args: { id: number; fields?: string[]; max_field_chars?: number }
 ): ToolResult {
   const unknown = rejectUnknownArgs('get_task', GET_TASK_SHAPE, args)
   if (unknown) return unknown
@@ -205,7 +229,7 @@ export function handleGetTask(
     svc.getTaskView(args.id),
     (data) => {
       const fields = args.fields ?? ['id', 'title', 'status', 'priority', 'blocked_by']
-      const result = pickFields(data.task, fields)
+      const result = pickFields(data.task, fields, args.max_field_chars)
       if (fields.includes('blocked_by')) {
         result.blocked_by = data.blockedBy
       }
@@ -229,25 +253,36 @@ export function handleListTasks(
     epic_id?: number
     is_epic?: boolean
     ids?: number[]
+    format?: 'pipe' | 'json'
+    max_field_chars?: number
     project?: string
   }
 ): ToolResult {
   const unknown = rejectUnknownArgs('list_tasks', LIST_TASKS_SHAPE, args)
   if (unknown) return unknown
   if (args.ids !== undefined && args.ids.length > 0) {
-    const withAssignee = args.fields?.includes('assignee') ?? false
+    const fields = args.fields ?? []
     return foldResult(
       svc.getTasksByIds(args.ids),
       ({ items }) => {
+        if (args.format === 'json') {
+          const tasks = items.map(({ id, task }) =>
+            task === null
+              ? { id, code: statusToCode('not_found') }
+              : {
+                  id,
+                  code: statusToCode(task.status),
+                  ...pickFields(task, fields, args.max_field_chars)
+                }
+          )
+          return jsonResult({ tasks, total: items.length })
+        }
         const lines = items.map(({ id, task }) => {
-          if (!task) {
-            const code = statusToCode('not_found')
-            return withAssignee ? pipeJoin(id, code, '-') : pipeJoin(id, code)
+          if (task === null) {
+            return pipeJoin(id, statusToCode('not_found'), ...fields.map(() => '-'))
           }
-          const code = statusToCode(task.status)
-          return withAssignee
-            ? pipeJoin(id, code, task.assignee === null ? '-' : sanitizePipe(task.assignee))
-            : pipeJoin(id, code)
+          const picked = pickFields(task, fields, args.max_field_chars)
+          return pipeJoin(id, statusToCode(task.status), ...fields.map((f) => pipeCell(picked[f])))
         })
         return textResult(lines.join('\n'))
       },
@@ -267,7 +302,7 @@ export function handleListTasks(
   return foldResult(
     svc.listTasks(filters),
     (data) => {
-      const tasks = data.tasks.map((task) => pickFields(task, fields))
+      const tasks = data.tasks.map((task) => pickFields(task, fields, args.max_field_chars))
       return jsonResult({ tasks, total: data.total })
     },
     errorTool
@@ -281,6 +316,7 @@ export function handleClaimTask(
     task_id?: number
     fields?: string[]
     lease_ttl_min?: number
+    max_field_chars?: number
     project?: string
   }
 ): ToolResult {
@@ -300,7 +336,7 @@ export function handleClaimTask(
         lease_ttl_min: leaseTtlMin,
         version: task.version
       }
-      Object.assign(result, pickFields(task, args.fields ?? []))
+      Object.assign(result, pickFields(task, args.fields ?? [], args.max_field_chars))
       return jsonResult(result)
     },
     errorTool
@@ -362,7 +398,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
   registerTool(server, svc, {
     name: 'create_task',
     description:
-      'Create task. Regular tasks start queued; epics are created open. A task is born without a lease, so `assignee` is refused at creation (INVALID: assignee is refused at creation: a task holds a lease only from in_progress) — the claim writes the holder. `reporter` and `assignee` are bounded at 200 code points each (an over-long one is refused by the schema, as INVALID: reporter too long / INVALID: assignee too long). An epic takes no assignee (it holds no lease), and epic_id promotes its target only when the target is queued. blocked is a manual flag only for regular tasks. `priority` accepts the canonical `p0`..`p3` (p0 = highest urgency … p3 = lowest, default p2), the number `0`..`3` and the digit string "0".."3"; every accepted shape is stored as the canonical `pN`, and anything else is refused with `INVALID: priority must be one of p0, p1, p2, p3 or the number 0..3`. `project` is required (no default; refused in `legacy` and in an archived project). Build description from get_template("task"); for epics use get_template("epic")',
+      'Create a task. Regular tasks start `queued`, epics `open`; `assignee` is refused at creation (a lease exists only from `in_progress`, and the claim writes the holder). `epic_id` attaches a sub-task and promotes a queued target. `project` is required. Build `description` from get_template("task") or get_template("epic").',
     shape: CREATE_TASK_SHAPE,
     run: handleCreateTask
   })
@@ -370,7 +406,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
   registerTool(server, svc, {
     name: 'get_task',
     description:
-      'Brief default: id,title,status,priority,blocked_by. description only via explicit fields; null fields omitted. version via fields:["version"], project via fields:["project"]. By-id: no project argument',
+      'Brief default: id,title,status,priority,blocked_by. More via fields — description, version, project, subtasks (epic roll-up); null fields are omitted. max_field_chars truncates long strings with a …(+N chars) marker. By-id: no project argument.',
     shape: GET_TASK_SHAPE,
     run: handleGetTask
   })
@@ -378,14 +414,14 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
   registerTool(server, svc, {
     name: 'list_tasks',
     description:
-      'Filters: assignee,status,updated_since(unix ms),epic_id(children of epic),is_epic(epic filter). `project` (slug) is required unless ids is non-empty; ids batch-mode returns pipe id|code; assignee via fields:["assignee"]. description only via explicit fields',
+      'Filters: assignee,status,updated_since(ms),epic_id(children),is_epic; `project` is required unless `ids` is non-empty. Batch `ids` ignores filters and keeps request order: pipe `id|code|<fields...>` (`-` for null or unknown) or `format:"json"` — use json for description, pipe escaping rewrites | and newlines. description only via fields; max_field_chars truncates.',
     shape: LIST_TASKS_SHAPE,
     run: handleListTasks
   })
 
   registerTool(server, svc, {
     name: 'claim_task',
-    description: `Claim a task (auto-picks the best queued, or task_id — queued/blocked). \`project\` (slug) is required for the auto-pick (it is the only scoped branch); a by-id claim stays unscoped. agent is optional (defaults to "unknown"); lease_ttl_min overrides the server default lease for this claim only (<=${MAX_LEASE_TTL_MIN}; a larger value is refused with INVALID: ${LEASE_TTL_TOO_LARGE_MESSAGE}). fields: extra fields to include in the response`,
+    description: `Claim a task: auto-pick takes the best queued task of the required \`project\`; with \`task_id\` the call is unscoped and also accepts a blocked task. agent defaults to "unknown"; lease_ttl_min overrides the default for this claim only (<=${MAX_LEASE_TTL_MIN}, larger refused). fields adds task fields to the response; max_field_chars truncates.`,
     shape: CLAIM_TASK_SHAPE,
     run: handleClaimTask
   })
@@ -393,7 +429,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
   registerTool(server, svc, {
     name: 'update_status',
     description:
-      'Transition status. Optimistic lock via version — read current version via get_task fields:["version"] (or from your claim response); on CONFLICT re-read version and retry, except CONFLICT: lease held by <other>, which means hand the task back to that agent. version is optional: when omitted the version check is skipped (a concurrent write still refuses with CONFLICT). canceled is terminal and withdraws any non-terminal task; a `failed` task is closed for work and can be withdrawn to `canceled` administratively — it is never reopened. Epics use `open` status, not queued/blocked/review, and close directly to done/failed/canceled. A non-renewal status=in_progress needs claim-grade eligibility: refused for an epic (INVALID: #N is an epic, not claimable) and for unsatisfied dependencies when entering from queued/blocked (BLOCKED: dependencies not satisfied) — an epic is never leased, and claim_task is the door to a lease. A renewal heartbeat on an epic is answered by the renewal path instead (INVALID: #N is an epic). renew:true with status=in_progress extends your own in_progress lease (heartbeat ~lease_ttl_min/3); the holder must match assignee and the version bumps. reset_attempts:true rides on any legal transition: zeroes attempts (budget refund, max_attempts untouched), requires a comment, and echoes attempts in the response; rejected on epics and on tasks closed for work (a failed task is recovered by recreating it, or withdrawn to canceled)',
+      'Transition status. `version` is an optional optimistic lock — read it via get_task fields:["version"] or the claim response; a stale one answers CONFLICT, so re-read and retry, except CONFLICT: lease held by <other>, which means hand the task back. `canceled` withdraws any task still open for work; `failed` is closed for work and only withdrawable to `canceled`; epics stay `open` and close directly to done/failed/canceled, refused while children are not terminal. A non-renewal entry into `in_progress` is held to claim eligibility (not an epic, deps satisfied). `renew:true` with status=in_progress re-arms your own lease (heartbeat ~lease_ttl_min/3) and bumps version. `reset_attempts:true` rides any legal transition, requires a comment, zeroes attempts, and is refused on epics and closed tasks.',
     shape: UPDATE_STATUS_SHAPE,
     run: handleUpdateStatus
   })
@@ -401,7 +437,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
   registerTool(server, svc, {
     name: 'update_task',
     description:
-      'Edit a task that is not under way yet: a queued task (regular) or an open epic, with no lease holder. Fields: title? (<=200 code points), description? (<=20000 code points; the contract), priority? (p0..p3, the number 0..3 or the digit string "0".."3"), depends_on? (<=100 ids; replaces the list; an epic takes no deps), comment? (<=10000 code points; rationale stored as a comment). Everything else is immutable: status belongs to update_status, assignee is the lease holder, project/epic_id/reporter/max_attempts never change. version is an optional optimistic lock (the write always compares against the version it read). Refused without a write: a task that is in_progress/review/blocked or closed for work (INVALID: cannot edit #N in status=<s>: only a queued task (or an open epic) is editable) — use add_comment there; a stale version (CONFLICT: expected version N, got M). No editable field at all is INVALID: nothing to update. A supplied value equal to the stored one is a no-op: changed lists only the fields that really changed. Output {id, version, changed}',
+      'Patch a queued task or an open epic with no lease holder: title, description (the contract), priority, depends_on (replaces the list, <=100 ids; epics take no deps), comment (rationale). Immutable: status, assignee (the lease holder), project, epic_id, reporter, max_attempts. version is an optional optimistic lock; a stale one answers CONFLICT. Refused for in_progress/review/blocked or closed tasks — use add_comment; no editable field → INVALID: nothing to update; a value equal to the stored one is a no-op (changed:[]). Output {id,version,changed}.',
     shape: UPDATE_TASK_SHAPE,
     run: handleUpdateTask
   })
@@ -409,7 +445,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
   registerTool(server, svc, {
     name: 'list_queue',
     description:
-      'Deps-satisfied queued tasks of one project, pipe lines id|priority|title. `project` (slug) is required (no default, no all-projects mode)',
+      'Deps-satisfied queued tasks of one project, pipe id|priority|title; `project` is required (no default or all-projects mode).',
     shape: LIST_QUEUE_SHAPE,
     run: handleListQueue
   })

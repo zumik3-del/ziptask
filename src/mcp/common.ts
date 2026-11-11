@@ -31,12 +31,24 @@ export function toToolResult<T>(r: SvcResult<T>): ToolResult {
   return foldResult(r, jsonResult, errorTool)
 }
 
-export function pickFields(src: Task, fields: string[]): Record<string, unknown> {
+export function truncateChars(value: string, maxChars: number | undefined): string {
+  if (maxChars === undefined || maxChars <= 0 || value.length <= maxChars) return value
+  const points = Array.from(value)
+  if (points.length <= maxChars) return value
+  return `${points.slice(0, maxChars).join('')}…(+${points.length - maxChars} chars)`
+}
+
+export function pickFields(
+  src: Task,
+  fields: string[],
+  maxChars?: number
+): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const f of fields) {
     if (f in src) {
       const v = (src as unknown as Record<string, unknown>)[f]
-      if (v !== null && v !== undefined) out[f] = v
+      if (v !== null && v !== undefined)
+        out[f] = typeof v === 'string' ? truncateChars(v, maxChars) : v
     }
   }
   return out
