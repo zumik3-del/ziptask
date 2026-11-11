@@ -61,6 +61,35 @@ describe('pipe formats (v2)', () => {
     expect(out).toBe(`${a}|2|worker-1\n${b}|1|-\n999|0|-`)
   })
 
+  test('list_tasks ids pipe renders any requested field in request order', () => {
+    const a = json(
+      handleCreateTask(svc, { title: 'Fix | me', reporter: 'dev', description: 'the contract' })
+    ).id
+    const out = text(
+      handleListTasks(svc, { ids: [a, 999], fields: ['title', 'description', 'priority'] })
+    )
+    expect(out).toBe(`${a}|1|Fix / me|the contract|p2\n999|0|-|-|-`)
+  })
+
+  test('list_tasks ids json mode returns selected fields and code 0 for an unknown id', () => {
+    const a = json(
+      handleCreateTask(svc, { title: 'Json', reporter: 'dev', description: 'a|b\nc' })
+    ).id
+    const res = json(
+      handleListTasks(svc, { ids: [a, 999], fields: ['title', 'description'], format: 'json' })
+    )
+    expect(res.total).toBe(2)
+    expect(res.tasks[0]).toEqual({ id: a, code: 1, title: 'Json', description: 'a|b\nc' })
+    expect(res.tasks[1]).toEqual({ id: 999, code: 0 })
+  })
+
+  test('format is ignored when filters are used (the filter mode is always json)', () => {
+    json(handleCreateTask(svc, { title: 'Filtered', reporter: 'dev' }))
+    const res = json(handleListTasks(svc, { format: 'pipe' }))
+    expect(res.total).toBe(1)
+    expect(res.tasks[0].title).toBe('Filtered')
+  })
+
   test('list_queue pipe sanitizes | in title', () => {
     json(handleCreateTask(svc, { title: 'Fix | bug | now', reporter: 'dev' }))
     const out = text(handleListQueue(svc, {}))
@@ -153,6 +182,64 @@ describe('get_task / list_tasks fields (v2)', () => {
     expect(all.total).toBeGreaterThan(0)
     const future = json(handleListTasks(svc, { updated_since: Date.now() + 60_000 }))
     expect(future.total).toBe(0)
+  })
+})
+
+describe('max_field_chars (result size cap)', () => {
+  test('get_task truncates a long field and reports the remainder', () => {
+    const id = json(
+      handleCreateTask(svc, { title: 'Cap', reporter: 'dev', description: 'abcdefghij' })
+    ).id
+    const res = json(handleGetTask(svc, { id, fields: ['id', 'description'], max_field_chars: 4 }))
+    expect(res.description).toBe('abcd…(+6 chars)')
+  })
+
+  test('omitting max_field_chars keeps the full text', () => {
+    const id = json(
+      handleCreateTask(svc, { title: 'Full', reporter: 'dev', description: 'abcdefghij' })
+    ).id
+    const res = json(handleGetTask(svc, { id, fields: ['description'] }))
+    expect(res.description).toBe('abcdefghij')
+  })
+
+  test('the cap counts code points, so a surrogate pair is not split', () => {
+    const id = json(
+      handleCreateTask(svc, { title: 'Emoji', reporter: 'dev', description: '😀😀😀😀😀' })
+    ).id
+    const res = json(handleGetTask(svc, { id, fields: ['description'], max_field_chars: 2 }))
+    expect(res.description).toBe('😀😀…(+3 chars)')
+  })
+
+  test('list_tasks json mode applies the cap', () => {
+    json(handleCreateTask(svc, { title: 'ListCap', reporter: 'dev', description: 'abcdefghij' }))
+    const res = json(handleListTasks(svc, { fields: ['id', 'description'], max_field_chars: 3 }))
+    expect(res.tasks[0].description).toBe('abc…(+7 chars)')
+  })
+
+  test('list_tasks ids pipe mode applies the cap', () => {
+    const id = json(
+      handleCreateTask(svc, { title: 'IdsCap', reporter: 'dev', description: 'abcdefghij' })
+    ).id
+    const out = text(
+      handleListTasks(svc, { ids: [id], fields: ['description'], max_field_chars: 3 })
+    )
+    expect(out).toBe(`${id}|1|abc…(+7 chars)`)
+  })
+
+  test('claim_task applies the cap to the requested fields', () => {
+    const id = json(
+      handleCreateTask(svc, { title: 'ClaimCap', reporter: 'dev', description: 'abcdefghij' })
+    ).id
+    const res = json(
+      handleClaimTask(svc, {
+        agent: 'dev',
+        task_id: id,
+        fields: ['title', 'description'],
+        max_field_chars: 8
+      })
+    )
+    expect(res.description).toBe('abcdefgh…(+2 chars)')
+    expect(res.title).toBe('ClaimCap')
   })
 })
 
@@ -328,7 +415,70 @@ describe('get_timeline', () => {
     }
     const out = text(handleGetTimeline(svc, { id }))
     const lines = out.split('\n')
-    expect(lines.length).toBeLessThanOrEqual(50)
+    expect(lines.length).toBe(20)
+  })
+
+  test('since is a forward cursor: the oldest N events at or after it, ascending', () => {
+    let now = Date.parse('2026-01-01T00:00:00.000Z')
+    const clock = { nowMs: () => now, nowIso: () => new Date(now).toISOString() }
+    const cursorSvc = new TaskService(new TaskRepo(db, clock), {
+      leaseTtlMin: 15,
+      scope: 'test',
+      clock
+    })
+    const id = json(handleCreateTask(cursorSvc, { title: 'Cursor', reporter: 'dev' })).id
+    now += 1000
+    handleAddComment(cursorSvc, { id, agent: 'a', content: 'c1' })
+    now += 1000
+    handleAddComment(cursorSvc, { id, agent: 'a', content: 'c2' })
+    now += 1000
+    handleAddComment(cursorSvc, { id, agent: 'a', content: 'c3' })
+
+    const newest = text(handleGetTimeline(cursorSvc, { id, limit: 2 }))
+    expect(newest.split('\n').map((l) => l.split('|')[4])).toEqual(['c2', 'c3'])
+
+    const page1 = text(
+      handleGetTimeline(cursorSvc, { id, since: Date.parse('2026-01-01T00:00:01.000Z'), limit: 2 })
+    )
+    expect(page1.split('\n').map((l) => l.split('|')[4])).toEqual(['c1', 'c2'])
+
+    const page2 = text(
+      handleGetTimeline(cursorSvc, { id, since: Date.parse('2026-01-01T00:00:02.000Z'), limit: 2 })
+    )
+    expect(page2.split('\n').map((l) => l.split('|')[4])).toEqual(['c2', 'c3'])
+
+    const rest = text(
+      handleGetTimeline(cursorSvc, { id, since: Date.parse('2026-01-01T00:00:03.000Z'), limit: 2 })
+    )
+    expect(rest.split('\n').map((l) => l.split('|')[4])).toEqual(['c3'])
+  })
+
+  test('since past the newest event returns empty text', () => {
+    const id = json(handleCreateTask(svc, { title: 'NoNew', reporter: 'dev' })).id
+    expect(text(handleGetTimeline(svc, { id, since: Date.now() + 60_000 }))).toBe('')
+  })
+
+  test('an unrepresentable since is refused without a read', () => {
+    const id = json(handleCreateTask(svc, { title: 'BadSince', reporter: 'dev' })).id
+    const res = handleGetTimeline(svc, { id, since: Number.MAX_SAFE_INTEGER })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toBe('INVALID: invalid since')
+  })
+
+  test('max_text_chars truncates each text with a marker', () => {
+    const id = json(handleCreateTask(svc, { title: 'TextCap', reporter: 'dev' })).id
+    handleAddComment(svc, { id, agent: 'a', content: 'abcdefghij' })
+    const lines = text(handleGetTimeline(svc, { id, max_text_chars: 4 })).split('\n')
+    expect(lines[lines.length - 1].endsWith('|abcd…(+6 chars)')).toBe(true)
+  })
+
+  test('max_text_chars: 0 omits the text column entirely', () => {
+    const id = json(handleCreateTask(svc, { title: 'NoText', reporter: 'dev' })).id
+    handleAddComment(svc, { id, agent: 'a', content: 'hidden note' })
+    const lines = text(handleGetTimeline(svc, { id, max_text_chars: 0 })).split('\n')
+    expect(lines).toHaveLength(2)
+    for (const line of lines) expect(line.split('|')).toHaveLength(4)
+    expect(text(handleGetTimeline(svc, { id, max_text_chars: 0 }))).not.toContain('hidden note')
   })
 
   test('empty timeline for fresh task (only create audit)', () => {

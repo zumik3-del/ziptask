@@ -122,7 +122,7 @@ export interface AuditStore {
     oldValue?: string,
     newValue?: string
   ): void
-  timelineEntries(taskId: number, limit: number): TimelineRow[]
+  timelineEntries(taskId: number, limit: number, sinceIso?: string): TimelineRow[]
 }
 
 export interface Store extends TaskStore, ProjectStore, CommentStore, AuditStore, LeaseStore {}

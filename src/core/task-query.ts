@@ -116,12 +116,21 @@ export class TaskQueryService {
     return ok({ comment_id })
   }
 
-  getTimeline(id: number, limit?: number): SvcResult<ReadonlyArray<Readonly<TimelineRow>>> {
+  getTimeline(
+    id: number,
+    limit?: number,
+    since?: number
+  ): SvcResult<ReadonlyArray<Readonly<TimelineRow>>> {
     this.reaper.reapIfStale()
     const task = this.store.getTaskRow(id)
     if (!task) return fail('NOT_FOUND')
+    if (since !== undefined) {
+      if (!Number.isFinite(since) || Number.isNaN(new Date(since).getTime()))
+        return fail('INVALID', 'invalid since')
+    }
     const limitN = clampLimit(limit, this.opts.timelineLimit)
-    const rows = this.store.timelineEntries(id, limitN)
+    const sinceIso = since === undefined ? undefined : new Date(since).toISOString()
+    const rows = this.store.timelineEntries(id, limitN, sinceIso)
     return ok(rows)
   }
 

@@ -362,19 +362,24 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
 
   timelineEntries(
     taskId: number,
-    limit: number
+    limit: number,
+    sinceIso?: string
   ): Array<{ type: string; agent: string; text: string; created_at: string }> {
     const n = clampLimit(limit, 0)
+    const since = sinceIso === undefined ? '' : ' AND created_at >= ?'
+    const order = sinceIso === undefined ? 'DESC' : 'ASC'
     const sql = `SELECT type, agent, text, created_at FROM (
       SELECT 'action' as type, agent, action || ': ' || COALESCE(old_value, 'null') || '->' || COALESCE(new_value, 'null') as text, created_at, rowid AS rid
-      FROM audit_log WHERE task_id = ?
+      FROM audit_log WHERE task_id = ?${since}
       UNION ALL
       SELECT 'comment', agent, content, created_at, rowid AS rid
-      FROM comments WHERE task_id = ?
-      ORDER BY created_at DESC, type DESC, rid DESC
+      FROM comments WHERE task_id = ?${since}
+      ORDER BY created_at ${order}, type ${order}, rid ${order}
       LIMIT ?
     ) ORDER BY created_at ASC, type ASC, rid ASC`
-    return this.db.query(sql).all(taskId, taskId, n) as Array<{
+    const params: Array<string | number> =
+      sinceIso === undefined ? [taskId, taskId, n] : [taskId, sinceIso, taskId, sinceIso, n]
+    return this.db.query(sql).all(...params) as Array<{
       type: string
       agent: string
       text: string

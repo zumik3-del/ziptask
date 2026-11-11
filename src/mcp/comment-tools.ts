@@ -6,7 +6,8 @@ import {
   pipeJoin,
   MAX_RESULT_LIMIT,
   MAX_AGENT_LENGTH,
-  MAX_CONTENT_LENGTH
+  MAX_CONTENT_LENGTH,
+  MAX_SAFE_TIMESTAMP_MS
 } from '../core/tasks'
 import {
   type ToolResult,
@@ -14,6 +15,7 @@ import {
   rejectUnknownArgs,
   registerTool,
   textResult,
+  truncateChars,
   errorTool,
   TaskId
 } from './common'
@@ -46,7 +48,23 @@ const ADD_COMMENT_SHAPE = {
 
 const GET_TIMELINE_SHAPE = {
   id: TaskId,
-  limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional()
+  limit: z.number().int().positive().max(MAX_RESULT_LIMIT).optional(),
+  since: z
+    .number()
+    .finite()
+    .min(-MAX_SAFE_TIMESTAMP_MS)
+    .max(MAX_SAFE_TIMESTAMP_MS)
+    .optional()
+    .describe(
+      'unix ms; when set, returns the oldest N events at or after it (forward cursor) instead of the newest N'
+    ),
+  max_text_chars: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_CONTENT_LENGTH)
+    .optional()
+    .describe('truncate each text to N code points, marker …(+N chars); 0 omits the text column')
 }
 
 export function handleAddComment(
@@ -67,16 +85,19 @@ export function handleAddComment(
 
 export function handleGetTimeline(
   svc: TaskService,
-  args: { id: number; limit?: number }
+  args: { id: number; limit?: number; since?: number; max_text_chars?: number }
 ): ToolResult {
   const unknown = rejectUnknownArgs('get_timeline', GET_TIMELINE_SHAPE, args)
   if (unknown) return unknown
   return foldResult(
-    svc.getTimeline(args.id, args.limit),
+    svc.getTimeline(args.id, args.limit, args.since),
     (rows) => {
-      const lines = rows.map((row, i) =>
-        pipeJoin(i + 1, row.type, sanitizePipe(row.agent), row.created_at, sanitizePipe(row.text))
-      )
+      const max = args.max_text_chars
+      const lines = rows.map((row, i) => {
+        const head = pipeJoin(i + 1, row.type, sanitizePipe(row.agent), row.created_at)
+        if (max === 0) return head
+        return `${head}|${truncateChars(sanitizePipe(row.text), max)}`
+      })
       return textResult(lines.join('\n'))
     },
     errorTool
@@ -87,7 +108,7 @@ export function registerCommentTools(server: McpServer, svc: TaskService) {
   registerTool(server, svc, {
     name: 'add_comment',
     description:
-      'Add comment to task. Requires non-empty agent and content (content, or its alias text/comment); one-liner from get_template("comment-success") or "comment-failure"',
+      'Add a comment; agent and non-empty content (alias text/comment) are required. One line from get_template("comment-success"/"comment-failure").',
     shape: ADD_COMMENT_SHAPE,
     run: handleAddComment
   })
@@ -95,7 +116,7 @@ export function registerCommentTools(server: McpServer, svc: TaskService) {
   registerTool(server, svc, {
     name: 'get_timeline',
     description:
-      'Merged audit_log + comments feed for a task, pipe seq|type|agent|at|text in ascending order; a limit returns the newest N events',
+      'Merged audit + comments feed, pipe seq|type|agent|at|text ascending. `limit` is the newest N events (default defaults.timelineLimit); `since` (unix ms) switches to a forward cursor: the oldest N at or after it. `max_text_chars` truncates each text (0 omits it).',
     shape: GET_TIMELINE_SHAPE,
     run: handleGetTimeline
   })

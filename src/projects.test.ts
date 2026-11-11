@@ -579,7 +579,7 @@ describe('projects: fail-closed refusals (ADR D2, E1-E4)', () => {
     const direct = handleGetTask(svc, { id, fields: ['id'], project: 'test' } as never)
     expect(direct.isError).toBe(true)
     expect(text(direct)).toBe(
-      'INVALID: unknown argument project on get_task (accepted: fields, id)'
+      'INVALID: unknown argument project on get_task (accepted: fields, id, max_field_chars)'
     )
 
     const refusal = 'INVALID: unknown argument project on'
@@ -594,7 +594,7 @@ describe('projects: fail-closed refusals (ADR D2, E1-E4)', () => {
       text(handleAddComment(svc, { id, agent: 'dev', content: 'x', project: 'test' } as never))
     ).toBe(`${refusal} add_comment (accepted: agent, comment, content, id, text)`)
     expect(text(handleGetTimeline(svc, { id, project: 'test' } as never))).toBe(
-      `${refusal} get_timeline (accepted: id, limit)`
+      `${refusal} get_timeline (accepted: id, limit, max_text_chars, since)`
     )
 
     expect(json(handleGetTask(svc, { id, fields: ['status', 'version'] }))).toEqual({

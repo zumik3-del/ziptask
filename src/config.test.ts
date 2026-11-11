@@ -62,7 +62,7 @@ describe('loadSettings defaults', () => {
     expect(s.defaults.priority).toBe('p2')
     expect(s.defaults.reporter).toBe('system')
     expect(s.defaults.listLimit).toBe(50)
-    expect(s.defaults.timelineLimit).toBe(50)
+    expect(s.defaults.timelineLimit).toBe(20)
     expect(s.defaults.queueLimit).toBe(100)
     expect(s.logging.level).toBe('info')
     expect(s.auditLog).toBe(true)
