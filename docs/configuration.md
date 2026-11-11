@@ -26,7 +26,7 @@ An optional JSON file; `settings.example.json` shows the full shape. Every key i
 | `ZIPTASK_DEFAULTS_PRIORITY` | `p2` | Default `priority` when `create_task` omits it. Accepts the same shapes as `create_task` — the canonical `p0`..`p3`, the number `0`..`3` or the digit string `"0"`..`"3"` (`p0` = highest urgency … `p3` = lowest) — and is stored as the canonical `pN`; anything else aborts the startup, with `Invalid configuration after env overrides: defaults.priority: …` for the env override and `Invalid settings.json: …` for a bad value in the settings file (see [Priorities](mcp-tools.md#priorities)) |
 | `ZIPTASK_DEFAULTS_REPORTER` | `system` | Default `reporter` when `create_task` omits it |
 | `ZIPTASK_DEFAULTS_LIST_LIMIT` | `50` | Fallback `limit` for `list_tasks` JSON mode |
-| `ZIPTASK_DEFAULTS_TIMELINE_LIMIT` | `50` | Fallback `limit` for `get_timeline` |
+| `ZIPTASK_DEFAULTS_TIMELINE_LIMIT` | `20` | Fallback `limit` for `get_timeline` (both the newest-N window and the `since` forward cursor) |
 | `ZIPTASK_DEFAULTS_QUEUE_LIMIT` | `100` | Fallback `limit` for `list_queue` |
 | `ZIPTASK_SETTINGS` | (unset) | Path to `settings.json`; `--settings` takes precedence |
 

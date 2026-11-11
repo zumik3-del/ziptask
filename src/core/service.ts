@@ -135,8 +135,12 @@ export class TaskService {
     return this.query.addComment(args)
   }
 
-  getTimeline(id: number, limit?: number): SvcResult<ReadonlyArray<Readonly<TimelineRow>>> {
-    return this.query.getTimeline(id, limit)
+  getTimeline(
+    id: number,
+    limit?: number,
+    since?: number
+  ): SvcResult<ReadonlyArray<Readonly<TimelineRow>>> {
+    return this.query.getTimeline(id, limit, since)
   }
 
   listComments(id: number): SvcResult<ReadonlyArray<Readonly<CommentRow>>> {
