@@ -158,26 +158,62 @@ function formatIssues(error: z.ZodError): string {
 
 const SETTINGS_FLAG = '--settings'
 const SETTINGS_FLAG_PREFIX = `${SETTINGS_FLAG}=`
+const STDIO_FLAG = '--stdio'
+const VERSION_FLAG = '--version'
+const HELP_FLAG = '--help'
+
+export interface CliArgs {
+  stdio: boolean
+  version: boolean
+  help: boolean
+  settingsPath?: string
+}
+
+export const CLI_USAGE = `Usage: ziptask [options]
+
+Options:
+  --stdio            serve MCP over stdio instead of HTTP
+  --settings <path>  read settings.json from <path> (also --settings=<path>)
+  --version          print "ziptask <version>" and exit
+  --help             print this help and exit`
 
 function missingSettingsPath(value: string | undefined): Error {
   return new Error(`Missing path for --settings${value ? ` (got '${value}')` : ''}`)
 }
 
-function settingsPathFromArgv(argv: string[]): string | undefined {
+// Pure argv parsing: no filesystem, env or DB access, so --version and --help stay
+// independent of configuration validity.
+export function parseCliArgs(argv: string[]): CliArgs {
+  const parsed: CliArgs = { stdio: false, version: false, help: false }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
+    if (arg === STDIO_FLAG) {
+      parsed.stdio = true
+      continue
+    }
+    if (arg === VERSION_FLAG) {
+      parsed.version = true
+      continue
+    }
+    if (arg === HELP_FLAG) {
+      parsed.help = true
+      continue
+    }
     let value: string | undefined
     if (arg === SETTINGS_FLAG) {
       value = argv[i + 1]
+      i++
     } else if (arg.startsWith(SETTINGS_FLAG_PREFIX)) {
       value = arg.slice(SETTINGS_FLAG_PREFIX.length)
+    } else if (arg.startsWith('-')) {
+      throw new Error(`Unknown flag: ${arg} (try --help)`)
     } else {
       continue
     }
     if (!value || value.startsWith('-')) throw missingSettingsPath(value)
-    return value
+    parsed.settingsPath = value
   }
-  return undefined
+  return parsed
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -255,13 +291,13 @@ export function loadSettings(opts?: {
   const env = opts?.env ?? process.env
   const argv = opts?.argv ?? process.argv
 
-  const cliSettingsPath = settingsPathFromArgv(argv)
+  const cli = parseCliArgs(argv)
 
   let settingsPath: string | null = null
   if (opts?.path) {
     settingsPath = opts.path
-  } else if (cliSettingsPath) {
-    settingsPath = resolve(cliSettingsPath)
+  } else if (cli.settingsPath) {
+    settingsPath = resolve(cli.settingsPath)
   } else if (env.ZIPTASK_SETTINGS) {
     settingsPath = resolve(env.ZIPTASK_SETTINGS)
   }

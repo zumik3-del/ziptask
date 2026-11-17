@@ -74,16 +74,9 @@ export const TASK_STATUSES = TASK_STATUS_VALUES
 
 // Named statuses for the write paths: a store spells `STATUS.queued` instead of the literal, so the
 // vocabulary stays in this module and a typo is a compile error.
-export const STATUS = Object.freeze({
-  queued: 'queued',
-  in_progress: 'in_progress',
-  review: 'review',
-  done: 'done',
-  failed: 'failed',
-  blocked: 'blocked',
-  canceled: 'canceled',
-  open: 'open'
-} as const satisfies Record<TaskStatus, TaskStatus>)
+export const STATUS = Object.freeze(
+  Object.fromEntries(TASK_STATUS_VALUES.map((status) => [status, status] as const))
+) as { readonly [K in TaskStatus]: K } satisfies Record<TaskStatus, TaskStatus>
 
 export const EDITABLE_STATUSES: readonly TaskStatus[] = Object.freeze([STATUS.queued, STATUS.open])
 

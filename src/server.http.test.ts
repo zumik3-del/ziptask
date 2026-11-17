@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { Client } from '@modelcontextprotocol/client'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
@@ -131,6 +131,7 @@ describe('GET /api/task/:id HTTP endpoint', () => {
     expect(res.status).toBe(400)
     const body = (await res.json()) as any
     expect(body.error).toBeDefined()
+    expect(body).toEqual({ error: 'INVALID: invalid task id' })
   })
 
   test('empty id → 400', async () => {
@@ -283,11 +284,73 @@ describe('GET /api/tasks HTTP endpoint', () => {
     expect(body.error).toBe('INVALID: project required')
   })
 
-  test('unknown project returns 400 with INVALID: unknown project...', async () => {
+  test('unknown project returns 404 with the service body verbatim', async () => {
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=unknown_project`)
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
     const body = (await res.json()) as any
-    expect(body.error).toContain("INVALID: unknown project 'unknown_project'")
+    expect(body).toEqual({
+      error: `INVALID: unknown project 'unknown_project' (known: ${TEST_PROJECT_SLUG})`
+    })
+  })
+})
+
+describe('read API error contract (#2579)', () => {
+  let srv: TestServer
+
+  beforeEach(() => {
+    srv = startTestServer()
+  })
+  afterEach(() => {
+    srv.stop()
+  })
+
+  test('GET /api/task/abc → 400 { error: "INVALID: invalid task id" }', async () => {
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/abc`)
+    expect(res.status).toBe(400)
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+    expect(await res.json()).toEqual({ error: 'INVALID: invalid task id' })
+  })
+
+  test('GET /api/tasks?project=<unknown> on a store with no projects → 404 verbatim', async () => {
+    srv.db.run('DELETE FROM projects')
+    const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=unknown_project`)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+    expect(await res.json()).toEqual({
+      error:
+        "INVALID: unknown project 'unknown_project' (no projects defined; create one with create_project)"
+    })
+  })
+
+  test('GET /api/task/:id maps a NOT_FOUND service error to 404', async () => {
+    const spy = spyOn(srv.svc, 'getTaskView').mockReturnValue({
+      ok: false,
+      error: { code: 'NOT_FOUND', message: 'no such task' }
+    })
+    try {
+      const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/1`)
+      expect(res.status).toBe(404)
+      expect(res.headers.get('access-control-allow-origin')).toBe('*')
+      expect(await res.json()).toEqual({ error: 'NOT_FOUND: no such task' })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  test('GET /api/task/:id maps any other service error to 400', async () => {
+    const spy = spyOn(srv.svc, 'getTaskView').mockReturnValue({
+      ok: false,
+      error: { code: 'INVALID', message: 'stubbed refusal' }
+    })
+    try {
+      const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/1`)
+      expect(res.status).toBe(400)
+      expect(res.headers.get('access-control-allow-origin')).toBe('*')
+      expect(await res.json()).toEqual({ error: 'INVALID: stubbed refusal' })
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 

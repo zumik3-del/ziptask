@@ -2,6 +2,6 @@
 
 All notable changes to this project are documented in the [GitHub Releases](https://github.com/zumik3-del/ziptask/releases).
 
-## v0.5.5
+## v0.8.0
 
-Current release. See the [release notes](https://github.com/zumik3-del/ziptask/releases/tag/v0.5.5) for details.
+Current release. See the [release notes](https://github.com/zumik3-del/ziptask/releases/tag/v0.8.0) for details.

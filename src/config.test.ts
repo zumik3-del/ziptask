@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { loadSettings, DEFAULTS, setNested, type Settings } from './config'
+import { loadSettings, parseCliArgs, DEFAULTS, setNested, type Settings } from './config'
 import { createLogger } from './logger'
 import { TaskService } from './core/service'
 import { taskStoreStubs } from './test-context'
@@ -462,6 +462,100 @@ describe('ZIPTASK_LOG_LEVEL hand-off to the logger', () => {
     } finally {
       writeSpy.mockRestore()
     }
+  })
+})
+
+describe('parseCliArgs (#2578)', () => {
+  test('an argv with no flags yields every boolean false and no settings path', () => {
+    expect(parseCliArgs(['node', 'src/index.ts'])).toEqual({
+      stdio: false,
+      version: false,
+      help: false
+    })
+  })
+
+  test('--stdio, --version and --help are each recognised on their own', () => {
+    expect(parseCliArgs(['node', '--stdio']).stdio).toBe(true)
+    expect(parseCliArgs(['node', '--version']).version).toBe(true)
+    expect(parseCliArgs(['node', '--help']).help).toBe(true)
+  })
+
+  test('boolean flags combine and leave the unrequested ones false', () => {
+    expect(parseCliArgs(['node', '--stdio', '--version', '--help'])).toEqual({
+      stdio: true,
+      version: true,
+      help: true
+    })
+    expect(parseCliArgs(['node', '--version'])).toEqual({
+      stdio: false,
+      version: true,
+      help: false
+    })
+  })
+
+  test('positional arguments are ignored rather than refused', () => {
+    expect(parseCliArgs(['node', 'src/index.ts', 'some-positional'])).toEqual({
+      stdio: false,
+      version: false,
+      help: false
+    })
+  })
+
+  test('--settings <path> and --settings=<path> both record the path', () => {
+    expect(parseCliArgs(['node', '--settings', 'a.json']).settingsPath).toBe('a.json')
+    expect(parseCliArgs(['node', '--settings=a.json']).settingsPath).toBe('a.json')
+  })
+
+  test('--settings does not swallow the following flag', () => {
+    expect(() => parseCliArgs(['node', '--settings', '--stdio'])).toThrow(
+      /^Missing path for --settings \(got '--stdio'\)$/
+    )
+    expect(parseCliArgs(['node', '--stdio', '--settings', 'a.json'])).toEqual({
+      stdio: true,
+      version: false,
+      help: false,
+      settingsPath: 'a.json'
+    })
+  })
+
+  test('a missing or empty --settings value throws Missing path for --settings', () => {
+    expect(() => parseCliArgs(['node', '--settings'])).toThrow(/^Missing path for --settings$/)
+    expect(() => parseCliArgs(['node', '--settings='])).toThrow(/^Missing path for --settings$/)
+  })
+
+  test('a flag-like --settings= value is refused instead of read as a path', () => {
+    expect(() => parseCliArgs(['node', '--settings=--version'])).toThrow(
+      /^Missing path for --settings \(got '--version'\)$/
+    )
+  })
+
+  test('an unrecognised flag is refused by name with the help hint', () => {
+    expect(() => parseCliArgs(['node', '--setings', 'x.json'])).toThrow(
+      /^Unknown flag: --setings \(try --help\)$/
+    )
+    expect(() => parseCliArgs(['node', '-x'])).toThrow(/^Unknown flag: -x \(try --help\)$/)
+  })
+
+  test('a recognised flag error wins over a later unknown flag', () => {
+    expect(() => parseCliArgs(['node', '--settings', '--bogus'])).toThrow(
+      /^Missing path for --settings \(got '--bogus'\)$/
+    )
+  })
+})
+
+describe('loadSettings settings path precedence (#2578)', () => {
+  test('opts.path wins over --settings and ZIPTASK_SETTINGS', () => {
+    const optsFile = writeSettingsJson(testDir, { dbPath: '/tmp/opts-path-wins.db' })
+    const cliFile = join(testDir, 'cli-settings.json')
+    writeFileSync(cliFile, JSON.stringify({ dbPath: '/tmp/cli-path-loses.db' }))
+    const envFile = join(testDir, 'env-settings-precedence.json')
+    writeFileSync(envFile, JSON.stringify({ dbPath: '/tmp/env-path-loses.db' }))
+    const s = loadSettings({
+      path: optsFile,
+      env: { ZIPTASK_SETTINGS: envFile },
+      argv: ['node', '--settings', cliFile]
+    })
+    expect(s.dbPath).toBe('/tmp/opts-path-wins.db')
   })
 })
 

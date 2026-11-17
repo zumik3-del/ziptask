@@ -6,6 +6,7 @@ import type { TaskService } from './core/service'
 import { formatError } from './core/result'
 import { TASK_STATUS_VALUES } from './core/tasks'
 import type { Task, TaskPriority, TaskStatus } from './core/tasks'
+import type { SvcError } from './core/types'
 import { createMcpServer } from './mcp/server'
 import type { Logger } from './logger'
 import { isLoopbackHost } from './config'
@@ -205,6 +206,16 @@ export function projectTask(task: Task): {
 }
 
 // EXPERIMENTAL: provisional read-only endpoint, response shape subject to change.
+// Every /api error goes through here, so the body is always the MCP vocabulary `<CODE>: <message>`
+// and a missing resource is 404 while a refused request is 400.
+function apiError(
+  error: SvcError,
+  status: number = error.code === 'NOT_FOUND' ? 404 : 400
+): Response {
+  return Response.json({ error: formatError(error) }, { status })
+}
+
+// EXPERIMENTAL: provisional read-only endpoint, response shape subject to change.
 function handleTaskList(svc: TaskService, url: URL): Response {
   const project = url.searchParams.get('project') ?? undefined
   const status = url.searchParams.get('status') ?? undefined
@@ -212,21 +223,24 @@ function handleTaskList(svc: TaskService, url: URL): Response {
     status !== undefined &&
     !TASK_STATUS_VALUES.includes(status as (typeof TASK_STATUS_VALUES)[number])
   ) {
-    return Response.json({ error: 'INVALID: invalid status' }, { status: 400 })
+    return apiError({ code: 'INVALID', message: 'invalid status' })
   }
   const limitRaw = url.searchParams.get('limit')
   let limit: number | undefined
   if (limitRaw !== null) {
     limit = Number(limitRaw)
     if (!Number.isInteger(limit) || limit <= 0) {
-      return Response.json({ error: 'INVALID: invalid limit' }, { status: 400 })
+      return apiError({ code: 'INVALID', message: 'invalid limit' })
     }
   }
-  const result = svc.listTasks({ project, status: status as TaskStatus, limit })
-  if (!result.ok) {
-    const httpStatus = result.error.code === 'NOT_FOUND' ? 404 : 400
-    return Response.json({ error: formatError(result.error) }, { status: httpStatus })
+  // A requested slug that resolves to nothing is a missing resource, unlike the absent parameter
+  // that listTasks itself refuses as INVALID: project required.
+  if (project !== undefined) {
+    const resolved = svc.projects.resolve(project)
+    if (!resolved.ok) return apiError(resolved.error, 404)
   }
+  const result = svc.listTasks({ project, status: status as TaskStatus, limit })
+  if (!result.ok) return apiError(result.error)
   const tasks = result.data.tasks.map(projectTask)
   return Response.json({ tasks, total: result.data.total })
 }
@@ -236,12 +250,10 @@ function handleTaskView(svc: TaskService, pathname: string): Response {
   const rawId = pathname.slice('/api/task/'.length)
   const id = Number(rawId)
   if (rawId.length === 0 || !Number.isInteger(id)) {
-    return Response.json({ error: 'Invalid task id' }, { status: 400 })
+    return apiError({ code: 'INVALID', message: 'invalid task id' })
   }
   const view = svc.getTaskView(id)
-  if (!view.ok) {
-    return Response.json({ error: formatError(view.error) }, { status: 404 })
-  }
+  if (!view.ok) return apiError(view.error)
   const comments = svc.listComments(id)
   return Response.json({
     task: view.data.task,

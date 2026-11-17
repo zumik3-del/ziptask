@@ -13,6 +13,8 @@ Every path returns `404` `Not Found` when it does not match. No endpoint authent
 
 The two `/api/*` read endpoints are browser-facing, so they answer with permissive CORS headers (`Access-Control-Allow-Origin: *`, `Allow-Methods: GET, OPTIONS`, `Allow-Headers: Content-Type`) on success and on error alike, and an `OPTIONS` preflight returns `204` with no body. `/mcp` carries no CORS headers: it is an agent-to-server channel, not a page fetch.
 
+Every `/api/*` error goes through one helper (`apiError`, `src/server.ts`), which fixes both the status and the body shape: `NOT_FOUND` → `404`, any other service error code → `400`, unless the handler passes a status of its own — the unknown `project` check below is the only caller that does, and it passes `404`. The body is always `{"error":"<CODE>: <message>"}` (`formatError`, `src/core/result.ts`), the same `<CODE>: <message>` vocabulary the MCP tools return, and a code that carries no message renders as `<CODE>:`.
+
 `GET /health` is purely additive over `{"ok":true}`: `version` carries the running package version (no leading `v`) so the deploy framework's health gate can compare it against the target release (`HEALTH_VERSION_FIELD`, `expected = ${TAG#v}`).
 
 ## MCP stream resumability
@@ -47,10 +49,12 @@ Errors:
 | Condition | Status | Body |
 |---|---|---|
 | missing `project` | `400` | `{"error":"INVALID: project required"}` |
-| unknown `project`, other projects exist | `400` | `{"error":"INVALID: unknown project 'x' (known: ...)"}` |
-| unknown `project`, no project defined at all | `400` | `{"error":"INVALID: unknown project 'x' (no projects defined; create one with create_project)"}` |
+| unknown `project`, other projects exist | `404` | `{"error":"INVALID: unknown project 'x' (known: ...)"}` |
+| unknown `project`, no project defined at all | `404` | `{"error":"INVALID: unknown project 'x' (no projects defined; create one with create_project)"}` |
 | invalid `status` | `400` | `{"error":"INVALID: invalid status"}` |
 | invalid `limit` | `400` | `{"error":"INVALID: invalid limit"}` |
+
+Both unknown-`project` rows are `404` although their code is `INVALID`, because no code separates them from the missing parameter: a slug that resolves to no project is a missing resource, while the absent parameter is a refused request, so `handleTaskList` (`src/server.ts`) resolves an explicitly supplied `project` itself and answers `404` there. An invalid `status` or `limit` is checked first, so `?project=<unknown>&status=<invalid>` is `400`.
 
 Because it routes through the service, this read also triggers the [lazy lease reap](mcp-tools.md#reads-and-lease-reap).
 
@@ -78,7 +82,9 @@ Errors:
 
 | Condition | Status | Body |
 |---|---|---|
-| non-integer or empty id | `400` | `{"error":"Invalid task id"}` |
+| non-integer or empty id | `400` | `{"error":"INVALID: invalid task id"}` |
 | unknown id | `404` | `{"error":"NOT_FOUND:"}` |
+
+A well-formed id that matches no row fails as `NOT_FOUND` with an empty message (`getTaskView`, `src/core/task-query.ts`), which is why the body ends at the colon.
 
 Because it routes through the service, this read also triggers the [lazy lease reap](mcp-tools.md#reads-and-lease-reap) — it can change task state and bump `version`.

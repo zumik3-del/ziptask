@@ -23,11 +23,18 @@ One-liner — installs the published binary via the `deploy/` framework (see
 curl -fsSL https://raw.githubusercontent.com/zumik3-del/ziptask/main/deploy/install.sh | bash
 
 # from a checkout, or pinned to a version
-sudo bash deploy/install.sh --version v0.5.5
+sudo bash deploy/install.sh --version v0.8.0
 ```
+
+Both forms need root for `/opt`, `/var/lib` and the unit: the piped form calls
+`sudo` for each privileged step, so run it as a user who can sudo; the checkout
+form is shown with `sudo`.
 
 Canonical layout: binary in `/opt/ziptask`, database **and** `settings.json` in
 `/var/lib/ziptask/`, deploy state (helpers, hooks, `app.env`) in `~/.ziptask/`.
+`/opt/ziptask/data` is a symlink to `/var/lib/ziptask` that the installer
+creates, because the shipped `dbPath` is relative.
+
 `--port N` seeds a fresh `settings.json` with `port: N` and points the health
 check at it (an existing file is never rewritten); `--dir D` moves the payload,
 the config and the database under `D` (config at `D/data/settings.json`) while
@@ -41,8 +48,9 @@ updates keep using `D` and `N` instead of the canonical `/opt/ziptask` and
 
 The deploy state is root-owned (`app.env` is `0640 root:<service-group>`,
 directories and helper scripts `0750`), so the service account and the account
-that runs the update must be in that group. `updater.sh` and `uninstall.sh` are
-installed into `~/.ziptask/scripts/`. Every entry point — `install.sh`,
+that runs the update must be in that group. Five files — `update.sh`,
+`updater.sh`, `uninstall.sh`, `common.sh` and `app.env` — are installed into
+`~/.ziptask/scripts/`. Every entry point — `install.sh`,
 `update.sh`, `uninstall.sh` and `updater.sh` — screens `~/.ziptask`, `scripts/`,
 `hooks/` and `scripts/app.env` and aborts before changing anything if one of them
 is a symlink (dangling included): `cp`, `chown`, `chmod`, `source` and `bash` all
@@ -52,6 +60,9 @@ Inspect the link, remove it, re-run.
 The layout, the unit policy and the per-app `app.env` keys are shared with
 synaptomind and subagentix and documented once, in
 [zumik3-del/synaptomind `docs/DEPLOY-LAYOUT.md`](https://github.com/zumik3-del/synaptomind/blob/main/docs/DEPLOY-LAYOUT.md).
+That document is the shared map; [`deploy/app.env`](deploy/app.env) stays the
+source of truth for ziptask's own keys, and its ziptask column lags this repo on
+`HEALTH_VERSION_FIELD`, `SERVICE_USER` and the `app.env` mode.
 
 Prebuilt release binaries target Linux x86_64 only. On other platforms (macOS, arm64 Linux) build from source with `bun run build:bin`.
 
@@ -79,8 +90,23 @@ sudo systemctl enable ziptask     # auto-start on boot
 journalctl -u ziptask -f         # live logs
 ```
 
-Remove with `bash ~/.ziptask/scripts/uninstall.sh`. It keeps the binary, the
-database and the state directory by default; add `--purge` to delete them.
+Remove with `bash ~/.ziptask/scripts/uninstall.sh`. It always removes the unit
+and `~/.ziptask/scripts/`; the binary and the database stay unless you pass
+`--purge`, and `~/.ziptask` itself is never deleted.
+
+### Update
+
+```bash
+bash ~/.ziptask/scripts/updater.sh                    # newest stable release, interactive
+bash ~/.ziptask/scripts/updater.sh --version v0.8.0   # pin a release
+bash ~/.ziptask/scripts/update.sh --version v0.8.0    # direct, for a prerelease or an exact tag
+```
+
+An update stages the release, backs the database up and swaps the binary,
+keeping the previous one as `ziptask.prev`. When the health check fails it
+prints the exact rollback — move `.prev` back, restore the database — and
+nothing is rolled back automatically. See
+[Configuration](docs/configuration.md#upgrade-path).
 
 ### MCP client config (stdio)
 
@@ -96,13 +122,15 @@ database and the state directory by default; add `--purge` to delete them.
 }
 ```
 
-Pass `--settings` so the DB path and options come from `settings.json` regardless of the client's working directory — otherwise the DB defaults to `./data/ziptask.db` under the client's cwd. Clients do not expand `~` in `command`/`args`, so substitute the absolute path (`/var/lib/ziptask/settings.json` in the canonical layout).
+Pass `--settings` so the DB path and options come from `settings.json` regardless of the client's working directory — otherwise the DB defaults to `./data/ziptask.db` under the client's cwd. Clients do not expand `~` in `command`/`args`, so substitute the absolute path (`/var/lib/ziptask/settings.json` in the canonical layout). The installer seeds that file `0600` for the service account, so a stdio client running as another account needs read access to it — and write access to the database directory — or it cannot open the DB.
 
 ### MCP client config (remote HTTP)
 
 When the service is running on the same host, point the client at the HTTP endpoint instead:
 
 ```jsonc
+// opencode's MCP config shape ("mcp" + "type": "remote"); other clients call the
+// key "mcpServers" and spell the remote transport in their own way
 {
   "mcp": {
     "ziptask": { "type": "remote", "url": "http://127.0.0.1:3005/mcp" }
@@ -114,7 +142,7 @@ The endpoint has no authentication, so keep it bound to `127.0.0.1` (`ZIPTASK_HO
 
 ## Quick start (from source)
 
-Requires [Bun](https://bun.sh) ≥ 1.4.
+Requires [Bun](https://bun.sh) 1.4.2 — the version CI pins.
 
 ```bash
 bun install
@@ -127,6 +155,7 @@ bun run start:stdio    # run over stdio
 ```bash
 bun run build:bin        # produces dist/ziptask
 dist/ziptask --version   # prints ziptask and the package.json version
+dist/ziptask --help      # lists the flags
 dist/ziptask --stdio     # runs as stdio MCP server
 ```
 
@@ -146,13 +175,16 @@ The public task API is MCP, exposed at `POST`/`GET`/`DELETE` `/mcp`, alongside `
 ## Development
 
 ```bash
-bun test               # unit tests (per-test temp DBs)
-bunx tsc --noEmit      # type check
-bun run lint           # biome check src/ scripts/
-bun run src/smoke.ts   # MCP end-to-end over HTTP (ephemeral port + temp DB)
+bun run dev                # HTTP server under --watch
+bun test                   # unit tests (per-test temp DBs)
+bunx tsc --noEmit          # type check
+bun run lint               # biome check src/ scripts/ (lint + format check)
+bun run format             # biome format --write src/ scripts/
+bun run check:boundaries   # mcp -> core -> db import direction (CI gate)
+bun run src/smoke.ts       # MCP end-to-end over HTTP (ephemeral port + temp DB)
 ```
 
-`CHANGELOG.md` is a short pointer to the current release, updated by hand at release time; the per-release notes are generated on GitHub from the merge commits. There is no changelog script — `release.yml` creates the tag and the Release on `main`.
+`CHANGELOG.md` is a short pointer to the current release, updated by hand at release time; the per-release notes are generated from the non-merge commits since the previous tag. There is no changelog script — `release.yml` creates the tag and the Release on `main`.
 
 ## Documentation
 
