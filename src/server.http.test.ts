@@ -283,9 +283,9 @@ describe('GET /api/tasks HTTP endpoint', () => {
     expect(body.error).toBe('INVALID: project required')
   })
 
-  test('unknown project returns 400 with INVALID: unknown project...', async () => {
+  test('unknown project returns 404 with INVALID: unknown project...', async () => {
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/tasks?project=unknown_project`)
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(404)
     const body = (await res.json()) as any
     expect(body.error).toContain("INVALID: unknown project 'unknown_project'")
   })
