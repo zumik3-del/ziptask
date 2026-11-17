@@ -127,6 +127,7 @@ bun run start:stdio    # run over stdio
 ```bash
 bun run build:bin        # produces dist/ziptask
 dist/ziptask --version   # prints ziptask and the package.json version
+dist/ziptask --help      # lists the flags
 dist/ziptask --stdio     # runs as stdio MCP server
 ```
 

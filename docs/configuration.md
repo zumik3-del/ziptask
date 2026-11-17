@@ -2,6 +2,19 @@
 
 Layered: built-in defaults → `settings.json` → environment variables (env wins).
 
+## Command line flags
+
+`parseCliArgs` (`src/config.ts`) reads the flags before any configuration layer is read: it touches no file, no environment variable and no database, and `src/index.ts` answers `--help` and `--version` before `loadSettings` is called — both therefore work when `settings.json` is missing, unreadable or invalid, and exit `0`.
+
+| Flag | Effect |
+|---|---|
+| `--stdio` | serve MCP over stdio instead of HTTP |
+| `--settings <path>` | read `settings.json` from `<path>`; `--settings=<path>` is equivalent, and `ZIPTASK_SETTINGS` is the fallback ([`settings.json`](#settingsjson)) |
+| `--version` | print `ziptask <version>` (`VERSION`, `src/version.ts` — the `package.json` version) and exit `0`; the DB is not opened |
+| `--help` | print the usage block (`CLI_USAGE`, `src/config.ts`) and exit `0`; it wins over `--version` when both are given |
+
+An argument that starts with `-` and matches no flag aborts before anything else — `Unknown flag: <arg> (try --help)` on stderr, exit `1`; `-` alone and `--bogus` alike. `--settings` without a value, or followed by one that starts with `-`, aborts the same way with `Missing path for --settings`, plus ` (got '<value>')` when a value was read (`--settings=` is empty, so it gets the bare message). Arguments that do not start with `-` are ignored, so a stray positional does not stop the server.
+
 ## `settings.json`
 
 An optional JSON file; `settings.example.json` shows the full shape. Every key is optional and merged over the defaults, so a partial file is valid. The framework installer seeds **`/var/lib/ziptask/settings.json`** from that example (only when the file is absent), rewrites the seeded `port` and `dbPath` to the values the install resolved (`PORT` — or `--port N` — and `DATA_DIR`), and passes `--settings` in the systemd unit, so the service always reads it. An existing file is never rewritten, and it is also where the health gate reads the port from. `--dir D` moves that home to `D/data/settings.json`. Both `--port N` and `--dir D` are also persisted into the installed `~/.ziptask/scripts/app.env` (`INSTALL_DIR`, `DATA_DIR`, `EXEC_START`, `CONFIG_FILE`, `PORT`) — the file `updater.sh`/`update.sh` load on later runs — so the host keeps updating `D` and polling `N` instead of falling back to the canonical `/opt/ziptask`, `/var/lib/ziptask` and `3005`. A stdio client must pass the same path itself (the canonical one is `/var/lib/ziptask/settings.json`). That path is `DATA_DIR` — the app's config home, beside its database (ADR addendum R1, epic #1105) — not `~/.ziptask`, which is the deploy framework's own state directory. Select a file with `--settings <path>` (the `--settings=<path>` form is equivalent) or the `ZIPTASK_SETTINGS` env var (`--settings` wins). The shipped example sets `dbPath` to an absolute path (`/var/lib/ziptask/ziptask.db`) so stdio clients don't create the DB under their own cwd. Keys mirror the environment variables below: `dbPath`, `host`, `port`, `leaseTtlMin`, `maxAttempts`, `reapCooldownSec`, `autoClaimCeiling`, `http.maxSessions`, `http.sessionTtlMs`, `defaults.priority`, `defaults.reporter`, `defaults.listLimit`, `defaults.timelineLimit`, `defaults.queueLimit`, `logging.level`, `auditLog`.
