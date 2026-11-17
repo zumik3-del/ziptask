@@ -4,9 +4,27 @@ import { TaskRepo } from './db/repo'
 import { TaskService, type TaskServiceOptions } from './core/service'
 import { createMcpServer } from './mcp/server'
 import { startHttp } from './server'
-import { loadSettings } from './config'
+import { CLI_USAGE, parseCliArgs, loadSettings, type CliArgs } from './config'
 import { createLogger, normalizeError } from './logger'
 import { VERSION } from './version'
+
+let cli: CliArgs
+try {
+  cli = parseCliArgs(process.argv)
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err))
+  process.exit(1)
+}
+
+if (cli.help) {
+  console.log(CLI_USAGE)
+  process.exit(0)
+}
+
+if (cli.version) {
+  console.log(`ziptask ${VERSION}`)
+  process.exit(0)
+}
 
 const settingsWarnings: Array<{ message: string; fields: Record<string, unknown> }> = []
 const settings = loadSettings({
@@ -23,12 +41,6 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   logger.error('unhandled rejection', normalizeError(reason))
 })
-
-const wantsVersion = process.argv.includes('--version')
-if (wantsVersion) {
-  console.log(`ziptask ${VERSION}`)
-  process.exit(0)
-}
 
 try {
   const db = openDatabase(settings.dbPath)
@@ -51,8 +63,7 @@ try {
     logger.info('ziptask started', { version: VERSION, dbPath: settings.dbPath })
   }
 
-  const isStdio = process.argv.includes('--stdio')
-  if (isStdio) {
+  if (cli.stdio) {
     startStdio()
   } else {
     startHttp({
