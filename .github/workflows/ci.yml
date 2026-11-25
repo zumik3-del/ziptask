@@ -35,7 +35,7 @@ jobs:
         with:
           bun-version: 1.4.5
       - run: bun install --frozen-lockfile
-      - run: bunx biome check src/ scripts/
+      - run: bunx biome check src/ scripts/ deploy/
       - name: "Check layer boundaries (mcp -> core -> db)"
         run: bun run check:boundaries
       - run: bunx tsc --noEmit

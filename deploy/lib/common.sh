@@ -757,7 +757,11 @@ parse_json_embedder() {
 # v0.8.0"), so every comparison must run both operands through normalize_v.
 app_version() {
   local bin="$1" out cmd
-  cmd="${APP_VERSION_CMD:-\${BIN} --version}"
+  # The escaped `\}` is load-bearing: an unescaped one closes the `:-` expansion at
+  # `${BIN`, so the command becomes `${BIN} --version --version}` (or `${BIN
+  # --version}` when unset) and app_version reports nothing for any binary, which
+  # aborts every install and update at the version gate. See app-version.test.ts.
+  cmd="${APP_VERSION_CMD:-\${BIN\} --version}"
   out="$(BIN="$bin" sh -c "$cmd" 2>/dev/null || true)"
   out="${out%%$'\n'*}"
   printf '%s' "${out#"${APP_NAME}" }"
