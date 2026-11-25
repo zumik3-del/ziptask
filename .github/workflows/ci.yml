@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.5
       - run: bun install --frozen-lockfile
       - name: "Validate PR title (conventional commits)"
         env:
@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.5
       - run: bun install --frozen-lockfile
       - run: bunx biome check src/ scripts/
       - name: "Check layer boundaries (mcp -> core -> db)"
