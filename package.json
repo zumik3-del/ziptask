@@ -13,7 +13,7 @@
     "test": "bun test",
     "check:boundaries": "bun run scripts/check-boundaries.ts",
     "format": "biome format --write src/ scripts/",
-    "lint": "bunx biome check src/ scripts/"
+    "lint": "bunx biome check src/ scripts/ deploy/"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.4.0",
