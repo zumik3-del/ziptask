@@ -1,7 +1,13 @@
 import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod/v4'
 import type { TaskService } from '../core/service'
-import { type ToolResult, rejectUnknownArgs, registerTool, textResult } from './common'
+import {
+  type ToolResult,
+  rejectUnknownArgs,
+  registerTool,
+  textResult,
+  READ_ONLY_ANNOTATIONS
+} from './common'
 
 import taskTemplate from '../../templates/task-description.md' with { type: 'text' }
 import epicTemplate from '../../templates/epic.md' with { type: 'text' }
@@ -19,7 +25,7 @@ const TEMPLATES: Record<TemplateName, string> = {
 }
 
 const GET_TEMPLATE_SHAPE = {
-  name: z.enum(TEMPLATE_NAMES)
+  name: z.enum(TEMPLATE_NAMES).describe('template name')
 }
 
 export function handleGetTemplate(args: { name: TemplateName }): ToolResult {
@@ -31,7 +37,9 @@ export function handleGetTemplate(args: { name: TemplateName }): ToolResult {
 export function registerTemplateTools(server: McpServer, svc: TaskService) {
   registerTool(server, svc, {
     name: 'get_template',
-    description: 'Return a markdown template by name',
+    annotations: READ_ONLY_ANNOTATIONS,
+    description:
+      'Return the template text: `task`/`epic` for a create_task description, `comment-success`/`comment-failure` for an add_comment body.',
     shape: GET_TEMPLATE_SHAPE,
     run: (_svc, args: { name: TemplateName }) => handleGetTemplate(args)
   })

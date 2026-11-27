@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/server'
+import type { McpServer, ToolAnnotations } from '@modelcontextprotocol/server'
 import { z } from 'zod/v4'
 import type { Task } from '../core/tasks'
 import type { TaskService } from '../core/service'
@@ -71,6 +71,27 @@ export function rejectUnknownArgs(tool: string, shape: object, args: object): To
   )
 }
 
+export const READ_ONLY_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false
+}
+
+export const MUTATING_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false
+}
+
+export const DESTRUCTIVE_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false
+}
+
 // One registration seam for every tool: the advertised inputSchema is always
 // z.object(shape).catchall(z.unknown()). Without the catchall the SDK strips an unknown
 // argument before it reaches rejectUnknownArgs, so the INVALID: unknown argument… refusal
@@ -78,6 +99,7 @@ export function rejectUnknownArgs(tool: string, shape: object, args: object): To
 export type ToolSpec<S extends z.ZodRawShape> = {
   name: string
   description: string
+  annotations: ToolAnnotations
   shape: S
   run: (svc: TaskService, args: z.infer<z.ZodObject<S>>) => ToolResult
 }
@@ -91,6 +113,7 @@ export function registerTool<S extends z.ZodRawShape>(
     spec.name,
     {
       description: spec.description,
+      annotations: spec.annotations,
       inputSchema: z.object(spec.shape).catchall(z.unknown())
     },
     async (args) => {

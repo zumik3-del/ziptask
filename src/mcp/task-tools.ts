@@ -30,7 +30,10 @@ import {
   rejectUnknownArgs,
   registerTool,
   PROJECT_ARG,
-  TaskId
+  TaskId,
+  DESTRUCTIVE_ANNOTATIONS,
+  MUTATING_ANNOTATIONS,
+  READ_ONLY_ANNOTATIONS
 } from './common'
 
 const PRIORITY_JSON_SHAPE = {
@@ -397,6 +400,7 @@ export function handleListQueue(
 export function registerTaskTools(server: McpServer, svc: TaskService) {
   registerTool(server, svc, {
     name: 'create_task',
+    annotations: MUTATING_ANNOTATIONS,
     description:
       'Create a task. Regular tasks start `queued`, epics `open`; `assignee` is refused at creation (a lease exists only from `in_progress`, and the claim writes the holder). `epic_id` attaches a sub-task and promotes a queued target. `project` is required. Build `description` from get_template("task") or get_template("epic").',
     shape: CREATE_TASK_SHAPE,
@@ -405,6 +409,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'get_task',
+    annotations: READ_ONLY_ANNOTATIONS,
     description:
       'Brief default: id,title,status,priority,blocked_by. More via fields — description, version, project, subtasks (epic roll-up); null fields are omitted. max_field_chars truncates long strings with a …(+N chars) marker. By-id: no project argument.',
     shape: GET_TASK_SHAPE,
@@ -413,6 +418,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'list_tasks',
+    annotations: READ_ONLY_ANNOTATIONS,
     description:
       'Filters: assignee,status,updated_since(ms),epic_id(children),is_epic; `project` is required unless `ids` is non-empty. Batch `ids` ignores filters and keeps request order: pipe `id|code|<fields...>` (`-` for null or unknown) or `format:"json"` — use json for description, pipe escaping rewrites | and newlines. description only via fields; max_field_chars truncates.',
     shape: LIST_TASKS_SHAPE,
@@ -421,6 +427,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'claim_task',
+    annotations: MUTATING_ANNOTATIONS,
     description: `Claim a task: auto-pick takes the best queued task of the required \`project\`; with \`task_id\` the call is unscoped and also accepts a blocked task. agent defaults to "unknown"; lease_ttl_min overrides the default for this claim only (<=${MAX_LEASE_TTL_MIN}, larger refused). fields adds task fields to the response; max_field_chars truncates.`,
     shape: CLAIM_TASK_SHAPE,
     run: handleClaimTask
@@ -428,6 +435,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'update_status',
+    annotations: DESTRUCTIVE_ANNOTATIONS,
     description:
       'Transition status. `version` is an optional optimistic lock — read it via get_task fields:["version"] or the claim response; a stale one answers CONFLICT, so re-read and retry, except CONFLICT: lease held by <other>, which means hand the task back. `canceled` withdraws any task still open for work; `failed` is closed for work and only withdrawable to `canceled`; epics stay `open` and close directly to done/failed/canceled, refused while children are not terminal. A non-renewal entry into `in_progress` is held to claim eligibility (not an epic, deps satisfied). `renew:true` with status=in_progress re-arms your own lease (heartbeat ~lease_ttl_min/3) and bumps version. `reset_attempts:true` rides any legal transition, requires a comment, zeroes attempts, and is refused on epics and closed tasks.',
     shape: UPDATE_STATUS_SHAPE,
@@ -436,6 +444,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'update_task',
+    annotations: MUTATING_ANNOTATIONS,
     description:
       'Patch a queued task or an open epic with no lease holder: title, description (the contract), priority, depends_on (replaces the list, <=100 ids; epics take no deps), comment (rationale). Immutable: status, assignee (the lease holder), project, epic_id, reporter, max_attempts. version is an optional optimistic lock; a stale one answers CONFLICT. Refused for in_progress/review/blocked or closed tasks — use add_comment; no editable field → INVALID: nothing to update; a value equal to the stored one is a no-op (changed:[]). Output {id,version,changed}.',
     shape: UPDATE_TASK_SHAPE,
@@ -444,6 +453,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'list_queue',
+    annotations: READ_ONLY_ANNOTATIONS,
     description:
       'Deps-satisfied queued tasks of one project, pipe id|priority|title; `project` is required (no default or all-projects mode).',
     shape: LIST_QUEUE_SHAPE,
