@@ -23,7 +23,7 @@ One-liner — installs the published binary via the `deploy/` framework (see
 curl -fsSL https://raw.githubusercontent.com/zumik3-del/ziptask/main/deploy/install.sh | bash
 
 # from a checkout, or pinned to a version
-sudo bash deploy/install.sh --version v0.9.0
+sudo bash deploy/install.sh --version <tag>
 ```
 
 Both forms need root for `/opt`, `/var/lib` and the unit: the piped form calls
@@ -97,9 +97,9 @@ and `~/.ziptask/scripts/`; the binary and the database stay unless you pass
 ### Update
 
 ```bash
-bash ~/.ziptask/scripts/updater.sh                    # newest stable release, interactive
-bash ~/.ziptask/scripts/updater.sh --version v0.9.0   # pin a release
-bash ~/.ziptask/scripts/update.sh --version v0.9.0    # direct, for a prerelease or an exact tag
+bash ~/.ziptask/scripts/updater.sh                     # newest stable release, interactive
+bash ~/.ziptask/scripts/updater.sh --version <tag>     # pin a release
+bash ~/.ziptask/scripts/update.sh --version <tag>      # direct, for a prerelease or an exact tag
 ```
 
 An update stages the release, backs the database up and swaps the binary,
@@ -184,7 +184,7 @@ bun run check:boundaries   # mcp -> core -> db import direction (CI gate)
 bun run src/smoke.ts       # MCP end-to-end over HTTP (ephemeral port + temp DB)
 ```
 
-`CHANGELOG.md` is a short pointer to the current release, updated by hand at release time; the per-release notes are generated from the non-merge commits since the previous tag. There is no changelog script — `release.yml` creates the tag and the Release on `main`.
+`CHANGELOG.md` is a short list of recent releases, updated by hand at release time; the per-release notes are generated from the non-merge commits since the previous tag. There is no changelog script — `release.yml` creates the tag and the Release on `main`.
 
 ## Documentation
 
