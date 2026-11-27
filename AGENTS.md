@@ -4,7 +4,7 @@
 MCP task tracker for AI agents: the state layer (statuses, deps, leases, versions) over SQLite. Content stays in files; token-minimalism is the core design principle. Sources of truth: the wire protocol in `src/mcp/instructions.md`, the domain rules in `src/core/tasks.ts`, the decisions in the artifacts repo (`ziptask/adr/`, `ziptask/plans/`).
 
 ## 2. Stack & toolchain
-- Bun 1.4.2, TypeScript, `@modelcontextprotocol/{server,client,core}` (MCP SDK v2), `bun:sqlite` (WAL, no ORM), zod v4, biome (lint + format).
+- Bun 1.4.5, TypeScript, `@modelcontextprotocol/{server,client,core}` (MCP SDK v2), `bun:sqlite` (WAL, no ORM), zod v4, biome (lint + format).
 - Bare `Bun.serve`: MCP StreamableHTTP at `/mcp`, `GET /health`, experimental read API; stdio entry — `docs/http-endpoints.md`.
 - Run: `bun run start` (HTTP, random port), `bun run start:stdio`.
 - Config: optional `settings.json` (`--settings` or `ZIPTASK_SETTINGS`), then env overrides (`ZIPTASK_DB`, `ZIPTASK_PORT`, …) — `docs/configuration.md`.

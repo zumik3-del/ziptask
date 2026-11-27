@@ -23,7 +23,7 @@ One-liner — installs the published binary via the `deploy/` framework (see
 curl -fsSL https://raw.githubusercontent.com/zumik3-del/ziptask/main/deploy/install.sh | bash
 
 # from a checkout, or pinned to a version
-sudo bash deploy/install.sh --version v0.8.0
+sudo bash deploy/install.sh --version v0.9.0
 ```
 
 Both forms need root for `/opt`, `/var/lib` and the unit: the piped form calls
@@ -98,8 +98,8 @@ and `~/.ziptask/scripts/`; the binary and the database stay unless you pass
 
 ```bash
 bash ~/.ziptask/scripts/updater.sh                    # newest stable release, interactive
-bash ~/.ziptask/scripts/updater.sh --version v0.8.0   # pin a release
-bash ~/.ziptask/scripts/update.sh --version v0.8.0    # direct, for a prerelease or an exact tag
+bash ~/.ziptask/scripts/updater.sh --version v0.9.0   # pin a release
+bash ~/.ziptask/scripts/update.sh --version v0.9.0    # direct, for a prerelease or an exact tag
 ```
 
 An update stages the release, backs the database up and swaps the binary,
@@ -142,7 +142,7 @@ The endpoint has no authentication, so keep it bound to `127.0.0.1` (`ZIPTASK_HO
 
 ## Quick start (from source)
 
-Requires [Bun](https://bun.sh) 1.4.2 — the version CI pins.
+Requires [Bun](https://bun.sh) 1.4.5 — the version CI pins.
 
 ```bash
 bun install
