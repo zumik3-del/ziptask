@@ -13,7 +13,9 @@ import { closeTestDb, createTestDb } from './test-context'
 
 const READ_ONLY_TOOLS = ['get_template', 'list_projects']
 
-const DESTRUCTIVE_TOOLS = ['update_status', 'delete_project']
+// update_task joins the closures: its patch overwrites title/description/priority in place,
+// with no history to restore (#2719).
+const DESTRUCTIVE_TOOLS = ['update_status', 'delete_project', 'update_task']
 
 // get_task/list_tasks/list_queue/get_timeline look like reads but reap expired leases
 // (src/core/task-query.ts), so they are advertised as mutating (#2712).
@@ -22,7 +24,6 @@ const MUTATING_TOOLS = [
   'get_task',
   'list_tasks',
   'claim_task',
-  'update_task',
   'list_queue',
   'add_comment',
   'get_timeline',
@@ -132,7 +133,7 @@ describe('tool annotations matrix (#2710)', () => {
     }
   })
 
-  test('only the two pure reads claim idempotency and only the two closures claim destructiveness', async () => {
+  test('only the two pure reads claim idempotency and only the three destructive tools claim destructiveness', async () => {
     const tools = await advertisedTools()
     expect(annotatedWith(tools, 'readOnlyHint')).toEqual([...READ_ONLY_TOOLS].sort())
     expect(annotatedWith(tools, 'idempotentHint')).toEqual([...READ_ONLY_TOOLS].sort())

@@ -443,7 +443,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'update_task',
-    annotations: MUTATING_ANNOTATIONS,
+    annotations: DESTRUCTIVE_ANNOTATIONS,
     description:
       'Patch a queued task or an open epic with no lease holder: title, description (the contract), priority, depends_on (replaces the list, <=100 ids; epics take no deps), comment (rationale). Immutable: status, assignee (the lease holder), project, epic_id, reporter, max_attempts. version is an optional optimistic lock; a stale one answers CONFLICT. Refused for in_progress/review/blocked or closed tasks — use add_comment; no editable field → INVALID: nothing to update; a value equal to the stored one is a no-op (changed:[]). Output {id,version,changed}.',
     shape: UPDATE_TASK_SHAPE,
