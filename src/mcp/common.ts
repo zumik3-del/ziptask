@@ -71,26 +71,26 @@ export function rejectUnknownArgs(tool: string, shape: object, args: object): To
   )
 }
 
-export const READ_ONLY_ANNOTATIONS: ToolAnnotations = {
+export const READ_ONLY_ANNOTATIONS: ToolAnnotations = Object.freeze({
   readOnlyHint: true,
   destructiveHint: false,
   idempotentHint: true,
   openWorldHint: false
-}
+})
 
-export const MUTATING_ANNOTATIONS: ToolAnnotations = {
+export const MUTATING_ANNOTATIONS: ToolAnnotations = Object.freeze({
   readOnlyHint: false,
   destructiveHint: false,
   idempotentHint: false,
   openWorldHint: false
-}
+})
 
-export const DESTRUCTIVE_ANNOTATIONS: ToolAnnotations = {
+export const DESTRUCTIVE_ANNOTATIONS: ToolAnnotations = Object.freeze({
   readOnlyHint: false,
   destructiveHint: true,
   idempotentHint: false,
   openWorldHint: false
-}
+})
 
 // One registration seam for every tool: the advertised inputSchema is always
 // z.object(shape).catchall(z.unknown()). Without the catchall the SDK strips an unknown
