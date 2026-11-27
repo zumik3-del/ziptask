@@ -6,7 +6,10 @@ import {
   toToolResult,
   rejectUnknownArgs,
   registerTool,
-  textResult
+  textResult,
+  DESTRUCTIVE_ANNOTATIONS,
+  MUTATING_ANNOTATIONS,
+  READ_ONLY_ANNOTATIONS
 } from './common'
 import { sanitizePipe, pipeJoin } from '../core/tasks'
 import { PROJECT_SLUG_PATTERN } from '../core/project-slug'
@@ -83,6 +86,7 @@ export function handleDeleteProject(svc: TaskService, args: { project: string })
 export function registerProjectTools(server: McpServer, svc: TaskService) {
   registerTool(server, svc, {
     name: 'create_project',
+    annotations: MUTATING_ANNOTATIONS,
     description: `Create a project; slug? derives from the folder name and must match ${PROJECT_SLUG_PATTERN.source} ("legacy" is reserved). Output {slug}`,
     shape: CREATE_PROJECT_SHAPE,
     run: handleCreateProject
@@ -90,6 +94,7 @@ export function registerProjectTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'list_projects',
+    annotations: READ_ONLY_ANNOTATIONS,
     description:
       'Pipe lines slug|folder|open (open = non-terminal tasks), ordered by slug; archived projects are listed identically (the pipe carries no archive flag)',
     shape: LIST_PROJECTS_SHAPE,
@@ -98,6 +103,7 @@ export function registerProjectTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'update_project',
+    annotations: MUTATING_ANNOTATIONS,
     description:
       'Update a project by slug (folder_path?, archived?). archived:false is idempotent; INVALID: nothing to update only when no optional argument is given. Output {slug}',
     shape: UPDATE_PROJECT_SHAPE,
@@ -106,6 +112,7 @@ export function registerProjectTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'delete_project',
+    annotations: DESTRUCTIVE_ANNOTATIONS,
     description:
       'Delete a project that has no tasks; a project with tasks refuses with CONFLICT (archive it instead). Output {deleted:<slug>}',
     shape: DELETE_PROJECT_SHAPE,
