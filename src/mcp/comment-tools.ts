@@ -18,7 +18,8 @@ import {
   truncateChars,
   errorTool,
   TaskId,
-  MUTATING_ANNOTATIONS
+  MUTATING_ANNOTATIONS,
+  REAPED_READ_ANNOTATIONS
 } from './common'
 import { foldResult } from '../core/result'
 
@@ -117,7 +118,7 @@ export function registerCommentTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'get_timeline',
-    annotations: MUTATING_ANNOTATIONS,
+    annotations: REAPED_READ_ANNOTATIONS,
     description:
       'Merged audit + comments feed, pipe seq|type|agent|at|text ascending. `limit` is the newest N events (default defaults.timelineLimit); `since` (unix ms) switches to a forward cursor: the oldest N at or after it. `max_text_chars` truncates each text (0 omits it).',
     shape: GET_TIMELINE_SHAPE,

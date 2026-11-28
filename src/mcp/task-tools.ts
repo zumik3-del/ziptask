@@ -18,7 +18,7 @@ import {
   MAX_CONTENT_LENGTH,
   MAX_DEPENDS_ON
 } from '../core/tasks'
-import { PRIORITY_INPUT as BASE_PRIORITY_INPUT } from '../config'
+import { PRIORITY_INPUT as BASE_PRIORITY_INPUT } from '../priority-input'
 import { foldResult } from '../core/result'
 import {
   type ToolResult,
@@ -32,7 +32,8 @@ import {
   PROJECT_ARG,
   TaskId,
   DESTRUCTIVE_ANNOTATIONS,
-  MUTATING_ANNOTATIONS
+  MUTATING_ANNOTATIONS,
+  REAPED_READ_ANNOTATIONS
 } from './common'
 
 const PRIORITY_JSON_SHAPE = {
@@ -408,7 +409,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'get_task',
-    annotations: MUTATING_ANNOTATIONS,
+    annotations: REAPED_READ_ANNOTATIONS,
     description:
       'Brief default: id,title,status,priority,blocked_by. More via fields — description, version, project, subtasks (epic roll-up); null fields are omitted. max_field_chars truncates long strings with a …(+N chars) marker. By-id: no project argument.',
     shape: GET_TASK_SHAPE,
@@ -417,7 +418,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'list_tasks',
-    annotations: MUTATING_ANNOTATIONS,
+    annotations: REAPED_READ_ANNOTATIONS,
     description:
       'Filters: assignee,status,updated_since(ms),epic_id(children),is_epic; `project` is required unless `ids` is non-empty. Batch `ids` ignores filters and keeps request order: pipe `id|code|<fields...>` (`-` for null or unknown) or `format:"json"` — use json for description, pipe escaping rewrites | and newlines. description only via fields; max_field_chars truncates.',
     shape: LIST_TASKS_SHAPE,
@@ -452,7 +453,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
 
   registerTool(server, svc, {
     name: 'list_queue',
-    annotations: MUTATING_ANNOTATIONS,
+    annotations: REAPED_READ_ANNOTATIONS,
     description:
       'Deps-satisfied queued tasks of one project, pipe id|priority|title; `project` is required (no default or all-projects mode).',
     shape: LIST_QUEUE_SHAPE,

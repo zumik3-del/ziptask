@@ -7,43 +7,56 @@ import { TaskRepo } from './db/repo'
 import { createMcpServer } from './mcp/server'
 import { closeTestDb, createTestDb } from './test-context'
 
-// #2710/#2714: annotations and descriptions are the client-facing contract of tools/list.
+// #2710/#2714/#2720: annotations and descriptions are the client-facing contract of tools/list.
 // These tests read the advertised payload, not the registration source, so a preset that
 // stops reaching the wire is caught even when the constants themselves stay correct.
 
 const READ_ONLY_TOOLS = ['get_template', 'list_projects']
 
+// get_task/list_tasks/list_queue/get_timeline look like reads but reap expired leases
+// (src/core/task-query.ts). The reap is a consequence of elapsed time, not of the call, and a
+// second reap changes nothing, so they are idempotent yet neither read-only nor destructive
+// (#2720).
+const REAPED_READ_TOOLS = ['get_task', 'list_tasks', 'list_queue', 'get_timeline']
+
 // update_task joins the closures: its patch overwrites title/description/priority in place,
 // with no history to restore (#2719).
 const DESTRUCTIVE_TOOLS = ['update_status', 'delete_project', 'update_task']
 
-// get_task/list_tasks/list_queue/get_timeline look like reads but reap expired leases
-// (src/core/task-query.ts), so they are advertised as mutating (#2712).
+// Repetition changes state: a second comment is a second row, a second auto-claim takes another task.
 const MUTATING_TOOLS = [
   'create_task',
-  'get_task',
-  'list_tasks',
   'claim_task',
-  'list_queue',
   'add_comment',
-  'get_timeline',
   'create_project',
   'update_project'
 ]
 
-const ALL_TOOLS = [...READ_ONLY_TOOLS, ...MUTATING_TOOLS, ...DESTRUCTIVE_TOOLS].sort()
+const IDEMPOTENT_TOOLS = [...READ_ONLY_TOOLS, ...REAPED_READ_TOOLS].sort()
 
-// Measured from tools/list at #2714: 3840 chars of tool.description plus 2831 chars of
-// inputSchema property descriptions. The 10-char headroom is the one the description-only
-// budget carried before schema text was counted.
-const MEASURED_PAYLOAD = 6671
-const PAYLOAD_HEADROOM = 10
-const PAYLOAD_BUDGET = MEASURED_PAYLOAD + PAYLOAD_HEADROOM
+const ALL_TOOLS = [
+  ...READ_ONLY_TOOLS,
+  ...REAPED_READ_TOOLS,
+  ...MUTATING_TOOLS,
+  ...DESTRUCTIVE_TOOLS
+].sort()
+
+// Measured from tools/list at #2720 (unchanged since #2714): 3840 chars of tool.description
+// plus 2831 chars of inputSchema property descriptions = 6671. The budget is a ceiling with
+// ~5% headroom for ordinary wording churn, not a frozen measurement of the current text.
+const PAYLOAD_BUDGET = 7000
 
 function annotationsFor(name: string): ToolAnnotations {
   if (READ_ONLY_TOOLS.includes(name))
     return {
       readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    }
+  if (REAPED_READ_TOOLS.includes(name))
+    return {
+      readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: true,
       openWorldHint: false
@@ -133,20 +146,21 @@ describe('tool annotations matrix (#2710)', () => {
     }
   })
 
-  test('only the two pure reads claim idempotency and only the three destructive tools claim destructiveness', async () => {
+  test('only the idempotent set claims idempotency and only the three destructive tools claim destructiveness', async () => {
     const tools = await advertisedTools()
     expect(annotatedWith(tools, 'readOnlyHint')).toEqual([...READ_ONLY_TOOLS].sort())
-    expect(annotatedWith(tools, 'idempotentHint')).toEqual([...READ_ONLY_TOOLS].sort())
+    expect(annotatedWith(tools, 'idempotentHint')).toEqual(IDEMPOTENT_TOOLS)
     expect(annotatedWith(tools, 'destructiveHint')).toEqual([...DESTRUCTIVE_TOOLS].sort())
     expect(annotatedWith(tools, 'openWorldHint')).toEqual([])
   })
 
-  test('a tool is annotated repeatable only when it cannot write, and never both read-only and destructive', async () => {
+  test('a tool is annotated idempotent unless it is destructive or otherwise state-changing, and never both read-only and destructive', async () => {
     for (const tool of await advertisedTools()) {
       const annotations = tool.annotations
       expect(annotations).toBeDefined()
+      const stateChanging = [...DESTRUCTIVE_TOOLS, ...MUTATING_TOOLS].includes(tool.name)
       expect({ [tool.name]: annotations?.idempotentHint }).toEqual({
-        [tool.name]: annotations?.readOnlyHint
+        [tool.name]: !stateChanging
       })
       expect({
         [tool.name]: annotations?.readOnlyHint === true && annotations?.destructiveHint === true
@@ -166,7 +180,7 @@ describe('tool description payload ceiling (#2710)', () => {
     expect(schemas, 'no advertised schema property description is measured').toBeGreaterThan(0)
     expect(
       total,
-      `advertised payload is ${total} chars (descriptions ${described} + schema descriptions ${schemas}), over the ${PAYLOAD_BUDGET}-char budget measured as ${MEASURED_PAYLOAD} + ${PAYLOAD_HEADROOM} headroom`
+      `advertised payload is ${total} chars (descriptions ${described} + schema descriptions ${schemas}), over the ${PAYLOAD_BUDGET}-char ceiling`
     ).toBeLessThanOrEqual(PAYLOAD_BUDGET)
   })
 })
