@@ -3,17 +3,10 @@ import { dirname, join, relative, resolve, sep } from 'node:path'
 
 const SRC_ROOT = resolve(import.meta.dir, '../src')
 
-// db/ may only reach core modules that carry no domain behaviour: these pull services,
-// guards or queries back in and would re-couple the layers (ADR 0003).
-const NON_LEAF_CORE = new Set([
-  'service',
-  'guards',
-  'task-lifecycle',
-  'task-query',
-  'projects',
-  'candidates',
-  'reaper'
-])
+// db/ may only reach the core modules it legitimately uses: anything else can pull services,
+// guards or queries back in and would re-couple the layers (ADR 0003). This is an allowlist,
+// not a denylist: a core module added later stays denied until it is deliberately listed here.
+const DB_CORE_ALLOWLIST = new Set(['tasks', 'types'])
 
 const SPECIFIER_PATTERNS = [
   /\bfrom\s*['"]([^'"]+)['"]/g,
@@ -23,6 +16,8 @@ const SPECIFIER_PATTERNS = [
 ]
 
 type Layer = 'core' | 'db' | 'mcp'
+
+export type BoundaryReport = { filesScanned: number; failures: string[] }
 
 function layerOf(srcRelativePath: string): Layer | null {
   const [head] = srcRelativePath.split('/')
@@ -41,11 +36,11 @@ function listSourceFiles(dir: string): string[] {
   return files
 }
 
-function resolveToSrc(file: string, specifier: string): string | null {
+function resolveToSrc(srcRoot: string, file: string, specifier: string): string | null {
   if (!specifier.startsWith('.')) return null
   const target = resolve(dirname(file), specifier)
-  if (!target.startsWith(SRC_ROOT + sep)) return null
-  return relative(SRC_ROOT, target).split(sep).join('/')
+  if (!target.startsWith(srcRoot + sep)) return null
+  return relative(srcRoot, target).split(sep).join('/')
 }
 
 function coreModuleOf(srcRelativePath: string): string {
@@ -70,9 +65,9 @@ function violation(
   }
   if (targetLayer === 'core' && sourceLayer === 'db') {
     const module = coreModuleOf(targetSrcPath)
-    if (NON_LEAF_CORE.has(module)) {
+    if (!DB_CORE_ALLOWLIST.has(module)) {
       return (specifier) =>
-        `rule 3: db/ may only import leaf core/ modules — core/${module} is not a leaf (import '${specifier}')`
+        `rule 3: db/ may only import allowlisted core/ modules — core/${module} is not allowlisted (import '${specifier}')`
     }
   }
   return null
@@ -84,30 +79,41 @@ function lineAt(source: string, index: number): number {
   return line
 }
 
-const files = listSourceFiles(SRC_ROOT)
-const failures: string[] = []
+export function findViolations(srcRoot: string): BoundaryReport {
+  const root = resolve(srcRoot)
+  const files = listSourceFiles(root)
+  const failures: string[] = []
 
-for (const file of files) {
-  const sourceLayer = layerOf(relative(SRC_ROOT, file).split(sep).join('/'))
-  if (!sourceLayer) continue
-  const source = readFileSync(file, 'utf-8')
-  const displayPath = `src/${relative(SRC_ROOT, file).split(sep).join('/')}`
-  for (const pattern of SPECIFIER_PATTERNS) {
-    for (const match of source.matchAll(pattern)) {
-      const specifier = match[1]
-      const targetSrcPath = resolveToSrc(file, specifier)
-      if (!targetSrcPath) continue
-      const check = violation(sourceLayer, targetSrcPath)
-      if (check) failures.push(`${displayPath}:${lineAt(source, match.index)} ${check(specifier)}`)
+  for (const file of files) {
+    const srcRelativePath = relative(root, file).split(sep).join('/')
+    const sourceLayer = layerOf(srcRelativePath)
+    if (!sourceLayer) continue
+    const source = readFileSync(file, 'utf-8')
+    const displayPath = relative(dirname(root), file).split(sep).join('/')
+    for (const pattern of SPECIFIER_PATTERNS) {
+      for (const match of source.matchAll(pattern)) {
+        const specifier = match[1]
+        const targetSrcPath = resolveToSrc(root, file, specifier)
+        if (!targetSrcPath) continue
+        const check = violation(sourceLayer, targetSrcPath)
+        if (check)
+          failures.push(`${displayPath}:${lineAt(source, match.index)} ${check(specifier)}`)
+      }
     }
   }
+
+  return { filesScanned: files.length, failures: [...new Set(failures)].sort() }
 }
 
-if (failures.length > 0) {
-  const unique = [...new Set(failures)].sort()
-  for (const failure of unique) console.error(failure)
-  console.error(`\n${unique.length} layer boundary violation(s) in ${files.length} file(s)`)
-  process.exit(1)
-}
+if (import.meta.main) {
+  const report = findViolations(SRC_ROOT)
+  if (report.failures.length > 0) {
+    for (const failure of report.failures) console.error(failure)
+    console.error(
+      `\n${report.failures.length} layer boundary violation(s) in ${report.filesScanned} file(s)`
+    )
+    process.exit(1)
+  }
 
-console.log(`Layer boundaries ok (${files.length} file(s) scanned)`)
+  console.log(`Layer boundaries ok (${report.filesScanned} file(s) scanned)`)
+}

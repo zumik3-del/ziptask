@@ -126,6 +126,22 @@ describe('GET /api/task/:id HTTP endpoint', () => {
     expect(epicBody.subtasks.open).toBe(1)
   })
 
+  test('a failing comments read surfaces the error instead of an empty array', async () => {
+    const id = getId(srv.svc.createTask({ title: 'Failing comments', reporter: 'dev' }))
+    const spy = spyOn(srv.svc, 'listComments').mockReturnValue({
+      ok: false,
+      error: { code: 'NOT_FOUND', message: 'comments read failed' }
+    })
+    try {
+      const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/${id}`)
+      expect(res.status).toBe(404)
+      expect(res.headers.get('access-control-allow-origin')).toBe('*')
+      expect(await res.json()).toEqual({ error: 'NOT_FOUND: comments read failed' })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   test('non-numeric id → 400', async () => {
     const res = await fetch(`http://127.0.0.1:${srv.port}/api/task/abc`)
     expect(res.status).toBe(400)

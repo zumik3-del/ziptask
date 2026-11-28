@@ -1,5 +1,7 @@
 # Global rules (generic template)
 
+> **Snapshot — 2026-11-28.** The files in `docs/agents_examples/` are an example profile set captured at a point in time, not the current configuration of this harness. The live permission model — agent files, `permissions` lists, `# ADD YOUR STACK'S COMMANDS HERE` blocks — is documented in [Subagent setup](../subagents.md).
+
 > This is a **minimal, generic template**. Adapt paths, commands, and conventions to your project; it is not a verbatim copy of any specific project's rules.
 
 ## Workspace & communication

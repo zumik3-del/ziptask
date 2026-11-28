@@ -20,18 +20,8 @@ import {
   DEFAULT_AUDIT_LOG,
   LEVELS
 } from './defaults'
-import {
-  isTaskPriorityInput,
-  normalizePriority,
-  PRIORITY_INVALID_MESSAGE,
-  MAX_LEASE_TTL_MIN
-} from './core/tasks'
-
-export const PRIORITY_INPUT = z
-  .unknown()
-  .refine((value) => value === undefined || isTaskPriorityInput(value), {
-    message: `INVALID: ${PRIORITY_INVALID_MESSAGE}`
-  })
+import { normalizePriority, MAX_LEASE_TTL_MIN } from './core/tasks'
+import { PRIORITY_INPUT } from './priority-input'
 
 export const DEFAULTS = Object.freeze({
   dbPath: DEFAULT_DB_PATH,

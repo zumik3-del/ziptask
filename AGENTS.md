@@ -18,7 +18,7 @@ MCP task tracker for AI agents: the state layer (statuses, deps, leases, version
 - Token-minimalism: `description` only via explicit `fields`; omit-null in JSON; sanitize `|` in titles (`sanitizePipe`).
 - DB is pure state: no `task_path`/`result_path`/`parent_id` — paths live in description/comment text, task text is English. Carve-out: `epic_id`/`is_epic` are structural membership columns (single-level bounded).
 - Migrations: numbered SQL in `src/db/migrations.ts`, strictly append-only — the released prefix is frozen.
-- Folders: SQL under `src/db/`; domain types + service logic under `src/core/`; thin MCP layer under `src/mcp/`; harnesses at `src/` root. Import direction `mcp/` → `core/` → `db/`; `db/` may import types and leaf-level pure helpers/constants from `core/` (never domain behaviour) — `src/db/sql.ts` owns the SQL text.
+- Folders: SQL under `src/db/`; domain types + service logic under `src/core/`; thin MCP layer under `src/mcp/`; harnesses at `src/` root. Import direction `mcp/` → `core/` → `db/`; `db/` may import types and leaf-level pure helpers/constants from `core/` (never domain behaviour) — `src/db/sql.ts` owns the status-derived fragments (`IN`-lists, the shared `SELECT`), while the statements themselves live with the repo functions.
 - Statuses, terminal set, transition table, length limits and the priority list live in `src/core/tasks.ts` — do not re-implement them ad hoc.
 
 ## 5. Testing setup + gotchas

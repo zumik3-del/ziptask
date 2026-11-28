@@ -190,7 +190,7 @@ bun run src/smoke.ts       # MCP end-to-end over HTTP (ephemeral port + temp DB)
 
 - [Configuration](docs/configuration.md) — `settings.json`, environment variables, the upgrade path, and backups.
 - [HTTP endpoints](docs/http-endpoints.md) — `/mcp`, `/health`, and the two experimental read endpoints `GET /api/tasks` and `GET /api/task/:id`.
-- [MCP tools](docs/mcp-tools.md) — the 14-tool reference, projects and scope, task statuses, lease-reap semantics, and lease recovery paths.
+- [MCP tools](docs/mcp-tools.md) — the 14-tool reference, the advertised annotations, projects and scope, task statuses, lease-reap semantics, and lease recovery paths.
 - [Projects](docs/projects.md) — what a project is, the slug, the fail-closed scope rule, and the four project tools.
 - [Epic → sub-task workflow](docs/epics.md) — declaring epics, attaching sub-tasks, roll-up, closure, and the cross-project constraints.
 - [Subagent setup](docs/subagents.md) — install and configure the example orchestrator + subagent agents.

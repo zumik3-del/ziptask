@@ -19,6 +19,21 @@ ziptask exposes 14 tools:
 | `update_project` | Update a project by slug: `project`, plus any of `folder_path?` (absolute only, as in `create_project`), `archived?`. Output `{slug}`. `archived: false` is **idempotent** — a live project accepts it and the only effect is the `updated_at` bump, so un-archiving needs no out-of-band knowledge of the flag. `INVALID: nothing to update` fires only when the call carries **no optional argument at all** (`{project}` alone), never because a supplied value already equals the stored one. The slug is immutable after create |
 | `delete_project` | Delete a project that holds no tasks. Output `{deleted:<slug>}`; a project with tasks refuses with `CONFLICT: project 'x' has N tasks; archive it instead` |
 
+## Annotations
+
+Every tool advertises the four MCP annotation hints in `tools/list`, and a client may use them to auto-approve a call or to ask before one.
+
+| Group | Tools | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
+|---|---|---|---|---|
+| Read-only | `get_template`, `list_projects` | `true` | `false` | `true` |
+| Read, but reaps expired leases | `get_task`, `list_tasks`, `list_queue`, `get_timeline` | `false` | `false` | `true` |
+| Destructive | `update_status`, `delete_project`, `update_task` | `false` | `true` | `false` |
+| Mutating | `create_task`, `claim_task`, `add_comment`, `create_project`, `update_project` | `false` | `false` | `false` |
+
+`openWorldHint` is `false` on every tool: none of them reaches outside the server's own database.
+
+The four reads are not read-only because they run the [lazy lease reap](#reads-and-lease-reap) before answering, so one call can requeue an expired lease and bump a `version`. They are still idempotent — a second reap over the same rows finds nothing left to settle — and not destructive, because the reap follows elapsed time rather than the call: it never touches an unexpired lease and deletes nothing.
+
 ## Projects and scope
 
 `project` — a lowercase slug — is a **filter, not a token**: it decides which rows a call may enumerate, and it grants nothing. It is enforced in the service (the one place all four shapes share), not by the schema, so a missing slug is a refusal rather than a default. It is required (fail closed) on exactly the four enumerating shapes:
