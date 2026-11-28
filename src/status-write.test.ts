@@ -23,10 +23,8 @@ import {
   testProjectId
 } from './test-context'
 
-// #2724 moved the status-write rules out of the storage lane: core computes the column values
-// (`statusWrite`), the repo applies them verbatim. This file pins the seam from both ends — the
-// mapping as a pure function, and the store as a dumb applier of whatever core handed it — so the
-// rules cannot drift back into db/ without a failing test here.
+// #2724: core computes the status-write column values, the repo applies them verbatim. Pinned from
+// both ends so the rules cannot drift back into db/.
 
 const NOW = '2031-01-01T00:00:00.000Z'
 const HOLDER = 'agent-w'
@@ -120,8 +118,6 @@ const ILLEGAL_CLOSE: StatusWrite = {
 }
 
 describe('the StatusWrite union (#2724)', () => {
-  // The declarations above are the compile-time assertion; reading both literals here keeps them
-  // live at runtime too and shows the pin sits on the field that actually differs.
   test('each illegal literal differs from the produced write in the pinned field only', () => {
     const legalProgress = progressWrite()
     const legalDone = otherWrite(STATUS.done)
@@ -171,8 +167,7 @@ const rowColumns = (id: number): RowColumns => {
   }
 }
 
-// The lease-holding state the store sees: seeded through markClaimed so the holder and its deadline
-// are the constants above rather than a clock-dependent stamp.
+// A leased row seeded through markClaimed, so holder and deadline are the constants, not a stamp.
 const claimed = (title: string): number => {
   const id = insertTaskRow(repo, { title, reporter: 'dev' })
   const row = getTaskRow(db, id)!

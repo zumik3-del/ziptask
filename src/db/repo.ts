@@ -31,12 +31,8 @@ import {
   CLAIMABLE_STATUSES_SQL
 } from './sql'
 
-// Status values in this file are SQL statement text generated from the core constants, never a
-// policy: the partial-index predicates SQL cannot parameterise (queuedCandidates, expiredLeases),
-// the markClaimed claimable-status backstop, and fixed target/precondition literals (promoteEpic,
-// reapTransition, childStatusCounts). insertTask takes its status as input, and every column value a
-// status write stores - assignee, lease_expires_at, completed_at, attempts - is computed in core and
-// applied here verbatim.
+// Status values here are SQL text built from the core constants, never a policy (ADR 0003,
+// exception 1); every column value a status write stores is computed in core and applied verbatim.
 
 const BATCH_CHUNK_SIZE = 500
 
