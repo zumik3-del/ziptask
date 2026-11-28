@@ -96,7 +96,7 @@ export function registerProjectTools(server: McpServer, svc: TaskService) {
     name: 'list_projects',
     annotations: READ_ONLY_ANNOTATIONS,
     description:
-      'Pipe lines slug|folder|open (open = non-terminal tasks), ordered by slug; archived projects are listed identically (the pipe carries no archive flag)',
+      'List projects — the registry, not their tasks — as pipe slug|folder|open (open = non-terminal tasks) ordered by slug; archived look identical (no archive flag). Use list_tasks or list_queue for tasks.',
     shape: LIST_PROJECTS_SHAPE,
     run: handleListProjects
   })

@@ -111,7 +111,7 @@ export function registerCommentTools(server: McpServer, svc: TaskService) {
     name: 'add_comment',
     annotations: MUTATING_ANNOTATIONS,
     description:
-      'Add a comment; agent and non-empty content (alias text/comment) are required. One line from get_template("comment-success"/"comment-failure").',
+      'Add a comment to task `id` (`update_task` refuses in_progress/review/blocked/closed). `agent` + non-empty `content` (alias text/comment) required, one line from get_template("comment-success"/"comment-failure"). Output {comment_id}; shows in get_timeline.',
     shape: ADD_COMMENT_SHAPE,
     run: handleAddComment
   })
