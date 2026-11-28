@@ -294,28 +294,34 @@ describe('queuedCandidates id tie-break (#431)', () => {
     const idA = repo.insertTask({
       title: 'A',
       description: null,
+      status: 'queued',
       priority: 'p2',
       reporter: 'dev',
       depends_on: '[]',
       now: baseTime,
+      maxAttempts: 3,
       projectId: testProjectId(repo)
     }).id
     const idB = repo.insertTask({
       title: 'B',
       description: null,
+      status: 'queued',
       priority: 'p2',
       reporter: 'dev',
       depends_on: '[]',
       now: baseTime,
+      maxAttempts: 3,
       projectId: testProjectId(repo)
     }).id
     const idC = repo.insertTask({
       title: 'C',
       description: null,
+      status: 'queued',
       priority: 'p2',
       reporter: 'dev',
       depends_on: '[]',
       now: baseTime,
+      maxAttempts: 3,
       projectId: testProjectId(repo)
     }).id
     db.run('UPDATE tasks SET created_at = ? WHERE id IN (?, ?, ?)', [baseTime, idA, idB, idC])
@@ -328,19 +334,23 @@ describe('queuedCandidates id tie-break (#431)', () => {
     const p0id = repo.insertTask({
       title: 'P0',
       description: null,
+      status: 'queued',
       priority: 'p0',
       reporter: 'dev',
       depends_on: '[]',
       now: '2020-01-01T00:00:00.000Z',
+      maxAttempts: 3,
       projectId: testProjectId(repo)
     }).id
     const p2id = repo.insertTask({
       title: 'P2',
       description: null,
+      status: 'queued',
       priority: 'p2',
       reporter: 'dev',
       depends_on: '[]',
       now: '2020-01-01T00:00:00.000Z',
+      maxAttempts: 3,
       projectId: testProjectId(repo)
     }).id
     db.run("UPDATE tasks SET created_at = '2020-01-01T00:00:00.000Z' WHERE id IN (?, ?)", [

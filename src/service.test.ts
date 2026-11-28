@@ -270,10 +270,12 @@ describe('auto-claim ceiling (#105)', () => {
         repo2.insertTask({
           title: `Blocked ${i}`,
           description: null,
+          status: 'queued',
           priority: 'p2',
           reporter: 'dev',
           depends_on: JSON.stringify([999]),
           now: nowIso(),
+          maxAttempts: 3,
           projectId: testProjectId(repo2)
         })
       }
@@ -282,10 +284,12 @@ describe('auto-claim ceiling (#105)', () => {
     const _freeId = repo2.insertTask({
       title: 'Free',
       description: null,
+      status: 'queued',
       priority: 'p2',
       reporter: 'dev',
       depends_on: '[]',
       now: nowIso(),
+      maxAttempts: 3,
       projectId: testProjectId(repo2)
     }).id
 
@@ -305,10 +309,12 @@ describe('auto-claim ceiling (#105)', () => {
         repo2.insertTask({
           title: `Blocked ${i}`,
           description: null,
+          status: 'queued',
           priority: 'p2',
           reporter: 'dev',
           depends_on: JSON.stringify([999]),
           now: nowIso(),
+          maxAttempts: 3,
           projectId: testProjectId(repo2)
         })
       }
@@ -317,10 +323,12 @@ describe('auto-claim ceiling (#105)', () => {
     const _freeId = repo2.insertTask({
       title: 'Free',
       description: null,
+      status: 'queued',
       priority: 'p2',
       reporter: 'dev',
       depends_on: '[]',
       now: nowIso(),
+      maxAttempts: 3,
       projectId: testProjectId(repo2)
     }).id
 
@@ -486,10 +494,8 @@ describe('CAS: transitionStatus returns changes (#767)', () => {
     const changes = repo.transitionStatus(
       id,
       task.version,
-      'review',
-      new Date().toISOString(),
-      null,
-      null
+      { status: 'review', assignee: null, leaseExpiresAt: null, completedAt: null },
+      new Date().toISOString()
     )
     expect(changes).toBe(1)
   })
@@ -501,10 +507,8 @@ describe('CAS: transitionStatus returns changes (#767)', () => {
     const changes = repo.transitionStatus(
       id,
       task.version + 999,
-      'review',
-      new Date().toISOString(),
-      null,
-      null
+      { status: 'review', assignee: null, leaseExpiresAt: null, completedAt: null },
+      new Date().toISOString()
     )
     expect(changes).toBe(0)
     const still = getTaskRow(db, id)
@@ -837,10 +841,12 @@ describe('a creation-time assignee is refused (#1872)', () => {
     const id = repo.insertTask({
       title: 'Bypass',
       description: null,
+      status: 'queued',
       priority: 'p2',
       reporter: 'dev',
       depends_on: '[]',
       now: nowIso(),
+      maxAttempts: 3,
       projectId: testProjectId(repo)
     }).id
     const row = getTaskRow(db, id)!

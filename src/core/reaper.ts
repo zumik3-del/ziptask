@@ -1,5 +1,5 @@
 import type { TaskStatus, Clock } from './tasks'
-import { asClock, clockNowIso, clockNowMs } from './tasks'
+import { TERMINAL_STATUSES, asClock, clockNowIso, clockNowMs } from './tasks'
 import type { AuditStore, LeaseStore } from './types'
 import { SECOND_MS } from '../defaults'
 
@@ -30,7 +30,15 @@ export class LeaseReaper {
     for (const task of expired) {
       const newAttempts = task.attempts + 1
       const newStatus: TaskStatus = newAttempts > task.max_attempts ? 'failed' : 'queued'
-      const changes = this.store.reapTransition(task.id, task.version, newStatus, newAttempts, now)
+      const completedAt = TERMINAL_STATUSES.includes(newStatus) ? now : null
+      const changes = this.store.reapTransition(
+        task.id,
+        task.version,
+        newStatus,
+        newAttempts,
+        now,
+        completedAt
+      )
       if (changes === 1 && this.auditLog)
         this.store.auditAppend(task.id, 'system', 'lease_expired', 'in_progress', newStatus)
     }

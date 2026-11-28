@@ -1,13 +1,13 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
-import type { Task, TaskStatus, CreatedTaskStatus, CommentType, Clock } from '../core/tasks'
-import {
-  asClock,
-  clampCursor,
-  clampLimit,
-  clockNowIso,
-  STATUS,
-  TERMINAL_STATUSES
+import type {
+  Task,
+  TaskStatus,
+  CreatedTaskStatus,
+  CommentType,
+  Clock,
+  StatusWrite
 } from '../core/tasks'
+import { asClock, clampCursor, clampLimit, clockNowIso, STATUS } from '../core/tasks'
 import type {
   AuditStore,
   ChildStatusCounts,
@@ -23,7 +23,6 @@ import type {
   TaskStore,
   UpdateTaskPatch
 } from '../core/types'
-import { DEFAULT_MAX_ATTEMPTS } from '../defaults'
 import {
   PRIORITY_ORDER_SQL,
   TASK_SELECT,
@@ -31,6 +30,13 @@ import {
   EDITABLE_STATUSES_SQL,
   CLAIMABLE_STATUSES_SQL
 } from './sql'
+
+// Status values in this file are SQL statement text generated from the core constants, never a
+// policy: the partial-index predicates SQL cannot parameterise (queuedCandidates, expiredLeases),
+// the markClaimed claimable-status backstop, and fixed target/precondition literals (promoteEpic,
+// reapTransition, childStatusCounts). insertTask takes its status as input, and every column value a
+// status write stores - assignee, lease_expires_at, completed_at, attempts - is computed in core and
+// applied here verbatim.
 
 const BATCH_CHUNK_SIZE = 500
 
@@ -91,24 +97,21 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
   }
 
   insertTask(task: InsertTaskInput): { id: number; status: CreatedTaskStatus } {
-    const maxAttempts = task.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const epicId = task.epicId ?? null
     const isEpic = task.isEpic === true
     const epicFlag = isEpic ? 1 : 0
     const projectId = task.projectId ?? null
-    // ADR 0002: an epic is born `open` and holds no lease, so it never carries an assignee.
-    const status = isEpic ? STATUS.open : STATUS.queued
     const result = this.db.run(
       `INSERT INTO tasks (title, description, status, priority, assignee, reporter, depends_on, attempts, max_attempts, created_at, updated_at, epic_id, is_epic, project_id)
        VALUES (?, ?, ?, ?, NULL, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
       [
         task.title,
         task.description,
-        status,
+        task.status,
         task.priority,
         task.reporter,
         task.depends_on,
-        maxAttempts,
+        task.maxAttempts,
         task.now,
         task.now,
         epicId,
@@ -116,7 +119,7 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
         projectId
       ]
     )
-    return { id: Number(result.lastInsertRowid), status }
+    return { id: Number(result.lastInsertRowid), status: task.status }
   }
 
   deleteTask(id: number): void {
@@ -225,30 +228,26 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     return Number(result.changes)
   }
 
-  transitionStatus(
-    id: number,
-    expectedVersion: number,
-    status: TaskStatus,
-    now: string,
-    completedAt: string | null,
-    leaseUntilIso: string | null,
-    holder: string | null = null,
-    resetAttempts: 0 | 1 = 0
-  ): number {
+  transitionStatus(id: number, expectedVersion: number, write: StatusWrite, now: string): number {
     const assignments = [
       'status = ?',
       'version = version + 1',
       'updated_at = ?',
-      'completed_at = COALESCE(?, completed_at)'
+      'completed_at = COALESCE(?, completed_at)',
+      'lease_expires_at = ?',
+      'assignee = ?'
     ]
-    const params: SqlParam[] = [status, now, completedAt]
-    if (status === STATUS.in_progress) {
-      assignments.push('lease_expires_at = ?', 'assignee = ?')
-      params.push(leaseUntilIso, holder)
-    } else {
-      assignments.push('lease_expires_at = NULL', 'assignee = NULL')
+    const params: SqlParam[] = [
+      write.status,
+      now,
+      write.completedAt,
+      write.leaseExpiresAt,
+      write.assignee
+    ]
+    if (write.attempts !== undefined) {
+      assignments.push('attempts = ?')
+      params.push(write.attempts)
     }
-    if (resetAttempts === 1) assignments.push('attempts = 0')
     params.push(id, expectedVersion)
     const result = this.db.run(
       `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND version = ?`,
@@ -313,9 +312,9 @@ export class TaskRepo implements TaskStore, ProjectStore, CommentStore, AuditSto
     expectedVersion: number,
     status: 'queued' | 'failed',
     attempts: number,
-    now: string
+    now: string,
+    completedAt: string | null
   ): number {
-    const completedAt = TERMINAL_STATUSES.includes(status) ? now : null
     const assignments = [
       'status = ?',
       'lease_expires_at = NULL',

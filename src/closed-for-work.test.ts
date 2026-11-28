@@ -216,7 +216,7 @@ describe('closed for work: the invariants a failed task keeps', () => {
     expect(leased.status).toBe('in_progress')
     expect(leased.assignee).toBe('developer')
 
-    const changes = repo.reapTransition(id, leased.version, 'failed', 4, nowIso())
+    const changes = repo.reapTransition(id, leased.version, 'failed', 4, nowIso(), nowIso())
     expect(changes).toBe(1)
 
     const after = row(id)

@@ -31,10 +31,12 @@ function seedQueued(
   return repo.insertTask({
     title,
     description: null,
+    status: 'queued',
     priority: 'p2',
     reporter: 'dev',
     depends_on: JSON.stringify(opts.dependsOn ?? []),
     now: opts.createdAt ?? CREATED_AT,
+    maxAttempts: 3,
     projectId
   }).id
 }
