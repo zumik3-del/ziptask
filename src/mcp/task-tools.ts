@@ -455,7 +455,7 @@ export function registerTaskTools(server: McpServer, svc: TaskService) {
     name: 'list_queue',
     annotations: REAPED_READ_ANNOTATIONS,
     description:
-      'Deps-satisfied queued tasks of one project, pipe id|priority|title; `project` is required (no default or all-projects mode).',
+      'Deps-satisfied queued tasks of one project in claim order (priority, then oldest), pipe id|priority|title; `limit` caps rows (default defaults.queueLimit). `project` required. Reaps expired leases first.',
     shape: LIST_QUEUE_SHAPE,
     run: handleListQueue
   })
