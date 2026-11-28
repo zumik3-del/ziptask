@@ -1,13 +1,21 @@
-import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, CommentType } from './tasks'
+import type {
+  Task,
+  TaskStatus,
+  TaskPriority,
+  CreatedTaskStatus,
+  CommentType,
+  StatusWrite
+} from './tasks'
 
 export type InsertTaskInput = {
   title: string
   description: string | null
+  status: CreatedTaskStatus
   priority: TaskPriority
   reporter: string
   depends_on: string
   now: string
-  maxAttempts?: number
+  maxAttempts: number
   epicId?: number
   isEpic?: boolean
   projectId?: number | null
@@ -55,7 +63,8 @@ export interface LeaseStore {
     expectedVersion: number,
     status: 'queued' | 'failed',
     attempts: number,
-    now: string
+    now: string,
+    completedAt: string | null
   ): number
 }
 
@@ -75,16 +84,7 @@ export interface TaskStore {
     leaseUntil: string,
     now: string
   ): number
-  transitionStatus(
-    id: number,
-    expectedVersion: number,
-    status: TaskStatus,
-    now: string,
-    completedAt: string | null,
-    leaseUntilIso: string | null,
-    holder?: string | null,
-    resetAttempts?: 0 | 1
-  ): number
+  transitionStatus(id: number, expectedVersion: number, write: StatusWrite, now: string): number
   updateTaskFields(id: number, expectedVersion: number, patch: UpdateTaskPatch, now: string): number
   // Not reentrant: a nested call converts its own rollback into an `ok:false` result and the outer
   // body keeps running, so a caller must not nest transactions today.

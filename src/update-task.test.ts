@@ -370,10 +370,12 @@ describe('update_task: validation', () => {
     const otherTaskId = repo.insertTask({
       title: 'Other',
       description: null,
+      status: 'queued',
       priority: 'p2',
       reporter: 'dev',
       depends_on: '[]',
       now: new Date().toISOString(),
+      maxAttempts: 3,
       projectId: otherProjectId
     }).id
     const id = json(handleCreateTask(svc, { title: 'A', reporter: 'dev' })).id as number

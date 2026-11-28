@@ -125,6 +125,62 @@ export const CLAIMABLE_STATUSES: readonly TaskStatus[] = Object.freeze([
   STATUS.blocked
 ])
 
+// The lease invariant as a type: a holder and its deadline exist only for `in_progress`, and a write
+// to any other status clears both. A store can therefore persist the fields as they are.
+export type StatusWrite =
+  | {
+      status: typeof STATUS.in_progress
+      assignee: string
+      leaseExpiresAt: string
+      completedAt: string | null
+      attempts?: number
+    }
+  | {
+      status: Exclude<TaskStatus, typeof STATUS.in_progress>
+      assignee: null
+      leaseExpiresAt: null
+      completedAt: string | null
+      attempts?: number
+    }
+
+export type StatusWriteInput =
+  | {
+      status: typeof STATUS.in_progress
+      lease: { holder: string; expiresAt: string }
+      resetAttempts?: boolean
+    }
+  | { status: Exclude<TaskStatus, typeof STATUS.in_progress>; resetAttempts?: boolean }
+
+// ADR 0002: an epic is born `open` and holds no lease; a regular task is born `queued`.
+export function createdStatus(isEpic: boolean): CreatedTaskStatus {
+  return isEpic ? STATUS.open : STATUS.queued
+}
+
+// One status write as the column values a store applies: a lease holder and its deadline exist only
+// for `in_progress` (which always carries both, see StatusWriteInput), every other target clears
+// them, and completed_at follows TERMINAL_STATUSES here rather than in the storage lane.
+// `attempts: 0` marks an attempts refund; leaving it out leaves the column alone.
+export function statusWrite(input: StatusWriteInput, now: string): StatusWrite {
+  const completedAt = TERMINAL_STATUSES.includes(input.status) ? now : null
+  const refund = input.resetAttempts === true ? { attempts: 0 } : {}
+  if (input.status === STATUS.in_progress) {
+    return {
+      status: input.status,
+      assignee: input.lease.holder,
+      leaseExpiresAt: input.lease.expiresAt,
+      completedAt,
+      ...refund
+    }
+  }
+  return {
+    status: input.status,
+    assignee: null,
+    leaseExpiresAt: null,
+    completedAt,
+    ...refund
+  }
+}
+
 export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
   return VALID_TRANSITIONS[from]?.includes(to) ?? false
 }

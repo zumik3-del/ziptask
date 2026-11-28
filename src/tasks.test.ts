@@ -502,7 +502,7 @@ describe('version race regression', () => {
       new Date().toISOString(),
       id
     ])
-    const changes = repo.reapTransition(id, 2, 'queued', 2, new Date().toISOString())
+    const changes = repo.reapTransition(id, 2, 'queued', 2, new Date().toISOString(), null)
     expect(changes).toBe(0)
     const final = getTaskRow(db, id)
     expect(final.status).toBe('in_progress')
@@ -608,10 +608,12 @@ describe('listTasks deterministic ordering (#1445)', () => {
     repo.insertTask({
       title,
       description: null,
+      status: 'queued',
       priority: 'p2',
       reporter: 'dev',
       depends_on: '[]',
       now,
+      maxAttempts: 3,
       projectId: testProjectId(repo)
     }).id
 
@@ -1065,18 +1067,22 @@ describe('monotonicNowMs process-wide (#1608 supersedes #795)', () => {
       const idA = repoA.insertTask({
         title: 'A',
         description: null,
+        status: 'queued',
         priority: 'p2',
         reporter: 'dev',
         depends_on: '[]',
-        now: '2020-01-01T00:00:00.000Z'
+        now: '2020-01-01T00:00:00.000Z',
+        maxAttempts: 3
       }).id
       const idB = repoB.insertTask({
         title: 'B',
         description: null,
+        status: 'queued',
         priority: 'p2',
         reporter: 'dev',
         depends_on: '[]',
-        now: '2020-01-01T00:00:00.000Z'
+        now: '2020-01-01T00:00:00.000Z',
+        maxAttempts: 3
       }).id
       repoA.transaction(() => {
         for (let i = 0; i < 5; i++) repoA.insertComment(idA, 'a', `ca${i}`)
@@ -1153,10 +1159,12 @@ describe('TaskRepo port conformance (#812)', () => {
       const id = repo3.insertTask({
         title: 'PortTest',
         description: null,
+        status: 'queued',
         priority: 'p2',
         reporter: 'dev',
         depends_on: '[]',
-        now: nowIso()
+        now: nowIso(),
+        maxAttempts: 3
       }).id
       expect(repo3.getTaskRow(id)!.title).toBe('PortTest')
       expect(repo3.depsOf(id)).toBe('[]')

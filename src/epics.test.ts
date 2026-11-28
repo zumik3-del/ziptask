@@ -1243,10 +1243,12 @@ describe('an epic takes no assignee (review #1740 P2)', () => {
     const id = repo.insertTask({
       title: 'Epic',
       description: null,
+      status: 'open',
       priority: 'p2',
       reporter: 'dev',
       depends_on: '[]',
       now: nowIso(),
+      maxAttempts: 3,
       isEpic: true,
       projectId: testProjectId(repo)
     }).id

@@ -37,10 +37,12 @@ function insertRow(repo: TaskRepo, title: string): number {
   return repo.insertTask({
     title,
     description: null,
+    status: 'queued',
     priority: 'p2',
     reporter: 'dev',
     depends_on: '[]',
     now: nowIso(),
+    maxAttempts: 3,
     projectId: testProjectId(repo)
   }).id
 }
