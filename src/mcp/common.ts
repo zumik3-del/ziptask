@@ -85,6 +85,16 @@ export const MUTATING_ANNOTATIONS: ToolAnnotations = Object.freeze({
   openWorldHint: false
 })
 
+// get_task, list_tasks, list_queue and get_timeline reap expired leases (src/core/task-query.ts).
+// The reap is a consequence of elapsed time, not of the call, so these stay non-destructive,
+// and repeating the call over the same rows changes nothing, so idempotentHint holds.
+export const REAPED_READ_ANNOTATIONS: ToolAnnotations = Object.freeze({
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false
+})
+
 export const DESTRUCTIVE_ANNOTATIONS: ToolAnnotations = Object.freeze({
   readOnlyHint: false,
   destructiveHint: true,
