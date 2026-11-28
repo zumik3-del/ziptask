@@ -7,6 +7,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/zumik3-del/ziptask?label=latest)](https://github.com/zumik3-del/ziptask/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Bun](https://img.shields.io/badge/bun-runtime-%23000000?logo=bun)](https://bun.sh)
+[![ziptask MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/zumik3-del/ziptask/badges/score.svg)](https://glama.ai/mcp/servers/zumik3-del/ziptask)
 
 MCP task tracker for AI agents — pure state layer (statuses, deps, leases, versioning) over SQLite.
 
