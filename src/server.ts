@@ -255,11 +255,12 @@ function handleTaskView(svc: TaskService, pathname: string): Response {
   const view = svc.getTaskView(id)
   if (!view.ok) return apiError(view.error)
   const comments = svc.listComments(id)
+  if (!comments.ok) return apiError(comments.error)
   return Response.json({
     task: view.data.task,
     blocked_by: view.data.blockedBy,
     ...(view.data.subtasks !== undefined ? { subtasks: view.data.subtasks } : {}),
-    comments: comments.ok ? comments.data : []
+    comments: comments.data
   })
 }
 
