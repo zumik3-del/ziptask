@@ -125,6 +125,59 @@ export const CLAIMABLE_STATUSES: readonly TaskStatus[] = Object.freeze([
   STATUS.blocked
 ])
 
+// The lease invariant as a type: a holder and its deadline exist only for `in_progress`.
+export type StatusWrite =
+  | {
+      status: typeof STATUS.in_progress
+      assignee: string
+      leaseExpiresAt: string
+      completedAt: string | null
+      attempts?: number
+    }
+  | {
+      status: Exclude<TaskStatus, typeof STATUS.in_progress>
+      assignee: null
+      leaseExpiresAt: null
+      completedAt: string | null
+      attempts?: number
+    }
+
+export type StatusWriteInput =
+  | {
+      status: typeof STATUS.in_progress
+      lease: { holder: string; expiresAt: string }
+      resetAttempts?: boolean
+    }
+  | { status: Exclude<TaskStatus, typeof STATUS.in_progress>; resetAttempts?: boolean }
+
+// ADR 0002: an epic is born `open` and holds no lease; a regular task is born `queued`.
+export function createdStatus(isEpic: boolean): CreatedTaskStatus {
+  return isEpic ? STATUS.open : STATUS.queued
+}
+
+// The column values of one status write: a lease exists only for `in_progress`, `completed_at`
+// follows TERMINAL_STATUSES, and `attempts: 0` is a refund — omitting it leaves the column alone.
+export function statusWrite(input: StatusWriteInput, now: string): StatusWrite {
+  const completedAt = TERMINAL_STATUSES.includes(input.status) ? now : null
+  const refund = input.resetAttempts === true ? { attempts: 0 } : {}
+  if (input.status === STATUS.in_progress) {
+    return {
+      status: input.status,
+      assignee: input.lease.holder,
+      leaseExpiresAt: input.lease.expiresAt,
+      completedAt,
+      ...refund
+    }
+  }
+  return {
+    status: input.status,
+    assignee: null,
+    leaseExpiresAt: null,
+    completedAt,
+    ...refund
+  }
+}
+
 export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
   return VALID_TRANSITIONS[from]?.includes(to) ?? false
 }

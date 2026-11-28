@@ -3,9 +3,12 @@ import type { Task, TaskStatus, TaskPriority, CreatedTaskStatus, Clock } from '.
 import {
   TERMINAL_STATUSES,
   CLAIMABLE_STATUSES,
+  STATUS,
   clockNowIso,
   clockNowMs,
+  createdStatus,
   sanitizePipe,
+  statusWrite,
   MAX_LEASE_TTL_MIN,
   LEASE_TTL_TOO_LARGE_MESSAGE,
   normalizePriority,
@@ -145,17 +148,19 @@ export class TaskLifecycleService {
     const reporter = args.reporter ?? this.opts.defaultReporter
     const now = clockNowIso(this.clock)
     const epicId = args.epic_id ?? null
+    const isEpic = args.epic === true
     return this.store.transaction((): SvcResult<{ id: number; status: CreatedTaskStatus }> => {
       const created = this.store.insertTask({
         title: args.title,
         description: args.description ?? null,
+        status: createdStatus(isEpic),
         priority,
         reporter,
         depends_on: JSON.stringify(deps),
         now,
         maxAttempts: this.opts.maxAttempts,
         epicId: epicId ?? undefined,
-        isEpic: args.epic,
+        isEpic,
         projectId: project.data.id
       })
       const id = created.id
@@ -365,23 +370,22 @@ export class TaskLifecycleService {
     const renewal =
       task.status === 'in_progress' && args.status === 'in_progress' && args.renew === true
     const now = clockNowIso(this.clock)
-    const completedAt = TERMINAL_STATUSES.includes(args.status) ? now : null
-    const leaseUntil = args.status === 'in_progress' ? this._leaseUntil() : null
+    const write = statusWrite(
+      args.status === STATUS.in_progress
+        ? {
+            status: STATUS.in_progress,
+            lease: { holder: args.agent, expiresAt: this._leaseUntil() },
+            resetAttempts: refund
+          }
+        : { status: args.status, resetAttempts: refund },
+      now
+    )
     const subtaskMirror =
       args.status === 'done' ? 'subtask_done' : args.status === 'failed' ? 'subtask_failed' : null
 
     return this.store.transaction((): SvcResult<UpdateStatusData> => {
       const expectedVersion = args.version ?? task.version
-      const changes = this.store.transitionStatus(
-        args.id,
-        expectedVersion,
-        args.status,
-        now,
-        completedAt,
-        leaseUntil,
-        args.agent,
-        refund ? 1 : 0
-      )
+      const changes = this.store.transitionStatus(args.id, expectedVersion, write, now)
       if (changes !== 1) return fail('CONFLICT', 'concurrent modification')
       const updated = this.store.getTaskRow(args.id)
       if (!updated) return fail('CONFLICT', 'concurrent modification')

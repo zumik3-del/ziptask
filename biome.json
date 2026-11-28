@@ -118,7 +118,8 @@
                       "STATUS",
                       "TERMINAL_STATUSES",
                       "EDITABLE_STATUSES",
-                      "CLAIMABLE_STATUSES"
+                      "CLAIMABLE_STATUSES",
+                      "StatusWrite"
                     ]
                   },
                   "../core/types": {

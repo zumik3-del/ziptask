@@ -136,10 +136,12 @@ export function insertTaskRow(repo: TaskRepo, opts: CreateTaskRowOpts): number {
   const created = repo.insertTask({
     title: opts.title,
     description: null,
+    status: 'queued',
     priority: opts.priority ?? 'p2',
     reporter: opts.reporter,
     depends_on: JSON.stringify(deps),
     now,
+    maxAttempts: 3,
     projectId: testProjectId(repo)
   })
   return created.id

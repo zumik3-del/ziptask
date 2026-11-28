@@ -52,10 +52,12 @@ const insertRow = (opts: { title: string; reporter: string; projectId: number | 
   repo.insertTask({
     title: opts.title,
     description: null,
+    status: 'queued',
     priority: 'p2',
     reporter: opts.reporter,
     depends_on: '[]',
     now: '2026-01-01T00:00:00.000Z',
+    maxAttempts: 3,
     projectId: opts.projectId
   }).id
 
@@ -296,10 +298,12 @@ describe('projects: CRUD contract (ADR D4)', () => {
         repo.insertTask({
           title,
           description: null,
+          status: 'queued',
           priority: 'p2',
           reporter: 'dev',
           depends_on: '[]',
           now: '2026-01-01T00:00:00.000Z',
+          maxAttempts: 3,
           projectId
         })
       }
